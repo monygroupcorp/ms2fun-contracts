@@ -120,6 +120,20 @@ contract UltraAlignmentVault is ReentrancyGuard, Ownable {
         uint256 lpPositionValue,
         uint256 callerReward
     );
+    event ConversionAndLiquidityAddedV3(
+        uint256 ethSwapped,
+        uint256 targetTokenReceived,
+        uint256 tokenId,
+        uint256 lpPositionValue,
+        uint256 callerReward
+    );
+    event ConversionAndLiquidityAddedV2(
+        uint256 ethSwapped,
+        uint256 targetTokenReceived,
+        uint256 lpTokens,
+        uint256 lpPositionValue,
+        uint256 callerReward
+    );
     event BenefactorStakesCreated(uint256 stakedBenefactors, uint256 totalStakePercent);
     event FeesAccumulated(uint256 amount);
     event BenefactorFeesClaimed(address indexed benefactor, uint256 ethAmount);
@@ -370,6 +384,169 @@ contract UltraAlignmentVault is ReentrancyGuard, Ownable {
         emit ConversionAndLiquidityAddedV4(ethToSwap, targetTokenReceived, lpPositionValue, callerReward);
 
         return lpPositionValue;
+    }
+
+    /**
+     * @notice Convert accumulated ETH to V3 liquidity position (NFT-based) and create benefactor stakes
+     * @dev Public function - any caller can trigger conversion and earn 0.5% reward
+     *      V3 uses NFT-based position management via PositionManager
+     * @param minOut Minimum target tokens to receive from swap
+     * @param tickLower Lower tick boundary for V3 concentrated liquidity
+     * @param tickUpper Upper tick boundary for V3 concentrated liquidity
+     * @param fee Fee tier to use for V3 pool (3000 = 0.3%, 10000 = 1%, etc.)
+     * @return tokenId NFT ID of the new V3 position
+     * @return lpPositionValue Total value of the LP position added
+     */
+    function convertAndAddLiquidityV3(
+        uint256 minOut,
+        int24 tickLower,
+        int24 tickUpper,
+        uint24 fee
+    ) external nonReentrant returns (uint256 tokenId, uint256 lpPositionValue) {
+        require(accumulatedETH >= minConversionThreshold, "Amount too small");
+        require(alignmentTarget.token != address(0), "No alignment target set");
+        require(v3PositionManager != address(0), "V3 PositionManager not set");
+
+        // Step 1: Take snapshot of current benefactor contributions
+        address[] memory benefactorsList = new address[](registeredBenefactors.length);
+        uint256[] memory contributions = new uint256[](registeredBenefactors.length);
+
+        for (uint256 i = 0; i < registeredBenefactors.length; i++) {
+            benefactorsList[i] = registeredBenefactors[i];
+            contributions[i] = benefactorContributions[benefactorsList[i]].totalETHContributed;
+        }
+
+        // Step 2: Create benefactor stakes (frozen at conversion time)
+        uint256 ethToSwap = accumulatedETH;
+        accumulatedETH = 0;
+
+        LPPositionValuation.createStakesFromETH(
+            benefactorStakes,
+            allBenefactorStakes,
+            benefactorsList,
+            contributions
+        );
+
+        emit BenefactorStakesCreated(benefactorsList.length, 100 * 1e16); // 100% = 1e18
+
+        // Step 3: Swap ETH → target token (TODO: implement swap through router)
+        uint256 targetTokenReceived = 0; // TODO: actual swap
+
+        // Step 4: Call V3 PositionManager.mint() to create position
+        // Returns: tokenId, liquidity, amount0, amount1
+        // For now, use placeholder values - actual implementation would call the manager
+        tokenId = 0; // TODO: actual NFT minting
+        uint256 liquidity = 0; // TODO: actual liquidity amount
+        uint256 amount0 = ethToSwap; // Placeholder
+        uint256 amount1 = targetTokenReceived; // Placeholder
+
+        // Step 5: Record LP position metadata as V3 (poolType = 1)
+        lpPositionValue = amount0 + amount1;
+
+        LPPositionValuation.recordLPPosition(
+            currentLPPosition,
+            1, // poolType = V3
+            alignmentTarget.v3Pool,
+            tokenId, // V3 position NFT ID
+            address(0), // No lpTokenAddress for V3
+            amount0,
+            amount1
+        );
+
+        // Step 6: Reward the caller (0.5% of swapped ETH)
+        uint256 callerReward = (ethToSwap * 5) / 1000;
+        (bool success, ) = payable(msg.sender).call{value: callerReward}("");
+        require(success, "Caller reward transfer failed");
+
+        // Step 7: Update tracking
+        alignmentTarget.totalLiquidity += lpPositionValue;
+
+        emit ConversionAndLiquidityAddedV3(ethToSwap, targetTokenReceived, tokenId, lpPositionValue, callerReward);
+
+        return (tokenId, lpPositionValue);
+    }
+
+    /**
+     * @notice Convert accumulated ETH to V2 liquidity position and create benefactor stakes
+     * @dev Public function - any caller can trigger conversion and earn 0.5% reward
+     *      V2 uses direct pair contracts and receives LP tokens in return
+     * @param minOut Minimum target tokens to receive from swap
+     * @param minEthForLiquidity Minimum ETH amount to use for liquidity pair
+     * @return lpTokens Amount of LP tokens received from the pair
+     * @return lpPositionValue Estimated value of the LP position
+     */
+    function convertAndAddLiquidityV2(
+        uint256 minOut,
+        uint256 minEthForLiquidity
+    ) external nonReentrant returns (uint256 lpTokens, uint256 lpPositionValue) {
+        require(accumulatedETH >= minConversionThreshold, "Amount too small");
+        require(alignmentTarget.token != address(0), "No alignment target set");
+        require(router != address(0), "Router not set");
+
+        // Step 1: Take snapshot of current benefactor contributions
+        address[] memory benefactorsList = new address[](registeredBenefactors.length);
+        uint256[] memory contributions = new uint256[](registeredBenefactors.length);
+
+        for (uint256 i = 0; i < registeredBenefactors.length; i++) {
+            benefactorsList[i] = registeredBenefactors[i];
+            contributions[i] = benefactorContributions[benefactorsList[i]].totalETHContributed;
+        }
+
+        // Step 2: Create benefactor stakes (frozen at conversion time)
+        uint256 ethToSwap = accumulatedETH;
+        accumulatedETH = 0;
+
+        LPPositionValuation.createStakesFromETH(
+            benefactorStakes,
+            allBenefactorStakes,
+            benefactorsList,
+            contributions
+        );
+
+        emit BenefactorStakesCreated(benefactorsList.length, 100 * 1e16); // 100% = 1e18
+
+        // Step 3: Swap portion of ETH → target token (TODO: implement swap through router)
+        // For V2, we need both tokens: some ETH and target tokens
+        uint256 targetTokenReceived = 0; // TODO: actual swap
+
+        // Step 4: Call Router02.addLiquidity() to create position
+        // Returns: amount0Used, amount1Used, lpTokensMinted
+        // For now, use placeholder values - actual implementation would call the router
+        uint256 amount0 = ethToSwap; // Placeholder: ETH amount used
+        uint256 amount1 = targetTokenReceived; // Placeholder: target token amount used
+        lpTokens = 0; // TODO: actual LP token amount
+
+        // Step 5: Record LP position metadata as V2 (poolType = 2)
+        // For V2, the LP token balance is stored in lpTokenBalance field
+        lpPositionValue = amount0 + amount1;
+
+        // Get the V2 pair address (would be determined from factory in real implementation)
+        address v2Pair = address(0); // TODO: determine actual V2 pair address
+
+        LPPositionValuation.recordLPPosition(
+            currentLPPosition,
+            2, // poolType = V2
+            v2Pair,
+            0, // positionId (not used for V2)
+            v2Pair, // lpTokenAddress is the pair itself
+            amount0,
+            amount1
+        );
+
+        // Update LP token balance
+        LPPositionValuation.updateLPTokenBalance(currentLPPosition, lpTokens);
+
+        // Step 6: Reward the caller (0.5% of swapped ETH)
+        uint256 callerReward = (ethToSwap * 5) / 1000;
+        (bool success, ) = payable(msg.sender).call{value: callerReward}("");
+        require(success, "Caller reward transfer failed");
+
+        // Step 7: Update tracking
+        alignmentTarget.totalLiquidity += lpPositionValue;
+
+        emit ConversionAndLiquidityAddedV2(ethToSwap, targetTokenReceived, lpTokens, lpPositionValue, callerReward);
+
+        return (lpTokens, lpPositionValue);
     }
 
     /**
