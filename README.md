@@ -1,17 +1,17 @@
 # ms2fun-contracts
 
-Foundry-based Solidity repository for the ms2.fun launchpad ecosystem. This repository contains the core smart contracts that power a multi-project launchpad supporting ERC404 and ERC1155 token standards.
+Foundry-based Solidity contracts for the ms2.fun protocol — a multi-project launchpad ecosystem supporting ERC404 and ERC1155 token standards with integrated vault-based fee distribution and alignment incentives.
 
 ## Overview
 
-The ms2.fun launchpad is a decentralized platform for launching and managing token projects. It features:
+The ms2.fun protocol features:
 
-- **Factory Application System**: Factory creators submit applications with voting by EXEC token holders
-- **Dynamic Pricing**: Supply and demand-based pricing for featured promotions
-- **ERC404 Support**: Factory for deploying ERC404 token instances with advanced features
-- **ERC1155 Support**: Factory for deploying ERC1155 multi-edition token instances
-- **Ultra-Alignment System**: Advanced hook and vault systems for ERC404 tokens
-- **Governance**: EXEC token holder voting system
+- **Master Registry**: Central indexing of factories, instances, and vaults with governance voting
+- **ERC404 Bonding Factory**: Creates ERC404 instances with V4 hook integration for swap tax collection
+- **ERC1155 Factory**: Creates open-edition instances with enforced vault tithe (20% on creator withdraw)
+- **UltraAlignmentVault**: Centralized fee hub receiving taxes from all projects, converting ETH → target token LP positions with multi-conversion fee distribution
+- **V4 Hook Integration**: ETH/WETH-based swap tax collection routed to vault (vault-scoped, applies platform-wide)
+- **Conversion-Indexed Benefactor Accounting**: Lifetime fee claims from multiple conversion rounds with frozen benefactor percentages
 
 ## Repository Structure
 
@@ -71,42 +71,50 @@ forge script script/DeployMaster.s.sol:DeployMaster --rpc-url <rpc_url> --broadc
 forge script script/DeployERC404Factory.s.sol:DeployERC404Factory --rpc-url <rpc_url> --broadcast
 ```
 
-## Contracts
+## Core Contracts
 
-### Master Registry
+### Master Registry (`src/master/`)
+Central indexing and governance:
+- `MasterRegistry.sol` - ERC1967 proxy wrapper for registry implementation
+- Factory application voting system
+- Instance and vault registration tracking
+- Multi-factory support
 
-The `MasterRegistry` is the central contract managing factory applications, instance registration, and featured promotions.
+### Vault System (`src/vaults/`)
+- `UltraAlignmentVault.sol` - Fee hub with trailing epoch condenser architecture
+  - Receives ETH from ERC404 hooks and ERC1155 tithes
+  - Converts accumulated ETH to target token and creates V4 LP positions
+  - **Trailing Epoch Condenser**: O(1) fee claims via lifetime contribution ratio model
+  - Decentralized epoch finalization with keeper incentives (`finalizeEpochAndStartNew()`)
+  - Automatic rolling window compression (`_compressOldestEpoch()`) - keeps last 3 epochs active
+  - Scales to 5000+ conversions and 2000+ benefactors without gas bloat
+- `LPPositionValuation.sol` - Epoch-based tracking with immutable conversion records
+  - EpochRecord struct for batching conversions and tracking benefactor contributions
+  - BenefactorState minimalist tracking (lifetime ETH, last claim, timestamps)
+  - Support for historical query access (backwards compatibility)
 
-- **Factory Application System**: Submit applications with ETH fee, vote with EXEC tokens
-- **Dynamic Pricing**: Automatic price discovery for featured promotions
-- **Instance Tracking**: Register and track all deployed instances
+### ERC404 Ecosystem (`src/factories/erc404/`)
+- `ERC404Factory.sol` - Creates bonding instances with vault-specific hooks
+- `ERC404BondingInstance.sol` - DN404-based token with bonding curve mechanics
+- `UltraAlignmentV4Hook.sol` - V4 hook collecting swap taxes → vault
+- `UltraAlignmentHookFactory.sol` - Creates vault-scoped hook instances
 
-### ERC404 Factory
-
-Factory for deploying ERC404 token instances with features like:
-- Bonding curves
-- Liquidity pools
-- Chat integration
-- Balance minting
-- Portfolio tracking
-
-### ERC1155 Factory
-
-Factory for deploying ERC1155 multi-edition token instances.
-
-### Governance
-
-EXEC token holder voting system for proposals and upgrades.
+### ERC1155 Ecosystem (`src/factories/erc1155/`)
+- `ERC1155Factory.sol` - Creates open-edition instances with vault link
+- `ERC1155Instance.sol` - ERC1155 with enforced 20% vault tithe on creator withdraw
 
 ## Documentation
 
-See the `docs/` directory for detailed documentation:
-- `ARCHITECTURE.md` - System architecture overview
-- `MASTER_CONTRACT.md` - Master registry documentation
-- `ERC404_FACTORY.md` - ERC404 factory documentation
-- `ERC1155_FACTORY.md` - ERC1155 factory documentation
-- `ULTRA_ALIGNMENT.md` - Ultra-Alignment system documentation
-- `SECURITY.md` - Security considerations
+### Essential Guides
+- **[MANUAL_REVIEW_GUIDE.md](./MANUAL_REVIEW_GUIDE.md)** - Comprehensive review checklist (15 sections, 100+ verification points)
+- **[SWAP_AND_LP_STUBS.md](./SWAP_AND_LP_STUBS.md)** - Implementation guide for swap and LP position stubs
+- **[benefactor-accounting-redesign.md](./.claude/plans/benefactor-accounting-redesign.md)** - Multi-conversion accounting architecture (in .claude/plans/)
+
+### Key Concepts
+- **Conversion-Indexed Benefactor Accounting**: Per-conversion immutable records instead of singular overwriting mappings
+- **Multi-Claim Support**: Benefactors claim multiple times from same conversion as LP fees accumulate
+- **Frozen Percentages**: Benefactor stakes locked at conversion time, independent of LP value fluctuations
+- **O(k) Scaling**: Benefactor claims loop through conversions they participated in (k ≈ 50-100), not all conversions
 
 ## Development
 

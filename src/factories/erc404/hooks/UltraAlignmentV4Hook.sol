@@ -135,7 +135,7 @@ contract UltraAlignmentV4Hook is BaseTestHooks, ReentrancyGuard, Ownable {
 
             // Send tax directly to vault with sender as benefactor
             // Vault will accumulate and track ETH from the instance/benefactor
-            vault.receiveERC404Tax(taxCurrency, taxAmount, sender);
+            vault.receiveHookTax{value: taxAmount}(taxCurrency, taxAmount, sender);
 
             emit SwapTaxed(sender, taxCurrency, taxAmount, sender);
             

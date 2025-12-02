@@ -5,21 +5,11 @@ import {Ownable} from "solady/auth/Ownable.sol";
 
 /**
  * @title SimpleBeneficiary
- * @notice Phase 1 beneficiary module - simple fee receiver management
- * @dev This is a minimal module that the vault calls when fees accumulate.
+ * @notice DEPRECATED - Phase 1 beneficiary module
+ * @dev This contract is no longer used. The beneficiary module system was deprecated
+ * in favor of the direct benefactor accounting system in UltraAlignmentVault.
  *
- * Purpose:
- * - Designate a receiver address for accumulated fees
- * - Allow owner to change receiver
- * - Track when fees are accumulated (for off-chain analytics)
- *
- * This contract is intentionally simple and focused.
- * Benefactor staking/distribution is deferred to Phase 2.
- *
- * Upgrade Path:
- * When ready for Phase 2, deploy VaultBenefactorDistribution with full staking logic
- * and call: vault.setBeneficiaryModule(newModule)
- * This contract will be replaced (but can keep running if needed).
+ * Kept for historical reference only.
  */
 contract SimpleBeneficiary is Ownable {
     // Constants

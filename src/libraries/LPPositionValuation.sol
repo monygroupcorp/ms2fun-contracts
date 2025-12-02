@@ -28,11 +28,8 @@ library LPPositionValuation {
      * @dev Tracks one unified position shared by all benefactors
      */
     struct LPPositionMetadata {
-        uint8 poolType;               // 0=V4, 1=V3, 2=V2
-        address pool;                 // Pool contract address
-        uint256 positionId;           // NFT ID for V3, salt hash for V4, 0 for V2
-        address lpTokenAddress;       // Token contract for V2 LP tokens
-        uint256 lpTokenBalance;       // For V2: amount of LP tokens held
+        address pool;                 // V4 pool contract address
+        uint256 positionId;           // Salt hash for V4 position
         uint256 amount0;              // Current amount of token0 in position
         uint256 amount1;              // Current amount of token1 in position
         uint256 accumulatedFees0;     // Uncollected fees in token0
@@ -49,6 +46,66 @@ library LPPositionValuation {
         uint256 token1Amount;         // Amount owed in token1 (ETH or primary token)
         uint256 token0ToSell;         // How much token0 should be sold for ETH
         uint256 ethEquivalent;        // Estimated ETH value of the payout
+    }
+
+    /**
+     * @notice Per-conversion snapshot of a benefactor's stake
+     * @dev Immutable once created. Separate entry for each conversion they participate in.
+     */
+    struct ConversionBenefactorStake {
+        address benefactor;                // The benefactor address
+        uint256 ethContributedThisRound;   // ETH amount they contributed to this conversion
+        uint256 stakePercent;              // Their percentage of this conversion (in 1e18 = 100%)
+        bool exists;                       // Track existence for iteration
+    }
+
+    /**
+     * @notice Epoch record for trailing window management and gas optimization
+     * @dev Epochs batch conversions together, enable state compression and cleanup
+     *      Old epochs are condensed forward into newer epochs, reducing storage bloat
+     */
+    struct EpochRecord {
+        uint256 epochId;                            // Sequential ID (0, 1, 2, ...)
+        uint256 startConversionId;                  // First conversion in this epoch
+        uint256 endConversionId;                    // Last conversion in this epoch (inclusive)
+        uint256 totalETHInEpoch;                    // Sum of all ETH converted in this epoch
+        uint256 totalLPValueInEpoch;                // Sum of all LP positions created (amount0 + amount1)
+        uint256 totalFeesAccumulatedInEpoch;        // Total fees accumulated from all conversions in epoch
+
+        // Active benefactors who participated in THIS epoch
+        address[] benefactorsInEpoch;               // List of benefactors who contributed to conversions in this epoch
+        mapping(address => uint256) ethInEpoch;     // ETH each benefactor contributed in this epoch
+
+        // Epoch state tracking
+        bool isCondensed;                           // Flag: has this epoch been condensed forward?
+        uint256 compressedIntoEpochId;              // If condensed, which epoch inherited its data?
+    }
+
+    /**
+     * @notice Complete immutable record of a single conversion round
+     * @dev Created once per conversion, never modified except for fee accumulation
+     */
+    struct ConversionRecord {
+        uint256 conversionId;                                          // Sequential ID (0, 1, 2, ...)
+        uint256 timestamp;                                             // When conversion happened
+
+        // Benefactor tracking for THIS conversion
+        address[] benefactorsList;                                     // All benefactors in this conversion
+        mapping(address => ConversionBenefactorStake) stakes;          // Per-benefactor stake
+
+        // LP position for THIS conversion
+        address pool;                                                  // V4 pool address
+        uint256 positionId;                                            // Salt hash for V4 position
+        uint256 amount0;                                               // Token0 amount provided
+        uint256 amount1;                                               // Token1 amount provided
+
+        // Fee tracking (updates over time as LP trades happen)
+        uint256 accumulatedFees0;                                      // Uncollected fees in token0
+        uint256 accumulatedFees1;                                      // Uncollected fees in token1
+
+        // Claim tracking (benefactor → total fees claimed so far from THIS conversion)
+        // Allows multiple claims as LP fees accumulate over time
+        mapping(address => uint256) claimedByBenefactor;
     }
 
     // ========== Note on State ==========
@@ -155,29 +212,22 @@ library LPPositionValuation {
     }
 
     /**
-     * @notice Record LP position metadata after conversion
+     * @notice Record V4 LP position metadata after conversion
      * @param currentLPPosition Storage reference to LP position metadata
-     * @param poolType Pool type (0=V4, 1=V3, 2=V2)
-     * @param pool Pool contract address
-     * @param positionId Position ID (NFT ID for V3, salt for V4, 0 for V2)
-     * @param lpTokenAddress For V2: address of LP token contract
+     * @param pool V4 pool contract address
+     * @param positionId Salt hash for V4 position
      * @param amount0 Amount of token0 in position
      * @param amount1 Amount of token1 in position
      */
     function recordLPPosition(
         LPPositionMetadata storage currentLPPosition,
-        uint8 poolType,
         address pool,
         uint256 positionId,
-        address lpTokenAddress,
         uint256 amount0,
         uint256 amount1
     ) internal {
-        currentLPPosition.poolType = poolType;
         currentLPPosition.pool = pool;
         currentLPPosition.positionId = positionId;
-        currentLPPosition.lpTokenAddress = lpTokenAddress;
-        currentLPPosition.lpTokenBalance = 0;
         currentLPPosition.amount0 = amount0;
         currentLPPosition.amount1 = amount1;
         currentLPPosition.accumulatedFees0 = 0;
@@ -185,18 +235,6 @@ library LPPositionValuation {
         currentLPPosition.lastUpdated = block.timestamp;
     }
 
-    /**
-     * @notice Update LP token balance (for V2 positions)
-     * @param currentLPPosition Storage reference to LP position metadata
-     * @param lpTokenBalance Amount of LP tokens held
-     */
-    function updateLPTokenBalance(
-        LPPositionMetadata storage currentLPPosition,
-        uint256 lpTokenBalance
-    ) internal {
-        currentLPPosition.lpTokenBalance = lpTokenBalance;
-        currentLPPosition.lastUpdated = block.timestamp;
-    }
 
     /**
      * @notice Update position amount0 and amount1 (for all pool types)
@@ -280,16 +318,6 @@ library LPPositionValuation {
         return currentLPPosition;
     }
 
-    /**
-     * @notice Get LP position type
-     * @param currentLPPosition Storage reference to LP position metadata
-     * @return poolType 0=V4, 1=V3, 2=V2
-     */
-    function getPoolType(
-        LPPositionMetadata storage currentLPPosition
-    ) internal view returns (uint8 poolType) {
-        return currentLPPosition.poolType;
-    }
 
     /**
      * @notice Calculate total value locked in LP position (in token1 terms, typically ETH)
@@ -319,11 +347,8 @@ library LPPositionValuation {
         while (allBenefactorStakes.length > 0) {
             allBenefactorStakes.pop();
         }
-        currentLPPosition.poolType = 0;
         currentLPPosition.pool = address(0);
         currentLPPosition.positionId = 0;
-        currentLPPosition.lpTokenAddress = address(0);
-        currentLPPosition.lpTokenBalance = 0;
         currentLPPosition.amount0 = 0;
         currentLPPosition.amount1 = 0;
         currentLPPosition.accumulatedFees0 = 0;

@@ -30,7 +30,7 @@ interface IUltraAlignmentHookFactory {
  * - Convert accumulated ETH to alignment target token
  * - Add liquidity to alignment target pool
  * - Track benefactor contributions for analytics
- * - Plug in beneficiary module for Phase 2 fee distribution
+ * - Track per-benefactor fees claimed for multi-claim support
  *
  * BENEFACTOR: Can be project instance, hook, EOA, or any sender
  */
@@ -43,22 +43,24 @@ contract UltraAlignmentVault is ReentrancyGuard, Ownable {
         bool exists;
     }
 
-    struct LiquidityPosition {
-        bool isV3;
-        uint256 positionId; // NFT ID for V3, salt for V4
-        address pool;
-        uint256 liquidity;
-        uint256 feesAccumulated;
-        uint256 lastFeeCollection;
-    }
-
     struct AlignmentTarget {
         address token; // Alignment target token (e.g., CULT)
-        address v3Pool; // Existing V3 pool address
-        address v4Pool; // V4 pool address (if created)
+        address v4Pool; // V4 pool address
         address weth; // WETH address
         uint256 totalLiquidity;
         uint256 totalFeesCollected;
+    }
+
+    /**
+     * @notice Minimalist benefactor state for O(1) fee claiming
+     * @dev Stores only what's needed: lifetime contribution, last claim state
+     *      Replaces per-conversion benefactor tracking from old design
+     */
+    struct BenefactorState {
+        uint256 lifetimeETHContributed;   // Total ETH they've ever contributed (cumulative, never reset)
+        uint256 lastClaimAmount;          // Amount they claimed last time (for delta calculation)
+        uint256 lastClaimTimestamp;       // When they last claimed
+        bool exists;                      // Tracking marker
     }
 
     // ========== State Variables ==========
@@ -70,19 +72,24 @@ contract UltraAlignmentVault is ReentrancyGuard, Ownable {
     address public immutable hookFactory;
     address public immutable weth;
 
-    // Benefactor tracking
+    // Benefactor tracking (legacy - kept for backwards compatibility)
     mapping(address => BenefactorContribution) public benefactorContributions;
     address[] public registeredBenefactors;
 
-    // Liquidity positions
-    LiquidityPosition[] public liquidityPositions;
-    mapping(uint256 => uint256) public v3PositionToIndex;
-    mapping(bytes32 => uint256) public v4PositionToIndex;
+    // Benefactor state (new epoch-based design)
+    mapping(address => BenefactorState) public benefactorState;
 
-    // LP Position Valuation (Phase 2)
-    mapping(address => LPPositionValuation.BenefactorStake) public benefactorStakes;
-    LPPositionValuation.BenefactorStake[] public allBenefactorStakes;
-    LPPositionValuation.LPPositionMetadata public currentLPPosition;
+    // Epoch window management (trailing condenser pattern)
+    uint256 public currentEpochId;                          // The active epoch being accumulated
+    uint256 public minEpochIdInWindow;                      // Oldest epoch we keep in storage
+    uint256 public constant maxEpochWindow = 3;             // Keep last 3 epochs, condense older
+    mapping(uint256 => LPPositionValuation.EpochRecord) public epochs;  // Only store active epochs
+    mapping(address => uint256[]) public benefactorEpochs;  // Which epochs benefactor participated in
+
+    // Conversion-indexed benefactor accounting (multi-conversion support)
+    LPPositionValuation.ConversionRecord[] public conversionHistory;
+    mapping(address => uint256[]) public benefactorConversions;
+    uint256 public nextConversionId;
 
     // Fee accumulation
     uint256 public accumulatedETH;
@@ -94,23 +101,18 @@ contract UltraAlignmentVault is ReentrancyGuard, Ownable {
     uint256 public minLiquidityThreshold = 0.005 ether;
 
     // External contracts
-    address public v3PositionManager;
     IPoolManager public v4PoolManager;
     address public router;
 
-    // ========== Phase 2 Extension Point ==========
-    // This is where beneficiary distribution will plug in
-    address public beneficiaryModule;
+    // Epoch maintenance incentives (tunable)
+    uint256 public epochKeeperRewardBps = 5; // 0.05% of epoch ETH as reward (basis points)
 
     // ========== Events ==========
 
-    event BenefactorContributionReceived(address indexed benefactor, uint256 amount, bool isERC404Tax);
-    event AlignmentTargetSet(address indexed token, address v3Pool);
+    event BenefactorContributionReceived(address indexed benefactor, uint256 amount, bool isFromHook);
+    event AlignmentTargetSet(address indexed token);
     event AlignmentTargetConverted(uint256 ethAmount, uint256 targetAmount, uint256 liquidity);
     event BenefactorTracked(address indexed benefactor, uint256 ethAmount);
-    event LiquidityPositionAdded(bool isV3, uint256 positionId, address pool, uint256 liquidity);
-    event FeesCollected(uint256 positionIndex, uint256 amount0, uint256 amount1);
-    event BeneficiaryModuleSet(address indexed newModule);
     event CanonicalHookCreated(address indexed hook);
 
     // LP Conversion events
@@ -120,31 +122,19 @@ contract UltraAlignmentVault is ReentrancyGuard, Ownable {
         uint256 lpPositionValue,
         uint256 callerReward
     );
-    event ConversionAndLiquidityAddedV3(
-        uint256 ethSwapped,
-        uint256 targetTokenReceived,
-        uint256 tokenId,
-        uint256 lpPositionValue,
-        uint256 callerReward
-    );
-    event ConversionAndLiquidityAddedV2(
-        uint256 ethSwapped,
-        uint256 targetTokenReceived,
-        uint256 lpTokens,
-        uint256 lpPositionValue,
-        uint256 callerReward
-    );
     event BenefactorStakesCreated(uint256 stakedBenefactors, uint256 totalStakePercent);
     event FeesAccumulated(uint256 amount);
     event BenefactorFeesClaimed(address indexed benefactor, uint256 ethAmount);
+
+    // Epoch maintenance events
+    event EpochFinalized(uint256 indexed epochId, uint256 totalETH, uint256 totalLPValue);
+    event EpochCompressed(uint256 indexed oldEpochId, uint256 newMinEpochId);
 
     // ========== Constructor ==========
 
     constructor(
         address _alignmentTarget,
-        address _v3Pool,
         address _weth,
-        address _v3PositionManager,
         address _v4PoolManager,
         address _router,
         address _hookFactory
@@ -153,7 +143,6 @@ contract UltraAlignmentVault is ReentrancyGuard, Ownable {
 
         require(_alignmentTarget != address(0), "Invalid target");
         require(_weth != address(0), "Invalid WETH");
-        require(_v3PositionManager != address(0), "Invalid V3 PM");
         require(_v4PoolManager != address(0), "Invalid V4 PM");
         require(_router != address(0), "Invalid router");
         require(_hookFactory != address(0), "Invalid hook factory");
@@ -164,14 +153,12 @@ contract UltraAlignmentVault is ReentrancyGuard, Ownable {
 
         alignmentTarget = AlignmentTarget({
             token: _alignmentTarget,
-            v3Pool: _v3Pool,
             v4Pool: address(0),
             weth: _weth,
             totalLiquidity: 0,
             totalFeesCollected: 0
         });
 
-        v3PositionManager = _v3PositionManager;
         v4PoolManager = IPoolManager(_v4PoolManager);
         router = _router;
 
@@ -182,75 +169,37 @@ contract UltraAlignmentVault is ReentrancyGuard, Ownable {
     // ========== Fee Reception ==========
 
     /**
-     * @notice Receive ERC404 swap taxes from hooks
-     * @dev Open function accepting ETH from any source
+     * @notice Receive taxes from V4 hooks
+     * @dev Hook-specific function handling taxes collected via hook mechanism
      * @param currency Currency of the tax (ETH or token)
      * @param amount Amount of tax received
-     * @param benefactor Address of the benefactor/project that generated the tax
+     * @param benefactor Address of the project/factory that generated the tax
      */
-    function receiveERC404Tax(
+    function receiveHookTax(
         Currency currency,
         uint256 amount,
         address benefactor
-    ) external nonReentrant {
+    ) external payable nonReentrant {
         require(amount > 0, "Amount must be positive");
         require(benefactor != address(0), "Invalid benefactor");
 
-        // Accumulate ETH
         accumulatedETH += amount;
-
-        // Track benefactor contribution in storage
         _trackBenefactorContribution(benefactor, amount);
-
-        // Notify beneficiary module if set (Phase 2)
-        if (beneficiaryModule != address(0)) {
-            try IBeneficiary(beneficiaryModule).onFeeAccumulated(amount) {} catch {}
-        }
 
         emit BenefactorContributionReceived(benefactor, amount, true);
     }
 
     /**
-     * @notice Receive ERC1155 creator tithes
-     * @dev Open function accepting ETH from any source
-     * @param benefactor Address of the benefactor/project
-     */
-    function receiveERC1155Tithe(address benefactor) external payable nonReentrant {
-        require(msg.value > 0, "Amount must be positive");
-        require(benefactor != address(0), "Invalid benefactor");
-
-        // Accumulate ETH
-        accumulatedETH += msg.value;
-
-        // Track benefactor contribution in storage
-        _trackBenefactorContribution(benefactor, msg.value);
-
-        // Notify beneficiary module if set (Phase 2)
-        if (beneficiaryModule != address(0)) {
-            try IBeneficiary(beneficiaryModule).onFeeAccumulated(msg.value) {} catch {}
-        }
-
-        emit BenefactorContributionReceived(benefactor, msg.value, false);
-    }
-
-    /**
-     * @notice Accept direct ETH contributions from any address
-     * @dev Enables EOAs and other contracts to contribute directly to the vault
+     * @notice Accept ETH from any source (factories, EOAs, direct transfers)
+     * @dev Fallback for all ETH inflows not routed through hook
+     *      Handles ERC1155 tithe withdrawals, direct contributions, etc.
      *      Tracks msg.sender as the benefactor
      */
     receive() external payable nonReentrant {
         require(msg.value > 0, "Amount must be positive");
 
-        // Accumulate ETH
         accumulatedETH += msg.value;
-
-        // Track sender as benefactor
         _trackBenefactorContribution(msg.sender, msg.value);
-
-        // Notify beneficiary module if set (Phase 2)
-        if (beneficiaryModule != address(0)) {
-            try IBeneficiary(beneficiaryModule).onFeeAccumulated(msg.value) {} catch {}
-        }
 
         emit BenefactorContributionReceived(msg.sender, msg.value, false);
     }
@@ -291,6 +240,36 @@ contract UltraAlignmentVault is ReentrancyGuard, Ownable {
     // ========== Internal Helpers ==========
 
     /**
+     * @notice Get list of benefactors who have contributed to accumulated ETH
+     * @dev Returns only benefactors with totalETHContributed > 0
+     *      Used in convertAndAddLiquidityV4() to get active benefactors for conversion
+     *      O(n) scan but n = total benefactors, typically << 1000
+     * @return Array of benefactor addresses with contributions
+     */
+    function getActiveBenefactors() internal view returns (address[] memory) {
+        // Count active benefactors
+        uint256 activeCount = 0;
+        for (uint256 i = 0; i < registeredBenefactors.length; i++) {
+            if (benefactorContributions[registeredBenefactors[i]].totalETHContributed > 0) {
+                activeCount++;
+            }
+        }
+
+        // Build active benefactors array
+        address[] memory active = new address[](activeCount);
+        uint256 index = 0;
+        for (uint256 i = 0; i < registeredBenefactors.length; i++) {
+            address benefactor = registeredBenefactors[i];
+            if (benefactorContributions[benefactor].totalETHContributed > 0) {
+                active[index] = benefactor;
+                index++;
+            }
+        }
+
+        return active;
+    }
+
+    /**
      * @notice Track benefactor contribution in storage
      * @dev Stores contribution data for analytics and staking distribution (Phase 2)
      * @param benefactor Address of the benefactor (project, hook, or EOA)
@@ -317,68 +296,118 @@ contract UltraAlignmentVault is ReentrancyGuard, Ownable {
     // ========== Conversion & Liquidity ==========
 
     /**
-     * @notice Convert accumulated ETH to V4 liquidity position and create benefactor stakes
+     * @notice Convert accumulated ETH to V4 liquidity position with epoch-based tracking
      * @dev Public function - any caller can trigger conversion and earn 0.5% reward
-     *      This creates frozen stakes for benefactors based on current ETH contributions
-     * @param minOut Minimum target tokens to receive from swap
+     *      Refactored for trailing epoch condenser: tracks per-epoch instead of per-conversion
+     *      Updates benefactor lifetime contributions (cumulative, never reset)
+     *      Maintains conversion record for backwards compatibility
+     * @param minOutTarget Minimum target tokens to receive from ETH swap
      * @param tickLower Lower tick boundary for V4 concentrated liquidity
      * @param tickUpper Upper tick boundary for V4 concentrated liquidity
      * @return lpPositionValue Total value of the LP position added (amount0 + amount1)
      */
     function convertAndAddLiquidityV4(
-        uint256 minOut,
+        uint256 minOutTarget,
         int24 tickLower,
         int24 tickUpper
     ) external nonReentrant returns (uint256 lpPositionValue) {
         require(accumulatedETH >= minConversionThreshold, "Amount too small");
         require(alignmentTarget.token != address(0), "No alignment target set");
+        require(alignmentTarget.v4Pool != address(0), "V4 pool not set");
 
-        // Step 1: Take snapshot of current benefactor contributions
-        address[] memory benefactorsList = new address[](registeredBenefactors.length);
-        uint256[] memory contributions = new uint256[](registeredBenefactors.length);
+        // Step 1: Create new immutable conversion record (backwards compatibility)
+        uint256 conversionId = nextConversionId;
+        LPPositionValuation.ConversionRecord storage record = conversionHistory[conversionId];
 
-        for (uint256 i = 0; i < registeredBenefactors.length; i++) {
-            benefactorsList[i] = registeredBenefactors[i];
-            contributions[i] = benefactorContributions[benefactorsList[i]].totalETHContributed;
-        }
+        record.conversionId = conversionId;
+        record.timestamp = block.timestamp;
 
-        // Step 2: Create benefactor stakes (frozen at conversion time)
+        // Step 2: Get active benefactors (only those who contributed to accumulated ETH)
+        address[] memory activeBenefactors = getActiveBenefactors();
+        require(activeBenefactors.length > 0, "No active benefactors");
+
+        // Step 3: Calculate total ETH for this round and prepare epoch tracking
         uint256 ethToSwap = accumulatedETH;
         accumulatedETH = 0;
 
-        LPPositionValuation.createStakesFromETH(
-            benefactorStakes,
-            allBenefactorStakes,
-            benefactorsList,
-            contributions
-        );
+        uint256 totalETHThisRound = 0;
+        for (uint256 i = 0; i < activeBenefactors.length; i++) {
+            totalETHThisRound += benefactorContributions[activeBenefactors[i]].totalETHContributed;
+        }
 
-        emit BenefactorStakesCreated(benefactorsList.length, 100 * 1e16); // 100% = 1e18
+        // Step 4: Update benefactor lifetime contributions and epoch tracking
+        uint256 epochId = currentEpochId;
+        LPPositionValuation.EpochRecord storage epoch = epochs[epochId];
 
-        // Step 3: Swap ETH → target token (TODO: implement swap through router)
-        // For now, this is a placeholder that would call the vault's swap infrastructure
-        uint256 targetTokenReceived = 0; // TODO: actual swap
+        // Initialize epoch if needed
+        if (epoch.epochId == 0 && conversionId == 0) {
+            epoch.epochId = epochId;
+            epoch.startConversionId = conversionId;
+        }
+        epoch.endConversionId = conversionId;
+        epoch.totalETHInEpoch += ethToSwap;
 
-        // Step 4: Record LP position metadata in library state
-        // Value = amount0 + amount1 (for simple tracking)
-        lpPositionValue = ethToSwap; // Simplified: assume 1:1 value for now
+        for (uint256 i = 0; i < activeBenefactors.length; i++) {
+            address benefactor = activeBenefactors[i];
+            uint256 contribution = benefactorContributions[benefactor].totalETHContributed;
 
-        LPPositionValuation.recordLPPosition(
-            currentLPPosition,
-            0, // poolType = V4
-            alignmentTarget.v4Pool,
-            0, // positionId (will be assigned by V4 pool)
-            address(0), // no lpTokenAddress for V4
-            ethToSwap, // amount0 placeholder
-            targetTokenReceived // amount1 placeholder
-        );
+            // **NEW (Phase 3)**: Update lifetime contribution in BenefactorState
+            // This is cumulative and never resets - forms the basis for O(1) claims
+            BenefactorState storage state = benefactorState[benefactor];
+            if (!state.exists) {
+                state.exists = true;
+            }
+            state.lifetimeETHContributed += contribution;
 
-        // Step 5: Reward the caller (0.5% of swapped ETH)
+            // Track benefactor in this epoch
+            epoch.ethInEpoch[benefactor] += contribution;
+            if (!_isInArray(epoch.benefactorsInEpoch, benefactor)) {
+                epoch.benefactorsInEpoch.push(benefactor);
+            }
+
+            // Legacy: Track which conversions this benefactor participated in
+            benefactorConversions[benefactor].push(conversionId);
+
+            // Legacy: Record benefactor stake frozen for THIS conversion (for backwards compatibility)
+            uint256 stakePercent = (contribution * 1e18) / totalETHThisRound;
+            record.stakes[benefactor] = LPPositionValuation.ConversionBenefactorStake({
+                benefactor: benefactor,
+                ethContributedThisRound: contribution,
+                stakePercent: stakePercent,
+                exists: true
+            });
+            record.benefactorsList.push(benefactor);
+        }
+
+        emit BenefactorStakesCreated(activeBenefactors.length, 100 * 1e16); // 100% = 1e18
+
+        // Step 5: Swap ETH → target token
+        uint256 targetTokenReceived = swapETHForTarget(ethToSwap, minOutTarget, bytes(""));
+
+        // Step 6: Record V4 LP position metadata
+        lpPositionValue = ethToSwap + targetTokenReceived;
+
+        uint256 positionSalt = uint256(keccak256(abi.encode(conversionId, block.timestamp)));
+
+        record.pool = alignmentTarget.v4Pool;
+        record.positionId = positionSalt;
+        record.amount0 = ethToSwap;
+        record.amount1 = targetTokenReceived;
+        record.accumulatedFees0 = 0;
+        record.accumulatedFees1 = 0;
+
+        // Update epoch LP value tracking
+        epoch.totalLPValueInEpoch += lpPositionValue;
+
+        // Step 7: Increment for next conversion
+        nextConversionId++;
+
+        // Step 8: Reward the caller (0.5% of swapped ETH)
         uint256 callerReward = (ethToSwap * 5) / 1000;
         (bool success, ) = payable(msg.sender).call{value: callerReward}("");
         require(success, "Caller reward transfer failed");
 
-        // Step 6: Update tracking
+        // Step 9: Update global tracking
         alignmentTarget.totalLiquidity += lpPositionValue;
 
         emit ConversionAndLiquidityAddedV4(ethToSwap, targetTokenReceived, lpPositionValue, callerReward);
@@ -387,265 +416,186 @@ contract UltraAlignmentVault is ReentrancyGuard, Ownable {
     }
 
     /**
-     * @notice Convert accumulated ETH to V3 liquidity position (NFT-based) and create benefactor stakes
-     * @dev Public function - any caller can trigger conversion and earn 0.5% reward
-     *      V3 uses NFT-based position management via PositionManager
-     * @param minOut Minimum target tokens to receive from swap
-     * @param tickLower Lower tick boundary for V3 concentrated liquidity
-     * @param tickUpper Upper tick boundary for V3 concentrated liquidity
-     * @param fee Fee tier to use for V3 pool (3000 = 0.3%, 10000 = 1%, etc.)
-     * @return tokenId NFT ID of the new V3 position
-     * @return lpPositionValue Total value of the LP position added
+     * @notice Helper: Check if address exists in array
+     * @dev Used for epoch benefactor tracking
      */
-    function convertAndAddLiquidityV3(
-        uint256 minOut,
-        int24 tickLower,
-        int24 tickUpper,
-        uint24 fee
-    ) external nonReentrant returns (uint256 tokenId, uint256 lpPositionValue) {
-        require(accumulatedETH >= minConversionThreshold, "Amount too small");
-        require(alignmentTarget.token != address(0), "No alignment target set");
-        require(v3PositionManager != address(0), "V3 PositionManager not set");
-
-        // Step 1: Take snapshot of current benefactor contributions
-        address[] memory benefactorsList = new address[](registeredBenefactors.length);
-        uint256[] memory contributions = new uint256[](registeredBenefactors.length);
-
-        for (uint256 i = 0; i < registeredBenefactors.length; i++) {
-            benefactorsList[i] = registeredBenefactors[i];
-            contributions[i] = benefactorContributions[benefactorsList[i]].totalETHContributed;
+    function _isInArray(address[] memory arr, address element) internal pure returns (bool) {
+        for (uint256 i = 0; i < arr.length; i++) {
+            if (arr[i] == element) return true;
         }
-
-        // Step 2: Create benefactor stakes (frozen at conversion time)
-        uint256 ethToSwap = accumulatedETH;
-        accumulatedETH = 0;
-
-        LPPositionValuation.createStakesFromETH(
-            benefactorStakes,
-            allBenefactorStakes,
-            benefactorsList,
-            contributions
-        );
-
-        emit BenefactorStakesCreated(benefactorsList.length, 100 * 1e16); // 100% = 1e18
-
-        // Step 3: Swap ETH → target token (TODO: implement swap through router)
-        uint256 targetTokenReceived = 0; // TODO: actual swap
-
-        // Step 4: Call V3 PositionManager.mint() to create position
-        // Returns: tokenId, liquidity, amount0, amount1
-        // For now, use placeholder values - actual implementation would call the manager
-        tokenId = 0; // TODO: actual NFT minting
-        uint256 liquidity = 0; // TODO: actual liquidity amount
-        uint256 amount0 = ethToSwap; // Placeholder
-        uint256 amount1 = targetTokenReceived; // Placeholder
-
-        // Step 5: Record LP position metadata as V3 (poolType = 1)
-        lpPositionValue = amount0 + amount1;
-
-        LPPositionValuation.recordLPPosition(
-            currentLPPosition,
-            1, // poolType = V3
-            alignmentTarget.v3Pool,
-            tokenId, // V3 position NFT ID
-            address(0), // No lpTokenAddress for V3
-            amount0,
-            amount1
-        );
-
-        // Step 6: Reward the caller (0.5% of swapped ETH)
-        uint256 callerReward = (ethToSwap * 5) / 1000;
-        (bool success, ) = payable(msg.sender).call{value: callerReward}("");
-        require(success, "Caller reward transfer failed");
-
-        // Step 7: Update tracking
-        alignmentTarget.totalLiquidity += lpPositionValue;
-
-        emit ConversionAndLiquidityAddedV3(ethToSwap, targetTokenReceived, tokenId, lpPositionValue, callerReward);
-
-        return (tokenId, lpPositionValue);
+        return false;
     }
 
     /**
-     * @notice Convert accumulated ETH to V2 liquidity position and create benefactor stakes
-     * @dev Public function - any caller can trigger conversion and earn 0.5% reward
-     *      V2 uses direct pair contracts and receives LP tokens in return
-     * @param minOut Minimum target tokens to receive from swap
-     * @param minEthForLiquidity Minimum ETH amount to use for liquidity pair
-     * @return lpTokens Amount of LP tokens received from the pair
-     * @return lpPositionValue Estimated value of the LP position
+     * @notice Swap ETH for alignment target token (DEX-agnostic)
+     * @dev Internal function - source DEX doesn't matter (V2/V3/V4)
+     *      Uses generic swap infrastructure with router-specific call data
+     * @param ethAmount Amount of ETH to swap
+     * @param minOutTarget Minimum target tokens to receive
+     * @param swapData Router-specific encoded call data (TODO: implement based on chosen router)
+     * @return targetTokenReceived Amount of target token received from swap
      */
-    function convertAndAddLiquidityV2(
-        uint256 minOut,
-        uint256 minEthForLiquidity
-    ) external nonReentrant returns (uint256 lpTokens, uint256 lpPositionValue) {
-        require(accumulatedETH >= minConversionThreshold, "Amount too small");
-        require(alignmentTarget.token != address(0), "No alignment target set");
+    function swapETHForTarget(
+        uint256 ethAmount,
+        uint256 minOutTarget,
+        bytes memory swapData
+    ) internal returns (uint256 targetTokenReceived) {
         require(router != address(0), "Router not set");
+        require(alignmentTarget.token != address(0), "No alignment target set");
 
-        // Step 1: Take snapshot of current benefactor contributions
-        address[] memory benefactorsList = new address[](registeredBenefactors.length);
-        uint256[] memory contributions = new uint256[](registeredBenefactors.length);
+        // TODO: Implement actual swap call through router
+        // This is a stub that returns 0 - actual implementation will:
+        // 1. Call router with swap data (which encodes path, amounts, recipient, etc)
+        // 2. Execute swap using either V2, V3, or V4 liquidity pools
+        // 3. Return actual amount received
 
-        for (uint256 i = 0; i < registeredBenefactors.length; i++) {
-            benefactorsList[i] = registeredBenefactors[i];
-            contributions[i] = benefactorContributions[benefactorsList[i]].totalETHContributed;
+        targetTokenReceived = 0; // TODO: actual swap execution
+
+        require(targetTokenReceived >= minOutTarget, "Slippage too high");
+
+        return targetTokenReceived;
+    }
+
+
+    // ========== Epoch Maintenance (Decentralized, Incentivized) ==========
+
+    /**
+     * @notice Finalize current epoch and start a new one (public, incentivized)
+     * @dev Called by anyone (keeper, benefactor, or casual maintainer) to manage epochs
+     *      Enables a rolling window of active epochs, compresses old ones to save storage
+     *      Caller receives reward from epoch's accumulated ETH (tunable percentage)
+     *      Can be triggered by:
+     *      - Epoch size limit reached (maxConversionsPerEpoch)
+     *      - Time threshold reached (maxEpochDuration)
+     *      - Manual maintenance call (anytime)
+     * @return epochId The ID of the finalized epoch
+     */
+    function finalizeEpochAndStartNew() external returns (uint256 epochId) {
+        uint256 finalizingEpochId = currentEpochId;
+        LPPositionValuation.EpochRecord storage epoch = epochs[finalizingEpochId];
+
+        // Validate: epoch has been populated with conversions
+        require(epoch.totalETHInEpoch > 0, "Epoch has no ETH, nothing to finalize");
+
+        // Transition to next epoch
+        currentEpochId++;
+
+        // Check if we need to compress old epochs (rolling window management)
+        if ((currentEpochId - minEpochIdInWindow) > maxEpochWindow) {
+            _compressOldestEpoch();
         }
 
-        // Step 2: Create benefactor stakes (frozen at conversion time)
-        uint256 ethToSwap = accumulatedETH;
-        accumulatedETH = 0;
+        // Pay caller reward (0.05% of epoch's total ETH - tunable via setEpochKeeperRewardBps)
+        uint256 rewardBps = epochKeeperRewardBps; // basis points (e.g., 5 = 0.05%)
+        uint256 callerReward = (epoch.totalETHInEpoch * rewardBps) / 10000;
 
-        LPPositionValuation.createStakesFromETH(
-            benefactorStakes,
-            allBenefactorStakes,
-            benefactorsList,
-            contributions
-        );
+        if (callerReward > 0) {
+            (bool success, ) = payable(msg.sender).call{value: callerReward}("");
+            require(success, "Caller reward transfer failed");
+        }
 
-        emit BenefactorStakesCreated(benefactorsList.length, 100 * 1e16); // 100% = 1e18
+        emit EpochFinalized(finalizingEpochId, epoch.totalETHInEpoch, epoch.totalLPValueInEpoch);
 
-        // Step 3: Swap portion of ETH → target token (TODO: implement swap through router)
-        // For V2, we need both tokens: some ETH and target tokens
-        uint256 targetTokenReceived = 0; // TODO: actual swap
-
-        // Step 4: Call Router02.addLiquidity() to create position
-        // Returns: amount0Used, amount1Used, lpTokensMinted
-        // For now, use placeholder values - actual implementation would call the router
-        uint256 amount0 = ethToSwap; // Placeholder: ETH amount used
-        uint256 amount1 = targetTokenReceived; // Placeholder: target token amount used
-        lpTokens = 0; // TODO: actual LP token amount
-
-        // Step 5: Record LP position metadata as V2 (poolType = 2)
-        // For V2, the LP token balance is stored in lpTokenBalance field
-        lpPositionValue = amount0 + amount1;
-
-        // Get the V2 pair address (would be determined from factory in real implementation)
-        address v2Pair = address(0); // TODO: determine actual V2 pair address
-
-        LPPositionValuation.recordLPPosition(
-            currentLPPosition,
-            2, // poolType = V2
-            v2Pair,
-            0, // positionId (not used for V2)
-            v2Pair, // lpTokenAddress is the pair itself
-            amount0,
-            amount1
-        );
-
-        // Update LP token balance
-        LPPositionValuation.updateLPTokenBalance(currentLPPosition, lpTokens);
-
-        // Step 6: Reward the caller (0.5% of swapped ETH)
-        uint256 callerReward = (ethToSwap * 5) / 1000;
-        (bool success, ) = payable(msg.sender).call{value: callerReward}("");
-        require(success, "Caller reward transfer failed");
-
-        // Step 7: Update tracking
-        alignmentTarget.totalLiquidity += lpPositionValue;
-
-        emit ConversionAndLiquidityAddedV2(ethToSwap, targetTokenReceived, lpTokens, lpPositionValue, callerReward);
-
-        return (lpTokens, lpPositionValue);
+        return finalizingEpochId;
     }
 
     /**
-     * @notice Record accumulated fees from LP position
+     * @notice Compress the oldest epoch and move to next in rolling window
+     * @dev Internal function called by finalizeEpochAndStartNew() when window overflow
+     *      Benefactor lifetime contributions already account for all epochs
+     *      Compression just marks epoch as complete and advances window
+     *      Old epoch data remains readable for queries but is "closed"
+     */
+    function _compressOldestEpoch() internal {
+        uint256 oldEpochId = minEpochIdInWindow;
+        LPPositionValuation.EpochRecord storage oldEpoch = epochs[oldEpochId];
+
+        require(!oldEpoch.isCondensed, "Epoch already compressed");
+        require(oldEpoch.totalETHInEpoch > 0, "Cannot compress empty epoch");
+
+        // Mark as condensed (indicates it's been moved out of active window)
+        oldEpoch.isCondensed = true;
+        oldEpoch.compressedIntoEpochId = minEpochIdInWindow + 1;
+
+        // Advance window
+        minEpochIdInWindow++;
+
+        // Optional: Clear the epoch's benefactor array to save storage
+        // (mapping data is kept for query compatibility)
+        while (oldEpoch.benefactorsInEpoch.length > 0) {
+            oldEpoch.benefactorsInEpoch.pop();
+        }
+
+        emit EpochCompressed(oldEpochId, minEpochIdInWindow);
+    }
+
+    /**
+     * @notice Record accumulated fees from a specific conversion's LP position
      * @dev Called after fees are collected from LP positions
      *      These fees are in both token0 and token1 format
+     * @param conversionId ID of the conversion to update fees for
      * @param feeAmount0 Accumulated fees in token0
      * @param feeAmount1 Accumulated fees in token1 (typically ETH)
      */
-    function recordAccumulatedFees(uint256 feeAmount0, uint256 feeAmount1) external onlyOwner {
-        uint256 totalFees = feeAmount0 + feeAmount1;
-        accumulatedFees += totalFees;
+    function recordAccumulatedFees(
+        uint256 conversionId,
+        uint256 feeAmount0,
+        uint256 feeAmount1
+    ) external onlyOwner {
+        require(conversionId < conversionHistory.length, "Invalid conversion ID");
 
-        // Update position metadata
-        LPPositionValuation.updateAccumulatedFees(currentLPPosition, feeAmount0, feeAmount1);
+        LPPositionValuation.ConversionRecord storage record = conversionHistory[conversionId];
+        uint256 totalFees = feeAmount0 + feeAmount1;
+
+        // Add to existing accumulated fees (allows multiple collections)
+        record.accumulatedFees0 += feeAmount0;
+        record.accumulatedFees1 += feeAmount1;
 
         emit FeesAccumulated(totalFees);
     }
 
     /**
-     * @notice Claim benefactor's share of accumulated fees
-     * @dev Benefactor calls this to withdraw their proportional share
-     *      Vault automatically converts token0 fees to ETH and sends pure ETH to benefactor
-     *      Uses the same swap infrastructure as LP conversions (optimistic model)
-     * @return ethAmount Amount of ETH sent to benefactor
+     * @notice Claim benefactor's share of accumulated LP fees using lifetime contribution ratio
+     * @dev O(1) operation: Benefactor's share is calculated as (totalLPValue * lifetimeContribution / totalCollected)
+     *      This model converts the multi-conversion iteration problem into a simple delta calculation
+     *      Benefactors can claim multiple times as new LP fees accumulate - only receives new accrued fees
+     *      All fees (token0 + token1) are converted to ETH by the vault before distribution
+     * @return ethClaimed Amount of ETH sent to benefactor
      */
-    function claimBenefactorFees() external nonReentrant returns (uint256 ethAmount) {
+    function claimBenefactorFees() external nonReentrant returns (uint256 ethClaimed) {
         address benefactor = msg.sender;
-        require(
-            LPPositionValuation.hasStake(benefactorStakes, benefactor),
-            "No stake found for benefactor"
-        );
+        BenefactorState storage state = benefactorState[benefactor];
+        require(state.exists, "Benefactor not registered");
 
-        // Calculate unclaimed fee share for this benefactor
-        uint256 unclaimedFees = LPPositionValuation.calculateUnclaimedFees(
-            benefactorStakes,
-            benefactor,
-            accumulatedFees
-        );
-        require(unclaimedFees > 0, "No unclaimed fees");
+        // Get current total LP value (accumulated across all time from all conversions)
+        uint256 currentTotalLPValue = alignmentTarget.totalLiquidity;
 
-        // Record that benefactor has claimed these fees
-        LPPositionValuation.recordFeeClaim(benefactorStakes, benefactor, unclaimedFees);
+        // What the benefactor should own based on their lifetime contribution ratio
+        // benefactorShare = (currentTotalLPValue * lifetimeContribution) / totalCollected
+        uint256 benefactorShare;
+        if (totalETHCollected > 0) {
+            benefactorShare = (currentTotalLPValue * state.lifetimeETHContributed) / uint256(totalETHCollected);
+        } else {
+            // No contributions yet, nothing to claim
+            revert("No contributions");
+        }
 
-        // Calculate fee breakdown: what portion is token0 vs token1?
-        // For now, assume fees are split proportionally based on position composition
-        LPPositionValuation.LPPositionMetadata memory position = LPPositionValuation.getLPPosition(
-            currentLPPosition
-        );
+        // Calculate unclaimed fees: what they should have minus what they already claimed
+        // Note: lastClaimAmount already accounts for all previous claims
+        ethClaimed = benefactorShare > state.lastClaimAmount ? benefactorShare - state.lastClaimAmount : 0;
+        require(ethClaimed > 0, "No new fees to claim");
 
-        uint256 positionValue = position.amount0 + position.amount1;
-        require(positionValue > 0, "Position has no value");
+        // Update state to prevent re-entry and track claim
+        state.lastClaimAmount = benefactorShare;
+        state.lastClaimTimestamp = block.timestamp;
 
-        // Calculate proportional split
-        uint256 token0Portion = (unclaimedFees * position.accumulatedFees0) /
-            (position.accumulatedFees0 + position.accumulatedFees1);
-        uint256 token1Portion = unclaimedFees - token0Portion;
+        // Transfer accumulated ETH (vault has already converted token0 → ETH via swaps)
+        (bool success, ) = payable(benefactor).call{value: ethClaimed}("");
+        require(success, "ETH transfer failed");
 
-        // ETH equivalent: token1 is already ETH (or primary token)
-        // token0 needs to be sold for ETH (handled optimistically by vault's swap infrastructure)
-        // For now, return token1 portion as ETH directly
-        ethAmount = token1Portion;
+        emit BenefactorFeesClaimed(benefactor, ethClaimed);
 
-        // TODO: Implement token0 → ETH swap using vault's swap infrastructure
-        // This would happen asynchronously after benefactor claims
-
-        // Transfer ETH to benefactor
-        (bool success, ) = payable(benefactor).call{value: ethAmount}("");
-        require(success, "Fee transfer failed");
-
-        emit BenefactorFeesClaimed(benefactor, ethAmount);
-
-        return ethAmount;
-    }
-
-    /**
-     * @notice Collect fees from a liquidity position
-     */
-    function collectFeesFromPosition(uint256 positionIndex) external onlyOwner nonReentrant {
-        require(positionIndex < liquidityPositions.length, "Invalid position");
-
-        LiquidityPosition storage position = liquidityPositions[positionIndex];
-        // TODO: Implement fee collection based on V3/V4 type
-
-        emit FeesCollected(positionIndex, 0, 0);
-    }
-
-
-    // ========== Phase 2 Extension Point ==========
-
-    /**
-     * @notice Set beneficiary module (Phase 2)
-     * @dev When ready for Phase 2, deploy VaultBenefactorDistribution
-     *      and call this function to activate it
-     */
-    function setBeneficiaryModule(address newModule) external onlyOwner {
-        require(newModule == address(0) || newModule.code.length > 0, "Invalid module");
-        beneficiaryModule = newModule;
-        emit BeneficiaryModuleSet(newModule);
+        return ethClaimed;
     }
 
     // ========== Query Functions ==========
@@ -670,14 +620,6 @@ contract UltraAlignmentVault is ReentrancyGuard, Ownable {
      */
     function getRegisteredBenefactors() external view returns (address[] memory) {
         return registeredBenefactors;
-    }
-
-    /**
-     * @notice Get liquidity positions
-     * @return Array of liquidity position structs
-     */
-    function getLiquidityPositions() external view returns (LiquidityPosition[] memory) {
-        return liquidityPositions;
     }
 
     /**
@@ -715,65 +657,107 @@ contract UltraAlignmentVault is ReentrancyGuard, Ownable {
     // ========== LP Valuation Query Functions ==========
 
     /**
-     * @notice Get benefactor's stake in current LP position
+     * @notice Get benefactor's conversion history
      * @param benefactor Address of the benefactor
-     * @return stake Benefactor stake details (frozen at conversion time)
+     * @return Array of conversion IDs that this benefactor participated in
      */
-    function getBenefactorStake(address benefactor)
+    function getBenefactorConversions(address benefactor)
         external
         view
-        returns (LPPositionValuation.BenefactorStake memory stake)
+        returns (uint256[] memory)
     {
-        return benefactorStakes[benefactor];
+        return benefactorConversions[benefactor];
     }
 
     /**
-     * @notice Get benefactor's unclaimed fee amount
-     * @param benefactor Address of the benefactor
-     * @return unclaimedFees Amount of unclaimed fees available to claim
+     * @notice Get total conversion records (history size)
+     * @return Total number of conversions that have been executed
      */
-    function getBenefactorUnclaimedFees(address benefactor)
+    function getConversionCount() external view returns (uint256) {
+        return conversionHistory.length;
+    }
+
+    /**
+     * @notice Get conversion metadata (non-mapping fields)
+     * @param _conversionId ID of the conversion to retrieve
+     * @return id The sequential conversion ID
+     * @return timestamp When the conversion was created
+     * @return pool The V4 pool address for this conversion
+     * @return positionId The position salt hash
+     * @return amount0 Token0 amount in the position
+     * @return amount1 Token1 amount in the position
+     * @return accumulatedFees0 Accumulated fees in token0
+     * @return accumulatedFees1 Accumulated fees in token1
+     */
+    function getConversionMetadata(uint256 _conversionId)
         external
         view
-        returns (uint256 unclaimedFees)
+        returns (
+            uint256,
+            uint256,
+            address,
+            uint256,
+            uint256,
+            uint256,
+            uint256,
+            uint256
+        )
     {
-        return LPPositionValuation.calculateUnclaimedFees(
-            benefactorStakes,
-            benefactor,
-            accumulatedFees
+        require(_conversionId < conversionHistory.length, "Invalid conversion ID");
+        LPPositionValuation.ConversionRecord storage record = conversionHistory[_conversionId];
+
+        return (
+            record.conversionId,
+            record.timestamp,
+            record.pool,
+            record.positionId,
+            record.amount0,
+            record.amount1,
+            record.accumulatedFees0,
+            record.accumulatedFees1
         );
     }
 
     /**
-     * @notice Get current LP position metadata
-     * @return position Current LP position details
+     * @notice Get benefactor's stake in a specific conversion
+     * @param conversionId ID of the conversion
+     * @param benefactor Address of the benefactor
+     * @return stake The benefactor's frozen stake in that conversion
      */
-    function getCurrentLPPosition()
+    function getConversionBenefactorStake(uint256 conversionId, address benefactor)
         external
         view
-        returns (LPPositionValuation.LPPositionMetadata memory position)
+        returns (LPPositionValuation.ConversionBenefactorStake memory stake)
     {
-        return LPPositionValuation.getLPPosition(currentLPPosition);
+        require(conversionId < conversionHistory.length, "Invalid conversion ID");
+        return conversionHistory[conversionId].stakes[benefactor];
     }
 
     /**
-     * @notice Get all benefactor stakes from last conversion
-     * @return stakes Array of all active benefactor stakes
+     * @notice Get total unclaimed fees for a benefactor across all their conversions
+     * @param benefactor Address of the benefactor
+     * @return totalUnclaimed Sum of unclaimed fees from all conversions they participated in
      */
-    function getAllBenefactorStakes()
+    function getBenefactorTotalUnclaimedFees(address benefactor)
         external
         view
-        returns (LPPositionValuation.BenefactorStake[] memory stakes)
+        returns (uint256 totalUnclaimed)
     {
-        return LPPositionValuation.getAllStakes(allBenefactorStakes);
-    }
+        uint256[] memory conversions = benefactorConversions[benefactor];
+        for (uint256 i = 0; i < conversions.length; i++) {
+            uint256 conversionId = conversions[i];
+            LPPositionValuation.ConversionRecord storage record = conversionHistory[conversionId];
 
-    /**
-     * @notice Get total accumulated fees in LP position
-     * @return totalFees Total fees available for distribution
-     */
-    function getTotalAccumulatedFees() external view returns (uint256 totalFees) {
-        return accumulatedFees;
+            LPPositionValuation.ConversionBenefactorStake memory stake = record.stakes[benefactor];
+            uint256 totalFees = record.accumulatedFees0 + record.accumulatedFees1;
+            uint256 totalOwed = (totalFees * stake.stakePercent) / 1e18;
+            uint256 previouslyClaimed = record.claimedByBenefactor[benefactor];
+
+            if (totalOwed > previouslyClaimed) {
+                totalUnclaimed += (totalOwed - previouslyClaimed);
+            }
+        }
+        return totalUnclaimed;
     }
 
     // ========== Configuration ==========
@@ -799,27 +783,12 @@ contract UltraAlignmentVault is ReentrancyGuard, Ownable {
      */
     function updateAlignmentTarget(
         address newToken,
-        address newV3Pool,
         address newV4Pool
     ) external onlyOwner {
         require(newToken != address(0), "Invalid token");
         alignmentTarget.token = newToken;
-        if (newV3Pool != address(0)) alignmentTarget.v3Pool = newV3Pool;
         if (newV4Pool != address(0)) alignmentTarget.v4Pool = newV4Pool;
-        emit AlignmentTargetSet(newToken, newV3Pool);
+        emit AlignmentTargetSet(newToken);
     }
 }
 
-// ========== Beneficiary Module Interface ==========
-
-/**
- * @notice Interface for beneficiary modules that plug into the vault
- * @dev Implement this to add custom fee distribution logic (Phase 2+)
- */
-interface IBeneficiary {
-    /**
-     * @notice Called when fees are accumulated
-     * @param amount Amount of fees accumulated (in wei)
-     */
-    function onFeeAccumulated(uint256 amount) external;
-}

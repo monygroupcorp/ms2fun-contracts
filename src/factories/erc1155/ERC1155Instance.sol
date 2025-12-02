@@ -345,9 +345,9 @@ contract ERC1155Instance is Ownable, ReentrancyGuard {
         uint256 taxAmount = (amount * 20) / 100;
         uint256 creatorAmount = amount - taxAmount;
 
-        // Send tithe to vault with project instance tracking
-        // Vault will handle conversion to alignment target and project contribution tracking
-        vault.receiveERC1155Tithe{value: taxAmount}(address(this));
+        // Send tithe to vault (via receive fallback)
+        // Vault will accumulate fees and track this instance as the benefactor
+        SafeTransferLib.safeTransferETH(address(vault), taxAmount);
 
         // Transfer remainder to creator
         SafeTransferLib.safeTransferETH(creator, creatorAmount);
@@ -361,6 +361,22 @@ contract ERC1155Instance is Ownable, ReentrancyGuard {
      */
     function getTotalProceeds() external view returns (uint256) {
         return totalProceeds;
+    }
+
+    /**
+     * @notice Claim accumulated vault fees on behalf of this project and distribute to creator
+     * @dev Only callable by the project creator
+     *      This instance was registered as the benefactor when tithes were sent to the vault
+     *      The creator calls this to claim fees and keep the rewards
+     * @return totalClaimed Amount of ETH claimed from vault
+     */
+    function claimVaultFees() external onlyOwner nonReentrant returns (uint256 totalClaimed) {
+        // Call vault's claimBenefactorFees, which uses msg.sender (this contract) as the benefactor
+        totalClaimed = vault.claimBenefactorFees();
+
+        // Route all claimed fees to the creator
+        require(totalClaimed > 0, "No fees to claim");
+        SafeTransferLib.safeTransferETH(creator, totalClaimed);
     }
 
     // ┌─────────────────────────┐

@@ -44,9 +44,9 @@ contract ERC404RerollTest is Test {
         // Create bonding instance
         ERC404BondingInstance.BondingCurveParams memory curveParams = ERC404BondingInstance.BondingCurveParams({
             initialPrice: 0.0001 ether,
-            quarticCoeff: 1,  // 1e-10 would be 1 / 10^10
-            cubicCoeff: 1,    // 1e-8 would be 1 / 10^8
-            quadraticCoeff: 1, // 1e-6 would be 1 / 10^6
+            quarticCoeff: 1,  // represents 1 / 10^10
+            cubicCoeff: 1,    // represents 1 / 10^8
+            quadraticCoeff: 1, // represents 1 / 10^6
             normalizationFactor: 1e18
         });
 
