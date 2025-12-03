@@ -111,6 +111,7 @@ contract ERC404BondingInstanceTest is Test {
         vm.startPrank(owner);
         uint256 futureTime = block.timestamp + 1 days;
         instance.setBondingOpenTime(futureTime);
+        instance.setV4Hook(mockV4Hook);
         instance.setBondingActive(true);
         assertTrue(instance.bondingActive());
         vm.stopPrank();
@@ -148,6 +149,7 @@ contract ERC404BondingInstanceTest is Test {
         vm.startPrank(owner);
         uint256 futureTime = block.timestamp + 1 days;
         instance.setBondingOpenTime(futureTime);
+        instance.setV4Hook(mockV4Hook);
         instance.setBondingActive(true);
         vm.stopPrank();
         

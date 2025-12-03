@@ -106,6 +106,10 @@ library LPPositionValuation {
         // Claim tracking (benefactor → total fees claimed so far from THIS conversion)
         // Allows multiple claims as LP fees accumulate over time
         mapping(address => uint256) claimedByBenefactor;
+
+        // V4 Liquidity Units Tracking (NEW - PHASE 3B: Ground truth for fee distribution)
+        uint128 liquidityUnitsCreated;                                 // Total V4 liquidity units created in this conversion
+        mapping(address => uint128) benefactorLiquidityUnits;          // Per-benefactor liquidity units from THIS conversion
     }
 
     // ========== Note on State ==========

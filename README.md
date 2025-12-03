@@ -81,13 +81,24 @@ Central indexing and governance:
 - Multi-factory support
 
 ### Vault System (`src/vaults/`)
-- `UltraAlignmentVault.sol` - Fee hub with trailing epoch condenser architecture
-  - Receives ETH from ERC404 hooks and ERC1155 tithes
+- `UltraAlignmentVault.sol` - Fee hub with trailing epoch condenser + three-pool treasury
+  - **Three-Pool Treasury Architecture**:
+    - `conversionPool`: ETH reserved for ETH → token → LP operations
+    - `feeClaimPool`: ETH reserved for benefactor fee claim payouts
+    - `operatorIncentivePool`: ETH reserved for epoch keepers and converters
+  - Owner-controlled rebalancing (`reallocateTreasuryForFeeClaims()`, `reallocateTreasuryForOperators()`)
+  - Receives ETH from ERC404 hooks and ERC1155 tithes (auto-allocates to conversionPool)
   - Converts accumulated ETH to target token and creates V4 LP positions
+  - **Async Epoch Finalization**: No auto-triggers or gas spikes on conversions
+    - Decentralized epoch finalization with keeper incentives (`finalizeEpochAndStartNew()`)
+    - Optional finalization (keepers call when epoch reaches advisory threshold or own discretion)
+  - **Epoch Boundary Configuration** (advisory, non-blocking):
+    - `maxConversionsPerEpoch`: Advisory threshold (default 100) - doesn't stop conversions
+    - Conversions proceed freely regardless of epoch size
   - **Trailing Epoch Condenser**: O(1) fee claims via lifetime contribution ratio model
-  - Decentralized epoch finalization with keeper incentives (`finalizeEpochAndStartNew()`)
   - Automatic rolling window compression (`_compressOldestEpoch()`) - keeps last 3 epochs active
   - Scales to 5000+ conversions and 2000+ benefactors without gas bloat
+  - Treasury accounting: tracks allocated ETH and withdrawn amounts per pool
 - `LPPositionValuation.sol` - Epoch-based tracking with immutable conversion records
   - EpochRecord struct for batching conversions and tracking benefactor contributions
   - BenefactorState minimalist tracking (lifetime ETH, last claim, timestamps)
