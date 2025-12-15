@@ -1,0 +1,333 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.20;
+
+import {Test, console} from "forge-std/Test.sol";
+import {MasterRegistryV1} from "../../src/master/MasterRegistryV1.sol";
+import {MasterRegistry} from "../../src/master/MasterRegistry.sol";
+import {MockEXECToken} from "../mocks/MockEXECToken.sol";
+import {MockFactory} from "../mocks/MockFactory.sol";
+import {IMasterRegistry} from "../../src/master/interfaces/IMasterRegistry.sol";
+import {TestHelpers} from "../helpers/TestHelpers.sol";
+
+/**
+ * @title FullWorkflowIntegrationTest
+ * @notice End-to-end integration tests covering complete workflows:
+ * - Factory application → Voting → Approval → Instance creation → Featured promotion
+ */
+contract FullWorkflowIntegrationTest is Test {
+    MasterRegistryV1 public implementation;
+    MasterRegistry public proxyWrapper;
+    address public proxy;
+    MockEXECToken public execToken;
+    MockFactory public erc404Factory;
+
+    address public owner;
+    address public applicant;
+    address public voter1;
+    address public voter2;
+    address public creator;
+    address public purchaser;
+
+    uint256 constant APPLICATION_FEE = 0.1 ether;
+    uint256 constant INITIAL_EXEC_SUPPLY = 100000e18;
+
+    function setUp() public {
+        owner = address(this);
+        applicant = address(0x111);
+        voter1 = address(0x222);
+        voter2 = address(0x333);
+        creator = address(0x444);
+        purchaser = address(0x555);
+
+        execToken = new MockEXECToken(INITIAL_EXEC_SUPPLY);
+        execToken.transfer(voter1, 2000e18);
+        execToken.transfer(voter2, 1500e18);
+
+        implementation = new MasterRegistryV1();
+        bytes memory initData = abi.encodeWithSelector(
+            MasterRegistryV1.initialize.selector,
+            address(execToken),
+            owner
+        );
+        proxyWrapper = new MasterRegistry(address(implementation), initData);
+        proxy = TestHelpers.getProxyAddress(proxyWrapper);
+
+        erc404Factory = new MockFactory(proxy);
+    }
+
+    function test_FullWorkflow_ApplicationToFeaturedPromotion() public {
+        // Step 1: Apply for factory
+        vm.deal(applicant, APPLICATION_FEE);
+        vm.prank(applicant);
+        IMasterRegistry(proxy).applyForFactory{value: APPLICATION_FEE}(
+            address(erc404Factory),
+            "ERC404",
+            "my-erc404-factory",
+            "My ERC404 Factory",
+            "https://example.com/factory.json",
+            new bytes32[](0)
+        );
+
+        // Verify application submitted
+        IMasterRegistry.FactoryApplication memory app = 
+            IMasterRegistry(proxy).getFactoryApplication(address(erc404Factory));
+        assertEq(uint256(app.status), uint256(IMasterRegistry.ApplicationStatus.Pending));
+        assertEq(app.applicant, applicant);
+
+        // Step 2: Vote on application
+        vm.prank(voter1);
+        IMasterRegistry(proxy).voteOnApplication(address(erc404Factory), true);
+        
+        vm.prank(voter2);
+        IMasterRegistry(proxy).voteOnApplication(address(erc404Factory), true);
+
+        // Verify votes recorded
+        app = IMasterRegistry(proxy).getFactoryApplication(address(erc404Factory));
+        assertEq(app.approvalVotes, 3500e18); // 2000 + 1500
+        assertEq(app.totalVotes, 3500e18);
+
+        // Step 3: Finalize application
+        IMasterRegistry(proxy).finalizeApplication(address(erc404Factory));
+
+        // Verify factory registered
+        IMasterRegistry.FactoryInfo memory factoryInfo = 
+            IMasterRegistry(proxy).getFactoryInfoByAddress(address(erc404Factory));
+        assertEq(factoryInfo.factoryId, 1);
+        assertTrue(factoryInfo.active);
+        assertEq(IMasterRegistry(proxy).getTotalFactories(), 1);
+
+        // Step 4: Register instance
+        address instance = address(0xAAA);
+        vm.prank(address(erc404Factory));
+        IMasterRegistry(proxy).registerInstance(
+            instance,
+            address(erc404Factory),
+            creator,
+            "my-token",
+            "https://example.com/token.json",
+            address(0) // vault
+        );
+
+        // Step 5: Purchase featured promotion (queue-based)
+        bool unshiftToFront = false; // Push to back (cheaper)
+        uint256 currentPrice = IMasterRegistry(proxy).getPushBackPrice();
+
+        vm.deal(purchaser, currentPrice);
+        vm.prank(purchaser);
+        IMasterRegistry(proxy).purchaseFeaturedPromotion{value: currentPrice}(
+            instance,
+            unshiftToFront
+        );
+
+        // Verify promotion purchased
+        (
+            IMasterRegistry.FeaturedPromotion memory promo,
+            uint256 position,
+            ,
+            bool isExpired
+        ) = IMasterRegistry(proxy).getPromotionInfo(instance);
+
+        assertEq(promo.instance, instance);
+        assertEq(promo.purchaser, purchaser);
+        assertEq(position, 1); // First in queue
+        assertFalse(isExpired);
+    }
+
+    function test_FullWorkflow_MultipleFactoriesAndInstances() public {
+        // Register first factory
+        vm.deal(applicant, APPLICATION_FEE * 2);
+        vm.startPrank(applicant);
+        
+        IMasterRegistry(proxy).applyForFactory{value: APPLICATION_FEE}(
+            address(erc404Factory),
+            "ERC404",
+            "factory-1",
+            "Factory 1",
+            "https://example.com/factory1.json",
+            new bytes32[](0)
+        );
+        vm.stopPrank();
+
+        vm.prank(voter1);
+        IMasterRegistry(proxy).voteOnApplication(address(erc404Factory), true);
+        IMasterRegistry(proxy).finalizeApplication(address(erc404Factory));
+
+        // Register second factory
+        MockFactory factory2 = new MockFactory(address(proxy));
+        vm.prank(applicant);
+        IMasterRegistry(proxy).applyForFactory{value: APPLICATION_FEE}(
+            address(factory2),
+            "ERC1155",
+            "factory-2",
+            "Factory 2",
+            "https://example.com/factory2.json",
+            new bytes32[](0)
+        );
+
+        vm.prank(voter1);
+        IMasterRegistry(proxy).voteOnApplication(address(factory2), true);
+        IMasterRegistry(proxy).finalizeApplication(address(factory2));
+
+        // Verify both factories registered
+        assertEq(IMasterRegistry(proxy).getTotalFactories(), 2);
+
+        // Create instances from both factories
+        address instance1 = address(0xAAA);
+        address instance2 = address(0xBBB);
+
+        vm.prank(address(erc404Factory));
+        IMasterRegistry(proxy).registerInstance(
+            instance1,
+            address(erc404Factory),
+            creator,
+            "token-1",
+            "https://example.com/token1.json",
+            address(0) // vault
+        );
+
+        vm.prank(address(factory2));
+        IMasterRegistry(proxy).registerInstance(
+            instance2,
+            address(factory2),
+            creator,
+            "token-2",
+            "https://example.com/token2.json",
+            address(0) // vault
+        );
+
+        // Verify instances registered (by checking name uniqueness)
+        address duplicateInstance = address(0xCCC);
+        vm.prank(address(erc404Factory));
+        vm.expectRevert("Name already taken");
+        IMasterRegistry(proxy).registerInstance(
+            duplicateInstance,
+            address(erc404Factory),
+            creator,
+            "token-1", // Duplicate name
+            "https://example.com/duplicate.json",
+            address(0) // vault
+        );
+    }
+
+    function test_FullWorkflow_RejectedApplication() public {
+        // Apply for factory
+        vm.deal(applicant, APPLICATION_FEE);
+        vm.prank(applicant);
+        IMasterRegistry(proxy).applyForFactory{value: APPLICATION_FEE}(
+            address(erc404Factory),
+            "ERC404",
+            "rejected-factory",
+            "Rejected Factory",
+            "https://example.com/rejected.json",
+            new bytes32[](0)
+        );
+
+        // Vote with rejection majority
+        vm.prank(voter1);
+        IMasterRegistry(proxy).voteOnApplication(address(erc404Factory), false);
+        
+        vm.prank(voter2);
+        IMasterRegistry(proxy).voteOnApplication(address(erc404Factory), false);
+
+        // Try to finalize - should fail
+        vm.expectRevert("Quorum not met or rejected");
+        IMasterRegistry(proxy).finalizeApplication(address(erc404Factory));
+
+        // Verify factory not registered
+        assertEq(IMasterRegistry(proxy).getTotalFactories(), 0);
+    }
+
+    function test_FullWorkflow_DynamicPricing() public {
+        // Setup: Register factory and instance
+        vm.deal(applicant, APPLICATION_FEE);
+        vm.prank(applicant);
+        IMasterRegistry(proxy).applyForFactory{value: APPLICATION_FEE}(
+            address(erc404Factory),
+            "ERC404",
+            "test-factory",
+            "Test Factory",
+            "https://example.com/factory.json",
+            new bytes32[](0)
+        );
+
+        vm.prank(voter1);
+        IMasterRegistry(proxy).voteOnApplication(address(erc404Factory), true);
+        IMasterRegistry(proxy).finalizeApplication(address(erc404Factory));
+
+        address instance = address(0xAAA);
+        vm.prank(address(erc404Factory));
+        IMasterRegistry(proxy).registerInstance(
+            instance,
+            address(erc404Factory),
+            creator,
+            "test-token",
+            "https://example.com/token.json",
+            address(0) // vault
+        );
+
+        // Purchase multiple promotions and verify price changes
+        uint256 tierIndex = 0;
+        uint256[] memory prices = new uint256[](3);
+        
+        for (uint256 i = 0; i < 3; i++) {
+            prices[i] = IMasterRegistry(proxy).getCurrentPrice(tierIndex);
+            
+            address instanceAddr = address(uint160(0xAAA + i));
+            if (i > 0) {
+                // Register additional instances for different promotions
+                vm.prank(address(erc404Factory));
+                IMasterRegistry(proxy).registerInstance(
+                    instanceAddr,
+                    address(erc404Factory),
+                    creator,
+                    string(abi.encodePacked("token-", vm.toString(i))),
+                    string(abi.encodePacked("https://example.com/token", vm.toString(i), ".json")),
+                    address(0) // vault
+                );
+            }
+            
+            vm.deal(purchaser, prices[i] * 2);
+            vm.prank(purchaser);
+            IMasterRegistry(proxy).purchaseFeaturedPromotion{value: prices[i]}(
+                instanceAddr,
+                tierIndex
+            );
+        }
+
+        // Verify prices increased (or at least changed)
+        // Note: Prices may increase due to utilization or demand factors
+        assertGe(prices[2], prices[0]);
+    }
+
+    function test_FullWorkflow_MetadataValidation() public {
+        // Test with various valid metadata URIs
+        string[4] memory validURIs = [
+            "https://example.com/metadata.json",
+            "http://example.com/metadata.json",
+            "ipfs://QmHash/metadata.json",
+            "ar://arweave-hash/metadata.json"
+        ];
+
+        for (uint256 i = 0; i < validURIs.length; i++) {
+            MockFactory newFactory = new MockFactory(address(proxy));
+            
+            vm.deal(applicant, APPLICATION_FEE);
+            vm.prank(applicant);
+            IMasterRegistry(proxy).applyForFactory{value: APPLICATION_FEE}(
+                address(newFactory),
+                "ERC404",
+                string(abi.encodePacked("factory-", vm.toString(i))),
+                "Test Factory",
+                validURIs[i],
+                new bytes32[](0)
+            );
+
+            vm.prank(voter1);
+            IMasterRegistry(proxy).voteOnApplication(address(newFactory), true);
+            IMasterRegistry(proxy).finalizeApplication(address(newFactory));
+        }
+
+        assertEq(IMasterRegistry(proxy).getTotalFactories(), 4);
+    }
+}
+

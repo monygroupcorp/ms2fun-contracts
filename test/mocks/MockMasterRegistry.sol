@@ -20,7 +20,7 @@ contract MockMasterRegistry is IMasterRegistry {
         bytes32[] memory
     ) external payable override {}
 
-    function voteOnApplication(address, bool) external override {}
+    function voteOnApplication(address, bool) external payable override {}
 
     function finalizeApplication(address) external override {}
 
@@ -103,26 +103,62 @@ contract MockMasterRegistry is IMasterRegistry {
         return 0;
     }
 
-    function getCurrentPrice(uint256) external view override returns (uint256) {
-        return 0;
+    // Competitive rental queue functions
+    function getPositionRentalPrice(uint256) external view override returns (uint256) {
+        return 0.001 ether;
     }
 
-    function purchaseFeaturedPromotion(address, uint256) external payable override {}
+    function calculateRentalCost(uint256, uint256) external view override returns (uint256) {
+        return 0.001 ether;
+    }
 
-    function getTierPricingInfo(uint256)
+    function rentFeaturedPosition(address, uint256, uint256) external payable override {}
+
+    function renewPosition(address, uint256) external payable override {}
+
+    function bumpPosition(address, uint256, uint256) external payable override {}
+
+    function getFeaturedInstances(uint256, uint256)
         external
         view
         override
-        returns (TierPricingInfo memory)
+        returns (address[] memory instances, uint256 total)
     {
-        return TierPricingInfo({
-            currentPrice: 0,
-            utilizationRate: 0,
-            demandFactor: 0,
-            lastPurchaseTime: 0,
-            totalPurchases: 0
-        });
+        return (new address[](0), 0);
     }
+
+    function getRentalInfo(address)
+        external
+        view
+        override
+        returns (
+            RentalSlot memory rental,
+            uint256 position,
+            uint256 renewalDeposit,
+            bool isExpired
+        )
+    {
+        return (
+            RentalSlot({
+                instance: address(0),
+                renter: address(0),
+                rentPaid: 0,
+                rentedAt: 0,
+                expiresAt: 0,
+                originalPosition: 0,
+                active: false
+            }),
+            0,
+            0,
+            false
+        );
+    }
+
+    function depositForAutoRenewal(address) external payable override {}
+
+    function withdrawRenewalDeposit(address) external override {}
+
+    function cleanupExpiredRentals(uint256) external override {}
 
     function registerVault(
         address,

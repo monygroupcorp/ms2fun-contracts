@@ -46,21 +46,20 @@ interface IMasterRegistry {
         uint256 registeredAt;
     }
 
-    struct FeaturedPromotion {
+    struct RentalSlot {
         address instance;
-        address purchaser;
-        uint256 tierIndex;
-        uint256 pricePaid;
-        uint256 purchasedAt;
+        address renter;
+        uint256 rentPaid;
+        uint256 rentedAt;
         uint256 expiresAt;
+        uint256 originalPosition;
+        bool active;
     }
 
-    struct TierPricingInfo {
-        uint256 currentPrice;
-        uint256 utilizationRate;
-        uint256 demandFactor;
-        uint256 lastPurchaseTime;
-        uint256 totalPurchases;
+    struct PositionDemand {
+        uint256 lastRentalPrice;
+        uint256 lastRentalTime;
+        uint256 totalRentalsAllTime;
     }
 
     struct VaultInfo {
@@ -109,12 +108,42 @@ interface IMasterRegistry {
         string name
     );
 
-    event FeaturedPromotionPurchased(
+    event PositionRented(
         address indexed instance,
-        address indexed purchaser,
-        uint256 indexed tierIndex,
-        uint256 pricePaid
+        address indexed renter,
+        uint256 position,
+        uint256 cost,
+        uint256 duration,
+        uint256 expiresAt
     );
+
+    event PositionShifted(address indexed instance, uint256 oldPosition, uint256 newPosition);
+
+    event PositionBumped(
+        address indexed instance,
+        uint256 fromPosition,
+        uint256 toPosition,
+        uint256 cost,
+        uint256 additionalDuration
+    );
+
+    event PositionRenewed(
+        address indexed instance,
+        uint256 position,
+        uint256 additionalDuration,
+        uint256 cost,
+        uint256 newExpiresAt
+    );
+
+    event PositionAutoRenewed(address indexed instance, uint256 position, uint256 cost, uint256 newExpiresAt);
+
+    event RentalExpired(address indexed instance, uint256 position, uint256 expiredAt);
+
+    event AutoRenewalDeposited(address indexed instance, address indexed depositor, uint256 amount);
+
+    event RenewalDepositWithdrawn(address indexed instance, address indexed recipient, uint256 amount);
+
+    event CleanupRewardPaid(address indexed caller, uint256 cleanedCount, uint256 renewedCount, uint256 reward);
 
     event VaultRegistered(
         address indexed vault,
@@ -138,7 +167,7 @@ interface IMasterRegistry {
     function voteOnApplication(
         address factoryAddress,
         bool approve
-    ) external;
+    ) external payable;
 
     function finalizeApplication(
         address factoryAddress
@@ -167,16 +196,45 @@ interface IMasterRegistry {
 
     function getTotalFactories() external view returns (uint256);
 
-    function getCurrentPrice(uint256 tierIndex) external view returns (uint256);
+    // Competitive Rental Queue Functions
+    function getPositionRentalPrice(uint256 position) external view returns (uint256);
 
-    function purchaseFeaturedPromotion(
+    function calculateRentalCost(uint256 position, uint256 duration) external view returns (uint256);
+
+    function rentFeaturedPosition(
         address instance,
-        uint256 tierIndex
+        uint256 desiredPosition,
+        uint256 duration
     ) external payable;
 
-    function getTierPricingInfo(
-        uint256 tierIndex
-    ) external view returns (TierPricingInfo memory);
+    function renewPosition(
+        address instance,
+        uint256 additionalDuration
+    ) external payable;
+
+    function bumpPosition(
+        address instance,
+        uint256 targetPosition,
+        uint256 additionalDuration
+    ) external payable;
+
+    function getFeaturedInstances(
+        uint256 startIndex,
+        uint256 endIndex
+    ) external view returns (address[] memory instances, uint256 total);
+
+    function getRentalInfo(address instance) external view returns (
+        RentalSlot memory rental,
+        uint256 position,
+        uint256 renewalDeposit,
+        bool isExpired
+    );
+
+    function depositForAutoRenewal(address instance) external payable;
+
+    function withdrawRenewalDeposit(address instance) external;
+
+    function cleanupExpiredRentals(uint256 maxCleanup) external;
 
     // Vault Registry Functions
     function registerVault(

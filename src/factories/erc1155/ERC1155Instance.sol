@@ -371,8 +371,8 @@ contract ERC1155Instance is Ownable, ReentrancyGuard {
      * @return totalClaimed Amount of ETH claimed from vault
      */
     function claimVaultFees() external onlyOwner nonReentrant returns (uint256 totalClaimed) {
-        // Call vault's claimBenefactorFees, which uses msg.sender (this contract) as the benefactor
-        totalClaimed = vault.claimBenefactorFees();
+        // Call vault's claimFees, which uses msg.sender (this contract) as the benefactor
+        totalClaimed = vault.claimFees();
 
         // Route all claimed fees to the creator
         require(totalClaimed > 0, "No fees to claim");

@@ -611,201 +611,201 @@ contract MasterRegistryComprehensiveTest is Test {
 
     // ============ Featured Market Tests ============
 
-    function skip_test_PurchaseFeaturedPromotion_Success() public {
-        // Setup: Register factory and instance
-        vm.deal(applicant1, APPLICATION_FEE);
-        vm.prank(applicant1);
-        IMasterRegistry(address(proxy)).applyForFactory{value: APPLICATION_FEE}(
-            address(factory1),
-            "ERC404",
-            "test-factory",
-            "Test Factory",
-            "https://example.com/metadata.json",
-            new bytes32[](0)
-        );
+//     function DISABLED_skip_test_PurchaseFeaturedPromotion_Success() public {
+//         // Setup: Register factory and instance
+//         vm.deal(applicant1, APPLICATION_FEE);
+//         vm.prank(applicant1);
+//         IMasterRegistry(address(proxy)).applyForFactory{value: APPLICATION_FEE}(
+//             address(factory1),
+//             "ERC404",
+//             "test-factory",
+//             "Test Factory",
+//             "https://example.com/metadata.json",
+//             new bytes32[](0)
+//         );
+// 
+//         vm.prank(voter1);
+//         IMasterRegistry(address(proxy)).voteOnApplication(address(factory1), true);
+//         
+//         IMasterRegistry(address(proxy)).finalizeApplication(address(factory1));
+// 
+//         address instance = address(0xAAA);
+//         vm.prank(address(factory1));
+//         IMasterRegistry(address(proxy)).registerInstance(
+//             instance,
+//             address(factory1),
+//             creator1,
+//             "test-instance",
+//             "https://example.com/instance.json",
+//             address(0) // vault
+//         );
+// 
+//         // Purchase featured promotion
+//         uint256 tierIndex = 0;
+//         uint256 currentPrice = IMasterRegistry(address(proxy)).getCurrentPrice(tierIndex);
+//         
+//         vm.deal(creator1, currentPrice);
+//         vm.prank(creator1);
+//         IMasterRegistry(address(proxy)).purchaseFeaturedPromotion{value: currentPrice}(
+//             instance,
+//             tierIndex
+//         );
+// 
+//         // Verify pricing info updated
+//         IMasterRegistry.TierPricingInfo memory pricing = 
+//             IMasterRegistry(address(proxy)).getTierPricingInfo(tierIndex);
+//         
+//         assertEq(pricing.totalPurchases, 1);
+//         assertGt(pricing.utilizationRate, 0);
+//     }
 
-        vm.prank(voter1);
-        IMasterRegistry(address(proxy)).voteOnApplication(address(factory1), true);
-        
-        IMasterRegistry(address(proxy)).finalizeApplication(address(factory1));
+//     function DISABLED_skip_test_PurchaseFeaturedPromotion_InsufficientPayment() public {
+//         // Setup: Register factory and instance
+//         vm.deal(applicant1, APPLICATION_FEE);
+//         vm.prank(applicant1);
+//         IMasterRegistry(address(proxy)).applyForFactory{value: APPLICATION_FEE}(
+//             address(factory1),
+//             "ERC404",
+//             "test-factory",
+//             "Test Factory",
+//             "https://example.com/metadata.json",
+//             new bytes32[](0)
+//         );
+// 
+//         vm.prank(voter1);
+//         IMasterRegistry(address(proxy)).voteOnApplication(address(factory1), true);
+//         
+//         IMasterRegistry(address(proxy)).finalizeApplication(address(factory1));
+// 
+//         address instance = address(0xAAA);
+//         vm.prank(address(factory1));
+//         IMasterRegistry(address(proxy)).registerInstance(
+//             instance,
+//             address(factory1),
+//             creator1,
+//             "test-instance",
+//             "https://example.com/instance.json",
+//             address(0) // vault
+//         );
+// 
+//         uint256 tierIndex = 0;
+//         uint256 currentPrice = IMasterRegistry(address(proxy)).getCurrentPrice(tierIndex);
+//         
+//         vm.deal(creator1, currentPrice - 1);
+//         vm.prank(creator1);
+//         vm.expectRevert("Insufficient payment");
+//         IMasterRegistry(address(proxy)).purchaseFeaturedPromotion{value: currentPrice - 1}(
+//             instance,
+//             tierIndex
+//         );
+//     }
 
-        address instance = address(0xAAA);
-        vm.prank(address(factory1));
-        IMasterRegistry(address(proxy)).registerInstance(
-            instance,
-            address(factory1),
-            creator1,
-            "test-instance",
-            "https://example.com/instance.json",
-            address(0) // vault
-        );
+//     function DISABLED_skip_test_PurchaseFeaturedPromotion_InvalidTier() public {
+//         address instance = address(0xAAA);
+//         uint256 invalidTier = 20; // Max tier is 19 (0-19)
+//         
+//         vm.deal(creator1, 1 ether);
+//         vm.prank(creator1);
+//         vm.expectRevert("Invalid tier");
+//         IMasterRegistry(address(proxy)).purchaseFeaturedPromotion{value: 1 ether}(
+//             instance,
+//             invalidTier
+//         );
+//     }
 
-        // Purchase featured promotion
-        uint256 tierIndex = 0;
-        uint256 currentPrice = IMasterRegistry(address(proxy)).getCurrentPrice(tierIndex);
-        
-        vm.deal(creator1, currentPrice);
-        vm.prank(creator1);
-        IMasterRegistry(address(proxy)).purchaseFeaturedPromotion{value: currentPrice}(
-            instance,
-            tierIndex
-        );
+//     function DISABLED_skip_test_GetCurrentPrice_DynamicPricing() public {
+//         uint256 tierIndex = 0;
+//         
+//         // Get initial price
+//         uint256 initialPrice = IMasterRegistry(address(proxy)).getCurrentPrice(tierIndex);
+//         assertGt(initialPrice, 0);
+// 
+//         // Setup: Register factory and instance
+//         vm.deal(applicant1, APPLICATION_FEE);
+//         vm.prank(applicant1);
+//         IMasterRegistry(address(proxy)).applyForFactory{value: APPLICATION_FEE}(
+//             address(factory1),
+//             "ERC404",
+//             "test-factory",
+//             "Test Factory",
+//             "https://example.com/metadata.json",
+//             new bytes32[](0)
+//         );
+// 
+//         vm.prank(voter1);
+//         IMasterRegistry(address(proxy)).voteOnApplication(address(factory1), true);
+//         
+//         IMasterRegistry(address(proxy)).finalizeApplication(address(factory1));
+// 
+//         address instance = address(0xAAA);
+//         vm.prank(address(factory1));
+//         IMasterRegistry(address(proxy)).registerInstance(
+//             instance,
+//             address(factory1),
+//             creator1,
+//             "test-instance",
+//             "https://example.com/instance.json",
+//             address(0) // vault
+//         );
+// 
+//         // Purchase promotion
+//         uint256 currentPrice = IMasterRegistry(address(proxy)).getCurrentPrice(tierIndex);
+//         vm.deal(creator1, currentPrice * 2);
+//         vm.prank(creator1);
+//         IMasterRegistry(address(proxy)).purchaseFeaturedPromotion{value: currentPrice}(
+//             instance,
+//             tierIndex
+//         );
+// 
+//         // Price should increase due to utilization
+//         uint256 newPrice = IMasterRegistry(address(proxy)).getCurrentPrice(tierIndex);
+//         assertGe(newPrice, initialPrice);
+//     }
 
-        // Verify pricing info updated
-        IMasterRegistry.TierPricingInfo memory pricing = 
-            IMasterRegistry(address(proxy)).getTierPricingInfo(tierIndex);
-        
-        assertEq(pricing.totalPurchases, 1);
-        assertGt(pricing.utilizationRate, 0);
-    }
+//     function DISABLED_skip_test_GetTierPricingInfo() public {
+//         uint256 tierIndex = 5;
+//         
+//         IMasterRegistry.TierPricingInfo memory pricing = 
+//             IMasterRegistry(address(proxy)).getTierPricingInfo(tierIndex);
+//         
+//         assertEq(pricing.totalPurchases, 0);
+//         assertEq(pricing.utilizationRate, 0);
+//         assertGt(pricing.currentPrice, 0);
+//     }
 
-    function skip_test_PurchaseFeaturedPromotion_InsufficientPayment() public {
-        // Setup: Register factory and instance
-        vm.deal(applicant1, APPLICATION_FEE);
-        vm.prank(applicant1);
-        IMasterRegistry(address(proxy)).applyForFactory{value: APPLICATION_FEE}(
-            address(factory1),
-            "ERC404",
-            "test-factory",
-            "Test Factory",
-            "https://example.com/metadata.json",
-            new bytes32[](0)
-        );
-
-        vm.prank(voter1);
-        IMasterRegistry(address(proxy)).voteOnApplication(address(factory1), true);
-        
-        IMasterRegistry(address(proxy)).finalizeApplication(address(factory1));
-
-        address instance = address(0xAAA);
-        vm.prank(address(factory1));
-        IMasterRegistry(address(proxy)).registerInstance(
-            instance,
-            address(factory1),
-            creator1,
-            "test-instance",
-            "https://example.com/instance.json",
-            address(0) // vault
-        );
-
-        uint256 tierIndex = 0;
-        uint256 currentPrice = IMasterRegistry(address(proxy)).getCurrentPrice(tierIndex);
-        
-        vm.deal(creator1, currentPrice - 1);
-        vm.prank(creator1);
-        vm.expectRevert("Insufficient payment");
-        IMasterRegistry(address(proxy)).purchaseFeaturedPromotion{value: currentPrice - 1}(
-            instance,
-            tierIndex
-        );
-    }
-
-    function skip_test_PurchaseFeaturedPromotion_InvalidTier() public {
-        address instance = address(0xAAA);
-        uint256 invalidTier = 20; // Max tier is 19 (0-19)
-        
-        vm.deal(creator1, 1 ether);
-        vm.prank(creator1);
-        vm.expectRevert("Invalid tier");
-        IMasterRegistry(address(proxy)).purchaseFeaturedPromotion{value: 1 ether}(
-            instance,
-            invalidTier
-        );
-    }
-
-    function skip_test_GetCurrentPrice_DynamicPricing() public {
-        uint256 tierIndex = 0;
-        
-        // Get initial price
-        uint256 initialPrice = IMasterRegistry(address(proxy)).getCurrentPrice(tierIndex);
-        assertGt(initialPrice, 0);
-
-        // Setup: Register factory and instance
-        vm.deal(applicant1, APPLICATION_FEE);
-        vm.prank(applicant1);
-        IMasterRegistry(address(proxy)).applyForFactory{value: APPLICATION_FEE}(
-            address(factory1),
-            "ERC404",
-            "test-factory",
-            "Test Factory",
-            "https://example.com/metadata.json",
-            new bytes32[](0)
-        );
-
-        vm.prank(voter1);
-        IMasterRegistry(address(proxy)).voteOnApplication(address(factory1), true);
-        
-        IMasterRegistry(address(proxy)).finalizeApplication(address(factory1));
-
-        address instance = address(0xAAA);
-        vm.prank(address(factory1));
-        IMasterRegistry(address(proxy)).registerInstance(
-            instance,
-            address(factory1),
-            creator1,
-            "test-instance",
-            "https://example.com/instance.json",
-            address(0) // vault
-        );
-
-        // Purchase promotion
-        uint256 currentPrice = IMasterRegistry(address(proxy)).getCurrentPrice(tierIndex);
-        vm.deal(creator1, currentPrice * 2);
-        vm.prank(creator1);
-        IMasterRegistry(address(proxy)).purchaseFeaturedPromotion{value: currentPrice}(
-            instance,
-            tierIndex
-        );
-
-        // Price should increase due to utilization
-        uint256 newPrice = IMasterRegistry(address(proxy)).getCurrentPrice(tierIndex);
-        assertGe(newPrice, initialPrice);
-    }
-
-    function skip_test_GetTierPricingInfo() public {
-        uint256 tierIndex = 5;
-        
-        IMasterRegistry.TierPricingInfo memory pricing = 
-            IMasterRegistry(address(proxy)).getTierPricingInfo(tierIndex);
-        
-        assertEq(pricing.totalPurchases, 0);
-        assertEq(pricing.utilizationRate, 0);
-        assertGt(pricing.currentPrice, 0);
-    }
-
-    function skip_test_GetTierPricingInfo_InvalidTier() public {
-        uint256 invalidTier = 20;
-        
-        vm.expectRevert("Invalid tier");
-        IMasterRegistry(address(proxy)).getTierPricingInfo(invalidTier);
-    }
-
-    // ============ Metadata Validation Tests ============
-
-    function skip_test_ApplyForFactory_ValidURISchemes() public {
-        vm.deal(applicant1, APPLICATION_FEE * 4);
-        
-        string[4] memory validURIs = [
-            "https://example.com/metadata.json",
-            "http://example.com/metadata.json",
-            "ipfs://QmHash/metadata.json",
-            "ar://arweave-hash/metadata.json"
-        ];
-
-        for (uint256 i = 0; i < validURIs.length; i++) {
-            MockFactory newFactory = new MockFactory(address(proxy));
-            
-            vm.prank(applicant1);
-            IMasterRegistry(address(proxy)).applyForFactory{value: APPLICATION_FEE}(
-                address(newFactory),
-                "ERC404",
-                string(abi.encodePacked("test-factory-", vm.toString(i))),
-                "Test Factory",
-                validURIs[i],
-                new bytes32[](0)
-            );
-        }
-    }
+// //     function DISABLED_skip_test_GetTierPricingInfo_InvalidTier() public {
+// //         uint256 invalidTier = 20;
+// //         
+// //         vm.expectRevert("Invalid tier");
+// //         IMasterRegistry(address(proxy)).getTierPricingInfo(invalidTier);
+// //     }
+// 
+//     // ============ Metadata Validation Tests ============
+// 
+//     function skip_test_ApplyForFactory_ValidURISchemes() public {
+//         vm.deal(applicant1, APPLICATION_FEE * 4);
+//         
+//         string[4] memory validURIs = [
+//             "https://example.com/metadata.json",
+//             "http://example.com/metadata.json",
+//             "ipfs://QmHash/metadata.json",
+//             "ar://arweave-hash/metadata.json"
+//         ];
+// 
+//         for (uint256 i = 0; i < validURIs.length; i++) {
+//             MockFactory newFactory = new MockFactory(address(proxy));
+//             
+//             vm.prank(applicant1);
+//             IMasterRegistry(address(proxy)).applyForFactory{value: APPLICATION_FEE}(
+//                 address(newFactory),
+//                 "ERC404",
+//                 string(abi.encodePacked("test-factory-", vm.toString(i))),
+//                 "Test Factory",
+//                 validURIs[i],
+//                 new bytes32[](0)
+//             );
+//         }
+//     }
 
     function skip_test_RegisterInstance_ValidName() public {
         // Setup: Register factory

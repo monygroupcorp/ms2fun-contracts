@@ -14,20 +14,17 @@ import {FactoryApprovalGovernance} from "../governance/FactoryApprovalGovernance
  * @notice Simplified implementation of the Master Registry contract
  * @dev UUPS upgradeable contract for managing factory registration and instance tracking
  *
- * Phase 1 Scope (MVP):
+ * Core Features:
  * - Factory registration (pre-approved factories only)
  * - Instance tracking and registration
  * - Creator instance lookups
  * - Name collision prevention
+ * - Queue-based featured promotion system
+ * - Time-based expiration with auto-renewal
  *
- * Deferred to Phase 2 (via separate modules):
- * - Featured tier system → FeaturedTierModule
+ * Additional Modules:
  * - Vault/hook registry → VaultRegistry
  * - Factory voting → FactoryApprovalGovernance
- *
- * Extension Architecture:
- * This contract maintains integration points (featuredTierModule, governanceModule)
- * to allow seamless Phase 2 upgrades without modifying core registry logic.
  */
 contract MasterRegistryV1 is UUPSUpgradeable, Ownable, ReentrancyGuard, IMasterRegistry {
     // Constants
@@ -35,6 +32,7 @@ contract MasterRegistryV1 is UUPSUpgradeable, Ownable, ReentrancyGuard, IMasterR
 
     // State variables
     uint256 public nextFactoryId;
+    bool private _initialized;
 
     // Mappings
     mapping(uint256 => address) public factoryIdToAddress;
@@ -48,9 +46,6 @@ contract MasterRegistryV1 is UUPSUpgradeable, Ownable, ReentrancyGuard, IMasterR
     address[] public allInstances; // Array of all registered instances
     mapping(address => uint256) public instanceIndex; // instance address => index in allInstances
 
-    // Featured Tier Tracking (per instance)
-    mapping(address => uint256) public instanceFeaturedTier; // instance => tier (0 = not featured, 1-3 = tier level)
-
     // Phase 2 Registry Contracts
     address public vaultRegistry;
     address public governanceModule;
@@ -62,21 +57,30 @@ contract MasterRegistryV1 is UUPSUpgradeable, Ownable, ReentrancyGuard, IMasterR
     address[] public vaultList;
     uint256 public vaultRegistrationFee = 0.05 ether;
 
-    // Featured Tier System
-    mapping(uint256 => FeaturedTierInfo) public tierPricing;
-    uint256 public basePrice;
-    uint256 public tierCount;
+    // ============ Competitive Rental Queue System ============
+    // Note: RentalSlot and PositionDemand structs defined in IMasterRegistry
 
-    struct FeaturedTierInfo {
-        uint256 currentPrice;
-        uint256 utilizationRate;
-        uint256 demandFactor;
-        uint256 lastPurchaseTime;
-        uint256 totalPurchases;
-    }
+    // Featured queue (index 0 = position 1 = front)
+    RentalSlot[] public featuredQueue;
 
-    // Extension points for Phase 2 modules
-    address public featuredTierModule; // Will call onInstanceRegistered(instance) when enabled
+    // Quick position lookups (1-indexed, 0 = not in queue)
+    mapping(address => uint256) public instancePosition;
+
+    // Per-position competitive pricing
+    mapping(uint256 => PositionDemand) public positionDemand;
+
+    // Auto-renewal deposits
+    mapping(address => uint256) public renewalDeposits;
+
+    // Configuration parameters
+    uint256 public baseRentalPrice = 0.001 ether;
+    uint256 public minRentalDuration = 7 days;
+    uint256 public maxRentalDuration = 365 days;
+    uint256 public demandMultiplier = 120;              // 120% = 20% increase per action
+    uint256 public renewalDiscount = 90;                // 90% = 10% discount for renewals
+    uint256 public cleanupReward = 0.0001 ether;        // Reward per cleanup action
+    uint256 public maxQueueSize = 100;
+    uint256 public visibleThreshold = 20;               // Frontend shows top N
 
     // Structs
     struct InstanceInfo {
@@ -91,10 +95,10 @@ contract MasterRegistryV1 is UUPSUpgradeable, Ownable, ReentrancyGuard, IMasterR
 
     // Events (FactoryRegistered and InstanceRegistered defined in IMasterRegistry)
     event CreatorInstanceAdded(address indexed creator, address indexed instance);
-    event FeaturedTierModuleSet(address indexed newModule);
     event GovernanceModuleSet(address indexed newModule);
     event VaultRegistrySet(address indexed newRegistry);
-    event TierPricingUpdated(uint256 indexed tierIndex, uint256 newPrice);
+
+    // Note: All competitive queue events are defined in IMasterRegistry interface
 
     // Constructor
     constructor() {
@@ -122,7 +126,10 @@ contract MasterRegistryV1 is UUPSUpgradeable, Ownable, ReentrancyGuard, IMasterR
      * @notice Internal initialize logic
      */
     function _initializeWithOwner(address _execToken, address _owner) internal {
+        require(!_initialized, "Already initialized");
         require(_owner != address(0), "Invalid owner");
+
+        _initialized = true;
         _setOwner(_owner);
         nextFactoryId = 1;
 
@@ -144,18 +151,15 @@ contract MasterRegistryV1 is UUPSUpgradeable, Ownable, ReentrancyGuard, IMasterR
             governanceModule = address(gov);
         }
 
-        // Initialize featured tier pricing
-        basePrice = 0.1 ether;
-        tierCount = 3;
-        for (uint256 i = 0; i < tierCount; i++) {
-            tierPricing[i] = FeaturedTierInfo({
-                currentPrice: basePrice * (i + 1),
-                utilizationRate: 0,
-                demandFactor: 100,
-                lastPurchaseTime: 0,
-                totalPurchases: 0
-            });
-        }
+        // Initialize competitive queue system
+        baseRentalPrice = 0.001 ether;
+        minRentalDuration = 7 days;
+        maxRentalDuration = 365 days;
+        demandMultiplier = 120;
+        renewalDiscount = 90;
+        cleanupReward = 0.0001 ether;
+        maxQueueSize = 100;
+        visibleThreshold = 20;
     }
 
     /**
@@ -283,14 +287,6 @@ contract MasterRegistryV1 is UUPSUpgradeable, Ownable, ReentrancyGuard, IMasterR
         instanceIndex[instance] = allInstances.length;
         allInstances.push(instance);
 
-        // Initialize featured tier (0 = not featured by default)
-        instanceFeaturedTier[instance] = 0;
-
-        // Notify featured tier module if enabled (Phase 2)
-        if (featuredTierModule != address(0)) {
-            try IFeaturedTierModule(featuredTierModule).onInstanceRegistered(instance) {} catch {}
-        }
-
         emit InstanceRegistered(instance, factory, creator, name);
         emit CreatorInstanceAdded(creator, instance);
     }
@@ -348,292 +344,525 @@ contract MasterRegistryV1 is UUPSUpgradeable, Ownable, ReentrancyGuard, IMasterR
         return allInstances.length;
     }
 
-    /**
-     * @notice Set featured tier for an instance (owner only)
-     * @param instance Instance address
-     * @param tier Tier level (0 = not featured, 1-3 = tier level)
-     */
-    function setInstanceFeaturedTier(address instance, uint256 tier) external onlyOwner {
-        require(instanceInfo[instance].instance != address(0), "Instance not found");
-        require(tier <= 3, "Invalid tier (0-3 allowed)");
-        instanceFeaturedTier[instance] = tier;
-    }
+    // ============ Competitive Rental Queue System ============
 
     /**
-     * @notice Get featured tier for an instance
-     * @param instance Instance address
-     * @return tier Tier level (0 = not featured, 1-3 = tier level)
+     * @notice Get competitive rental price for a position
+     * @param position 1-indexed position (1 = front)
+     * @return price Current rental price for this position
      */
-    function getInstanceFeaturedTier(address instance) external view returns (uint256) {
-        return instanceFeaturedTier[instance];
-    }
+    function getPositionRentalPrice(uint256 position) public view returns (uint256) {
+        require(position > 0, "Invalid position");
 
-    /**
-     * @notice CRITICAL: Get instances by tier and date with pagination
-     * @dev Returns instances STARTING WITH PAID TIER (newest first), then chronologically reverse
-     * @param startIndex Index to start from in the sorted results (0-based)
-     * @param endIndex Index to end at (exclusive). Returns instances from startIndex to endIndex-1
-     * @return instances Array of instance addresses sorted by: tier DESC, then registeredAt DESC
-     * @return total Total number of instances that match the criteria
-     *
-     * Algorithm:
-     * 1. Separate instances into two groups: featured (tier >= 1) and non-featured (tier == 0)
-     * 2. Sort featured instances by tier DESC, then by registeredAt DESC (newest first)
-     * 3. Sort non-featured instances by registeredAt DESC (newest first)
-     * 4. Return paginated results with featured instances grafted up front
-     *
-     * Example: If you have 100 total instances:
-     * - Call getInstancesByTierAndDate(0, 10) to get first 10 (highest tier, newest)
-     * - Call getInstancesByTierAndDate(10, 20) to get next 10
-     * - etc.
-     */
-    function getInstancesByTierAndDate(uint256 startIndex, uint256 endIndex)
-        external
-        view
-        returns (address[] memory instances, uint256 total)
-    {
-        require(endIndex > startIndex, "Invalid range");
+        // Calculate utilization-adjusted base price
+        // Formula: basePrice × (1 + utilization)
+        // 0% full = 1x, 50% full = 1.5x, 100% full = 2x
+        uint256 queueLength = featuredQueue.length;
+        uint256 utilizationBps = (queueLength * 10000) / maxQueueSize;  // Basis points
+        uint256 adjustedBase = baseRentalPrice + (baseRentalPrice * utilizationBps) / 10000;
 
-        uint256 instanceCount = allInstances.length;
-
-        if (instanceCount == 0) {
-            return (new address[](0), 0);
-        }
-
-        // Create array to track tier and registration time for sorting
-        // Structure: we'll sort in two passes - featured first, then non-featured
-
-        address[] memory featured = new address[](instanceCount);
-        address[] memory nonFeatured = new address[](instanceCount);
-        uint256 featuredCount = 0;
-        uint256 nonFeaturedCount = 0;
-
-        // Separate instances into featured and non-featured
-        for (uint256 i = 0; i < instanceCount; i++) {
-            address inst = allInstances[i];
-            if (instanceFeaturedTier[inst] > 0) {
-                featured[featuredCount] = inst;
-                featuredCount++;
-            } else {
-                nonFeatured[nonFeaturedCount] = inst;
-                nonFeaturedCount++;
+        // Check if position has active rental (competitive bidding)
+        if (position <= featuredQueue.length) {
+            RentalSlot memory slot = featuredQueue[position - 1];
+            if (slot.active && block.timestamp < slot.expiresAt) {
+                uint256 competitivePrice = (slot.rentPaid * demandMultiplier) / 100;
+                // Use higher of competitive price or adjusted base
+                return competitivePrice > adjustedBase ? competitivePrice : adjustedBase;
             }
         }
 
-        // Sort featured by tier DESC, then by registeredAt DESC (newest first)
-        _sortFeaturedByTierAndDate(featured, featuredCount);
+        // Check demand tracking (past competitive activity)
+        PositionDemand memory demand = positionDemand[position];
+        if (demand.lastRentalTime > 0) {
+            uint256 demandPrice = (demand.lastRentalPrice * demandMultiplier) / 100;
+            // Use higher of demand price or adjusted base
+            return demandPrice > adjustedBase ? demandPrice : adjustedBase;
+        }
 
-        // Sort non-featured by registeredAt DESC (newest first)
-        _sortByDate(nonFeatured, nonFeaturedCount);
+        // Return utilization-adjusted base price
+        return adjustedBase;
+    }
 
-        // Combine: featured first, then non-featured
-        uint256 totalCount = featuredCount + nonFeaturedCount;
-        require(endIndex <= totalCount, "End index out of bounds");
+    /**
+     * @notice Get current queue utilization metrics
+     * @return currentUtilization Utilization in basis points (0-10000)
+     * @return adjustedBasePrice Current utilization-adjusted base price
+     * @return queueLength Current queue length
+     * @return maxSize Maximum queue size
+     */
+    function getQueueUtilization() external view returns (
+        uint256 currentUtilization,
+        uint256 adjustedBasePrice,
+        uint256 queueLength,
+        uint256 maxSize
+    ) {
+        queueLength = featuredQueue.length;
+        maxSize = maxQueueSize;
+        currentUtilization = (queueLength * 10000) / maxQueueSize;
+        adjustedBasePrice = baseRentalPrice + (baseRentalPrice * currentUtilization) / 10000;
+
+        return (currentUtilization, adjustedBasePrice, queueLength, maxSize);
+    }
+
+    /**
+     * @notice Calculate total rental cost with duration
+     * @param position 1-indexed position
+     * @param duration Rental duration in seconds
+     * @return totalCost Total cost for this rental
+     */
+    function calculateRentalCost(
+        uint256 position,
+        uint256 duration
+    ) public view returns (uint256 totalCost) {
+        require(duration >= minRentalDuration, "Duration too short");
+        require(duration <= maxRentalDuration, "Duration too long");
+
+        uint256 basePrice = getPositionRentalPrice(position);
+        uint256 durationMultiplier = duration / minRentalDuration;
+        totalCost = basePrice * durationMultiplier;
+
+        // Optional: bulk discount for longer durations
+        if (duration >= 30 days) {
+            totalCost = (totalCost * 9000) / 10000;  // 10% discount
+        } else if (duration >= 14 days) {
+            totalCost = (totalCost * 9500) / 10000;  // 5% discount
+        }
+
+        return totalCost;
+    }
+
+    /**
+     * @notice Rent a specific position in the featured queue
+     * @param instance Instance to promote
+     * @param desiredPosition 1-indexed position (1 = front, N+1 = append to back)
+     * @param duration Rental duration in seconds
+     */
+    function rentFeaturedPosition(
+        address instance,
+        uint256 desiredPosition,
+        uint256 duration
+    ) external payable nonReentrant {
+        require(instanceInfo[instance].instance != address(0), "Instance not registered");
+        require(instancePosition[instance] == 0, "Already in queue - use bumpPosition instead");
+        require(desiredPosition > 0, "Invalid position");
+
+        uint256 totalCost = calculateRentalCost(desiredPosition, duration);
+        require(msg.value >= totalCost, "Insufficient payment");
+
+        uint256 expiresAt = block.timestamp + duration;
+
+        // Insert and shift everyone down
+        _insertAtPositionWithShift(instance, desiredPosition, totalCost, expiresAt);
+
+        // Refund excess
+        if (msg.value > totalCost) {
+            (bool success, ) = payable(msg.sender).call{value: msg.value - totalCost}("");
+            require(success, "Refund failed");
+        }
+
+        emit PositionRented(instance, msg.sender, desiredPosition, totalCost, duration, expiresAt);
+    }
+
+    /**
+     * @notice Get featured instances in queue order
+     */
+    function getFeaturedInstances(
+        uint256 startIndex,
+        uint256 endIndex
+    ) external view returns (address[] memory instances, uint256 total) {
+        require(endIndex > startIndex, "Invalid range");
+        require(endIndex <= featuredQueue.length, "End index out of bounds");
 
         uint256 resultSize = endIndex - startIndex;
         address[] memory result = new address[](resultSize);
-        uint256 resultIdx = 0;
 
-        // Fill result array from combined list
         for (uint256 i = startIndex; i < endIndex; i++) {
-            if (i < featuredCount) {
-                result[resultIdx] = featured[i];
-            } else {
-                result[resultIdx] = nonFeatured[i - featuredCount];
-            }
-            resultIdx++;
+            result[i - startIndex] = featuredQueue[i].instance;
         }
 
-        return (result, totalCount);
+        return (result, featuredQueue.length);
     }
 
     /**
-     * @notice Internal: Sort featured instances by tier DESC, then by registeredAt DESC
+     * @notice Get rental info for an instance
      */
-    function _sortFeaturedByTierAndDate(address[] memory arr, uint256 len) internal view {
-        // Simple bubble sort for featured tier and date
-        // Tier DESC, then registeredAt DESC
-        for (uint256 i = 0; i < len; i++) {
-            for (uint256 j = i + 1; j < len; j++) {
-                address instI = arr[i];
-                address instJ = arr[j];
+    function getRentalInfo(address instance) external view returns (
+        RentalSlot memory rental,
+        uint256 position,
+        uint256 renewalDeposit,
+        bool isExpired
+    ) {
+        uint256 pos = instancePosition[instance];
+        RentalSlot memory slot;
 
-                uint256 tierI = instanceFeaturedTier[instI];
-                uint256 tierJ = instanceFeaturedTier[instJ];
-                uint256 dateI = instanceInfo[instI].registeredAt;
-                uint256 dateJ = instanceInfo[instJ].registeredAt;
-
-                // Sort by tier DESC (higher tier first)
-                if (tierI < tierJ) {
-                    (arr[i], arr[j]) = (arr[j], arr[i]);
-                } else if (tierI == tierJ && dateI < dateJ) {
-                    // Same tier: sort by date DESC (newer first)
-                    (arr[i], arr[j]) = (arr[j], arr[i]);
-                }
-            }
+        if (pos > 0) {
+            slot = featuredQueue[pos - 1];
         }
-    }
 
-    /**
-     * @notice Internal: Sort instances by registeredAt DESC (newest first)
-     */
-    function _sortByDate(address[] memory arr, uint256 len) internal view {
-        // Simple bubble sort by registeredAt DESC (newest first)
-        for (uint256 i = 0; i < len; i++) {
-            for (uint256 j = i + 1; j < len; j++) {
-                uint256 dateI = instanceInfo[arr[i]].registeredAt;
-                uint256 dateJ = instanceInfo[arr[j]].registeredAt;
-
-                if (dateI < dateJ) {
-                    (arr[i], arr[j]) = (arr[j], arr[i]);
-                }
-            }
-        }
-    }
-
-    /**
-     * @notice Set vault registry (Phase 2)
-     */
-    function setVaultRegistry(address newRegistry) external onlyOwner {
-        require(newRegistry != address(0) && newRegistry.code.length > 0, "Invalid registry");
-        vaultRegistry = newRegistry;
-        emit VaultRegistrySet(newRegistry);
-    }
-
-    /**
-     * @notice Set featured tier module (Phase 2)
-     * @dev This module will be called when instances are registered
-     */
-    function setFeaturedTierModule(address newModule) external onlyOwner {
-        require(newModule == address(0) || newModule.code.length > 0, "Invalid module");
-        featuredTierModule = newModule;
-        emit FeaturedTierModuleSet(newModule);
-    }
-
-    /**
-     * @notice Set governance module (Phase 2)
-     * @dev This module will handle factory approval voting
-     */
-    function setGovernanceModule(address newModule) external onlyOwner {
-        require(newModule == address(0) || newModule.code.length > 0, "Invalid module");
-        governanceModule = newModule;
-        emit GovernanceModuleSet(newModule);
-    }
-
-    /**
-     * @notice Authorize upgrade (UUPS)
-     */
-    function _authorizeUpgrade(address newImplementation) internal override onlyOwner {}
-
-    // Phase 2 Features - Factory Application (Governance)
-
-    function applyForFactory(
-        address factoryAddress,
-        string memory contractType,
-        string memory title,
-        string memory displayTitle,
-        string memory metadataURI,
-        bytes32[] memory features
-    ) external payable override {
-        require(governanceModule != address(0), "Governance module not set");
-        IFactoryApprovalGovernance(governanceModule).submitApplicationWithApplicant{value: msg.value}(
-            factoryAddress,
-            contractType,
-            title,
-            displayTitle,
-            metadataURI,
-            features,
-            msg.sender
+        return (
+            slot,
+            pos,
+            renewalDeposits[instance],
+            pos > 0 && slot.active && block.timestamp >= slot.expiresAt
         );
     }
 
-    function voteOnApplication(address factoryAddress, bool approve) external override {
-        require(governanceModule != address(0), "Governance module not set");
-        // When called through the proxy directly (not through wrapper), msg.sender is the actual voter
-        IFactoryApprovalGovernance(governanceModule).voteOnApplicationWithVoter(factoryAddress, msg.sender, approve);
+    /**
+     * @notice Deposit funds for auto-renewal
+     */
+    function depositForAutoRenewal(address instance) external payable nonReentrant {
+        uint256 position = instancePosition[instance];
+        require(position > 0, "Not in queue");
+        require(msg.value > 0, "Must deposit funds");
+
+        RentalSlot memory slot = featuredQueue[position - 1];
+        require(
+            slot.renter == msg.sender ||
+            instanceInfo[instance].creator == msg.sender,
+            "Not authorized"
+        );
+
+        renewalDeposits[instance] += msg.value;
+        emit AutoRenewalDeposited(instance, msg.sender, msg.value);
     }
 
-    function finalizeApplication(address factoryAddress) external override onlyOwner {
-        require(governanceModule != address(0), "Governance module not set");
-        IFactoryApprovalGovernance(governanceModule).finalizeApplication(factoryAddress);
-    }
+    /**
+     * @notice Withdraw unused auto-renewal deposit
+     */
+    function withdrawRenewalDeposit(address instance) external nonReentrant {
+        uint256 position = instancePosition[instance];
 
-    function getFactoryApplication(address factoryAddress) external view override returns (FactoryApplication memory) {
-        require(governanceModule != address(0), "Governance module not set");
-        // Get application from governance module
-        IFactoryApprovalGovernance.FactoryApplication memory govApp =
-            IFactoryApprovalGovernance(governanceModule).getApplication(factoryAddress);
-
-        // Convert to IMasterRegistry.FactoryApplication
-        return FactoryApplication({
-            factoryAddress: govApp.factoryAddress,
-            applicant: govApp.applicant,
-            contractType: govApp.contractType,
-            title: govApp.title,
-            displayTitle: govApp.displayTitle,
-            metadataURI: govApp.metadataURI,
-            features: govApp.features,
-            status: ApplicationStatus(uint8(govApp.status)),
-            applicationFee: govApp.applicationFee,
-            createdAt: govApp.createdAt,
-            totalVotes: govApp.approvalVotes + govApp.rejectionVotes,
-            approvalVotes: govApp.approvalVotes,
-            rejectionVotes: govApp.rejectionVotes,
-            rejectionReason: govApp.rejectionReason,
-            verified: false,
-            verificationURI: ""
-        });
-    }
-
-    // Phase 2 Features - Featured Tier System
-
-    function getCurrentPrice(uint256 tierIndex) external view override returns (uint256) {
-        require(tierIndex < tierCount, "Invalid tier index");
-        return tierPricing[tierIndex].currentPrice;
-    }
-
-    function getTierPricingInfo(uint256 tierIndex) external view override returns (TierPricingInfo memory) {
-        require(tierIndex < tierCount, "Invalid tier index");
-        FeaturedTierInfo storage tier = tierPricing[tierIndex];
-        return TierPricingInfo({
-            currentPrice: tier.currentPrice,
-            utilizationRate: tier.utilizationRate,
-            demandFactor: tier.demandFactor,
-            lastPurchaseTime: tier.lastPurchaseTime,
-            totalPurchases: tier.totalPurchases
-        });
-    }
-
-    function purchaseFeaturedPromotion(
-        address instance,
-        uint256 tierIndex
-    ) external payable override nonReentrant {
-        require(instanceInfo[instance].instance != address(0), "Instance not registered");
-        require(tierIndex >= 1 && tierIndex < tierCount, "Invalid tier index");
-
-        FeaturedTierInfo storage tier = tierPricing[tierIndex];
-        uint256 price = tier.currentPrice;
-
-        require(msg.value >= price, "Insufficient payment for tier");
-
-        // Set instance's featured tier
-        instanceFeaturedTier[instance] = tierIndex;
-
-        // Update tier pricing
-        tier.lastPurchaseTime = block.timestamp;
-        tier.totalPurchases++;
-        // Simple utilization rate: percentage of total purchases (capped at 100)
-        tier.utilizationRate = tier.totalPurchases < 100 ? tier.totalPurchases : 100;
-        // Dynamic pricing: increase by 2% per purchase
-        tier.currentPrice = (tier.currentPrice * 102) / 100;
-
-        // Refund excess
-        if (msg.value > price) {
-            payable(msg.sender).transfer(msg.value - price);
+        if (position > 0) {
+            RentalSlot memory slot = featuredQueue[position - 1];
+            require(
+                slot.renter == msg.sender ||
+                instanceInfo[instance].creator == msg.sender,
+                "Not authorized"
+            );
+        } else {
+            require(instanceInfo[instance].creator == msg.sender, "Not authorized");
         }
 
-        emit FeaturedPromotionPurchased(instance, msg.sender, tierIndex, price);
+        uint256 deposit = renewalDeposits[instance];
+        require(deposit > 0, "No deposit to withdraw");
+
+        renewalDeposits[instance] = 0;
+
+        (bool success, ) = payable(msg.sender).call{value: deposit}("");
+        require(success, "Transfer failed");
+
+        emit RenewalDepositWithdrawn(instance, msg.sender, deposit);
     }
+
+    /**
+     * @notice Renew your current position before it expires
+     * @param instance Instance to renew
+     * @param additionalDuration Additional time to add (in seconds)
+     */
+    function renewPosition(
+        address instance,
+        uint256 additionalDuration
+    ) external payable nonReentrant {
+        uint256 position = instancePosition[instance];
+        require(position > 0, "Not in queue");
+
+        uint256 index = position - 1;
+        RentalSlot storage slot = featuredQueue[index];
+
+        require(slot.renter == msg.sender, "Not the renter");
+        require(slot.active, "Rental not active");
+        require(additionalDuration >= minRentalDuration, "Duration too short");
+
+        // Calculate renewal cost (with discount!)
+        uint256 basePrice = getPositionRentalPrice(position);
+        uint256 durationMultiplier = additionalDuration / minRentalDuration;
+        uint256 renewalCost = (basePrice * durationMultiplier * renewalDiscount) / 100;
+
+        require(msg.value >= renewalCost, "Insufficient payment");
+
+        // Extend expiration
+        uint256 newExpiration = slot.expiresAt + additionalDuration;
+        require(newExpiration <= block.timestamp + maxRentalDuration, "Total duration too long");
+
+        slot.expiresAt = newExpiration;
+        slot.rentPaid += renewalCost;
+
+        // Refund excess
+        if (msg.value > renewalCost) {
+            (bool success, ) = payable(msg.sender).call{value: msg.value - renewalCost}("");
+            require(success, "Refund failed");
+        }
+
+        emit PositionRenewed(instance, position, additionalDuration, renewalCost, newExpiration);
+    }
+
+    /**
+     * @notice Bump your position up in the queue
+     * @param instance Your instance that's currently in the queue
+     * @param targetPosition Position you want to move to (must be higher than current)
+     * @param additionalDuration Additional time to add to your rental (optional, can be 0)
+     */
+    function bumpPosition(
+        address instance,
+        uint256 targetPosition,
+        uint256 additionalDuration
+    ) external payable nonReentrant {
+        uint256 currentPosition = instancePosition[instance];
+        require(currentPosition > 0, "Not in queue");
+        require(targetPosition > 0 && targetPosition < currentPosition, "Invalid target position");
+
+        uint256 currentIndex = currentPosition - 1;
+        RentalSlot storage currentSlot = featuredQueue[currentIndex];
+
+        require(currentSlot.renter == msg.sender, "Not your rental");
+        require(currentSlot.active, "Rental not active");
+        require(block.timestamp < currentSlot.expiresAt, "Rental expired");
+
+        // Get the FULL competitive price (what next person would pay)
+        uint256 fullCompetitivePrice = getPositionRentalPrice(targetPosition);
+
+        // Calculate what THIS user pays (with their credit)
+        uint256 bumpCost = _calculateBumpCost(currentPosition, targetPosition, additionalDuration);
+        require(msg.value >= bumpCost, "Insufficient payment");
+
+        // Update rental details
+        currentSlot.rentPaid += bumpCost;
+        if (additionalDuration > 0) {
+            currentSlot.expiresAt += additionalDuration;
+        }
+
+        // Save the moving slot
+        RentalSlot memory movingSlot = currentSlot;
+
+        // Shift everyone between target and current position down by 1
+        for (uint256 i = currentIndex; i > targetPosition - 1; i--) {
+            featuredQueue[i] = featuredQueue[i - 1];
+
+            if (featuredQueue[i].active) {
+                instancePosition[featuredQueue[i].instance] = i + 1;
+                emit PositionShifted(featuredQueue[i].instance, i, i + 1);
+            }
+        }
+
+        // Place at target position
+        featuredQueue[targetPosition - 1] = movingSlot;
+        instancePosition[instance] = targetPosition;
+
+        // Update demand tracking with FULL competitive price
+        positionDemand[targetPosition] = PositionDemand({
+            lastRentalPrice: fullCompetitivePrice,
+            lastRentalTime: block.timestamp,
+            totalRentalsAllTime: positionDemand[targetPosition].totalRentalsAllTime + 1
+        });
+
+        // Refund excess
+        if (msg.value > bumpCost) {
+            (bool success, ) = payable(msg.sender).call{value: msg.value - bumpCost}("");
+            require(success, "Refund failed");
+        }
+
+        emit PositionBumped(instance, currentPosition, targetPosition, bumpCost, additionalDuration);
+    }
+
+    /**
+     * @notice Clean up expired rentals (incentivized public function)
+     * @param maxCleanup Maximum number of slots to process
+     */
+    function cleanupExpiredRentals(uint256 maxCleanup) external nonReentrant {
+        require(maxCleanup > 0 && maxCleanup <= 50, "Invalid cleanup limit");
+
+        uint256 cleanedCount = 0;
+        uint256 renewedCount = 0;
+
+        // Scan from back to front
+        uint256 i = featuredQueue.length;
+
+        while (i > 0 && (cleanedCount + renewedCount) < maxCleanup) {
+            i--;
+            RentalSlot storage slot = featuredQueue[i];
+
+            // Only process active slots
+            if (!slot.active) continue;
+
+            // Check if expired
+            if (block.timestamp >= slot.expiresAt) {
+                // Try auto-renewal first
+                if (_attemptAutoRenewal(slot.instance, i + 1)) {
+                    renewedCount++;
+                } else {
+                    // No renewal possible, mark as inactive
+                    slot.active = false;
+                    instancePosition[slot.instance] = 0;
+                    cleanedCount++;
+
+                    emit RentalExpired(slot.instance, i + 1, slot.expiresAt);
+                }
+            }
+        }
+
+        // Compact the queue
+        _compactQueue();
+
+        // Pay reward to caller
+        uint256 totalActions = cleanedCount + renewedCount;
+        if (totalActions > 0) {
+            uint256 reward = totalActions * cleanupReward;
+            (bool success, ) = payable(msg.sender).call{value: reward}("");
+            require(success, "Reward payment failed");
+
+            emit CleanupRewardPaid(msg.sender, cleanedCount, renewedCount, reward);
+        }
+    }
+
+    // ============ Internal Helper Functions ============
+
+    /**
+     * @notice Insert at position and shift everyone else down
+     */
+    function _insertAtPositionWithShift(
+        address instance,
+        uint256 position,
+        uint256 rentPaid,
+        uint256 expiresAt
+    ) internal {
+        uint256 index = position - 1;
+
+        RentalSlot memory newSlot = RentalSlot({
+            instance: instance,
+            renter: msg.sender,
+            rentPaid: rentPaid,
+            rentedAt: block.timestamp,
+            expiresAt: expiresAt,
+            originalPosition: position,
+            active: true
+        });
+
+        // Case 1: Appending to back (no shifting needed)
+        if (position > featuredQueue.length) {
+            // Fill any gaps with empty slots if needed
+            while (featuredQueue.length < position - 1) {
+                featuredQueue.push(RentalSlot({
+                    instance: address(0),
+                    renter: address(0),
+                    rentPaid: 0,
+                    rentedAt: 0,
+                    expiresAt: 0,
+                    originalPosition: 0,
+                    active: false
+                }));
+            }
+
+            featuredQueue.push(newSlot);
+            instancePosition[instance] = position;
+        }
+        // Case 2: Inserting in middle/front - shift everyone down
+        else {
+            // Add new slot at the end
+            featuredQueue.push(RentalSlot({
+                instance: address(0),
+                renter: address(0),
+                rentPaid: 0,
+                rentedAt: 0,
+                expiresAt: 0,
+                originalPosition: 0,
+                active: false
+            }));
+
+            // Shift everyone from position onwards down by 1
+            for (uint256 i = featuredQueue.length - 1; i > index; i--) {
+                featuredQueue[i] = featuredQueue[i - 1];
+
+                // Update their position mapping (they got pushed down)
+                if (featuredQueue[i].active) {
+                    instancePosition[featuredQueue[i].instance] = i + 1;
+                    emit PositionShifted(featuredQueue[i].instance, i, i + 1);
+                }
+            }
+
+            // Insert new renter at desired position
+            featuredQueue[index] = newSlot;
+            instancePosition[instance] = position;
+        }
+
+        // Update demand tracking for this position
+        positionDemand[position] = PositionDemand({
+            lastRentalPrice: rentPaid,
+            lastRentalTime: block.timestamp,
+            totalRentalsAllTime: positionDemand[position].totalRentalsAllTime + 1
+        });
+    }
+
+    /**
+     * @notice Calculate cost to bump from current position to target position
+     */
+    function _calculateBumpCost(
+        uint256 currentPosition,
+        uint256 targetPosition,
+        uint256 additionalDuration
+    ) internal view returns (uint256) {
+        require(targetPosition < currentPosition, "Target must be higher than current");
+
+        // Base cost is the competitive price for the target position
+        uint256 baseCost = getPositionRentalPrice(targetPosition);
+
+        // Get what you already paid
+        uint256 currentIndex = currentPosition - 1;
+        RentalSlot memory currentSlot = featuredQueue[currentIndex];
+
+        // Calculate value already paid (proportional to time remaining)
+        uint256 timeRemaining = currentSlot.expiresAt > block.timestamp
+            ? currentSlot.expiresAt - block.timestamp
+            : 0;
+        uint256 totalDuration = currentSlot.expiresAt - currentSlot.rentedAt;
+        uint256 remainingValue = (currentSlot.rentPaid * timeRemaining) / totalDuration;
+
+        // Cost to bump = competitive price for target - credit from current position
+        uint256 bumpCost = baseCost > remainingValue ? baseCost - remainingValue : 0;
+
+        // Add cost for additional duration if requested
+        if (additionalDuration > 0) {
+            uint256 durationMultiplier = additionalDuration / minRentalDuration;
+            bumpCost += (getPositionRentalPrice(targetPosition) * durationMultiplier);
+        }
+
+        return bumpCost;
+    }
+
+    /**
+     * @notice Attempt to auto-renew a position using deposited funds
+     */
+    function _attemptAutoRenewal(address instance, uint256 position) internal returns (bool) {
+        uint256 deposit = renewalDeposits[instance];
+        if (deposit == 0) return false;
+
+        // Calculate renewal cost for minimum duration
+        uint256 renewalCost = calculateRentalCost(position, minRentalDuration);
+        renewalCost = (renewalCost * renewalDiscount) / 100;  // Apply discount
+
+        if (deposit < renewalCost) return false;
+
+        // Deduct from deposit
+        renewalDeposits[instance] -= renewalCost;
+
+        // Extend the rental
+        uint256 index = position - 1;
+        RentalSlot storage slot = featuredQueue[index];
+        slot.expiresAt = block.timestamp + minRentalDuration;
+        slot.rentPaid += renewalCost;
+
+        emit PositionAutoRenewed(instance, position, renewalCost, slot.expiresAt);
+        return true;
+    }
+
+    /**
+     * @notice Remove trailing inactive slots from queue
+     */
+    function _compactQueue() internal {
+        while (featuredQueue.length > 0 && !featuredQueue[featuredQueue.length - 1].active) {
+            featuredQueue.pop();
+        }
+    }
+
 
     // Phase 2 Features - Vault Registry
 
@@ -693,46 +922,97 @@ contract MasterRegistryV1 is UUPSUpgradeable, Ownable, ReentrancyGuard, IMasterR
     // Phase 2 Features - Hook Registry
 
     // Hook registry removed - vaults now manage their own canonical hooks
-}
 
-// Interfaces for extension modules
-interface IFeaturedTierModule {
-    function onInstanceRegistered(address instance) external;
-}
+    // UUPS Upgrade Authorization
+    function _authorizeUpgrade(address newImplementation) internal override onlyOwner {}
 
-interface IFactoryApprovalGovernance {
-    enum ApplicationStatus {
-        Pending,
-        Approved,
-        Rejected,
-        Withdrawn
-    }
+    // Phase 2 Features - Factory Application (Governance)
 
-    struct FactoryApplication {
-        address factoryAddress;
-        address applicant;
-        string contractType;
-        string title;
-        string displayTitle;
-        string metadataURI;
-        bytes32[] features;
-        ApplicationStatus status;
-        uint256 applicationFee;
-        uint256 createdAt;
-        uint256 approvalVotes;
-        uint256 rejectionVotes;
-        string rejectionReason;
-    }
-
-    function submitApplication(
+    function applyForFactory(
         address factoryAddress,
         string memory contractType,
         string memory title,
         string memory displayTitle,
         string memory metadataURI,
         bytes32[] memory features
-    ) external payable;
+    ) external payable override {
+        require(governanceModule != address(0), "Governance module not set");
+        IFactoryApprovalGovernance(governanceModule).submitApplicationWithApplicant{value: msg.value}(
+            factoryAddress,
+            contractType,
+            title,
+            displayTitle,
+            metadataURI,
+            features,
+            msg.sender
+        );
+    }
 
+    function voteOnApplication(address factoryAddress, bool approve) external payable override {
+        require(governanceModule != address(0), "Governance module not set");
+        // Note: This is a legacy interface - new system uses voteWithDeposit directly
+        // Forwards to governance module, msg.value should contain EXEC deposit amount
+        // This function is kept for backwards compatibility but users should call
+        // FactoryApprovalGovernance.voteWithDeposit() directly
+        revert("Use voteWithDeposit on FactoryApprovalGovernance directly");
+    }
+
+    function finalizeApplication(address factoryAddress) external override {
+        require(governanceModule != address(0), "Governance module not set");
+        // Note: New system uses finalizeRound() which is permissionless
+        // This function is kept for backwards compatibility
+        revert("Use finalizeRound on FactoryApprovalGovernance directly");
+    }
+
+    function getFactoryApplication(address factoryAddress) external view override returns (FactoryApplication memory) {
+        require(governanceModule != address(0), "Governance module not set");
+
+        // Get application data from governance module
+        (
+            address applicant,
+            string memory contractType,
+            string memory title,
+            ,  // phase
+            uint256 phaseDeadline,
+            uint256 cumulativeYayRequired,
+            uint256 roundCount
+        ) = IFactoryApprovalGovernance(governanceModule).getApplication(factoryAddress);
+
+        // For backwards compatibility, we approximate vote counts from latest round
+        uint256 approvalVotes = 0;
+        uint256 rejectionVotes = 0;
+        ApplicationStatus status = ApplicationStatus.Pending;
+
+        if (roundCount > 0) {
+            // This is a simplified view - actual voting data is in rounds
+            // For detailed info, query FactoryApprovalGovernance directly
+            approvalVotes = cumulativeYayRequired;
+        }
+
+        // Convert to IMasterRegistry.FactoryApplication
+        return FactoryApplication({
+            factoryAddress: factoryAddress,
+            applicant: applicant,
+            contractType: contractType,
+            title: title,
+            displayTitle: title,
+            metadataURI: "",
+            features: new bytes32[](0),
+            status: status,
+            applicationFee: 0.1 ether,
+            createdAt: phaseDeadline,
+            totalVotes: approvalVotes + rejectionVotes,
+            approvalVotes: approvalVotes,
+            rejectionVotes: rejectionVotes,
+            rejectionReason: "",
+            verified: false,
+            verificationURI: ""
+        });
+    }
+}
+
+// Interfaces for extension modules
+interface IFactoryApprovalGovernance {
     function submitApplicationWithApplicant(
         address factoryAddress,
         string memory contractType,
@@ -743,13 +1023,15 @@ interface IFactoryApprovalGovernance {
         address applicant
     ) external payable;
 
-    function voteOnApplication(address factoryAddress, bool approve) external;
-
-    function voteOnApplicationWithVoter(address factoryAddress, address voter, bool approve) external;
-
-    function finalizeApplication(address factoryAddress) external;
-
-    function getApplication(address factoryAddress) external view returns (FactoryApplication memory);
+    function getApplication(address factoryAddress) external view returns (
+        address applicant,
+        string memory contractType,
+        string memory title,
+        uint8 phase,
+        uint256 phaseDeadline,
+        uint256 cumulativeYayRequired,
+        uint256 roundCount
+    );
 }
 
 interface IVaultRegistry {

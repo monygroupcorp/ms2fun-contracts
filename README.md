@@ -9,9 +9,13 @@ The ms2.fun protocol features:
 - **Master Registry**: Central indexing of factories, instances, and vaults with governance voting
 - **ERC404 Bonding Factory**: Creates ERC404 instances with V4 hook integration for swap tax collection
 - **ERC1155 Factory**: Creates open-edition instances with enforced vault tithe (20% on creator withdraw)
-- **UltraAlignmentVault**: Centralized fee hub receiving taxes from all projects, converting ETH → target token LP positions with multi-conversion fee distribution
-- **V4 Hook Integration**: ETH/WETH-based swap tax collection routed to vault (vault-scoped, applies platform-wide)
-- **Conversion-Indexed Benefactor Accounting**: Lifetime fee claims from multiple conversion rounds with frozen benefactor percentages
+- **UltraAlignmentVault**: Share-based fee hub receiving ETH from all projects, accumulating in dragnet, batch-converting to target token → V4 LP positions with O(1) fee claims
+  - Contributions from direct transfers, V4 hooks (with project attribution), and ERC1155 tithes
+  - Anyone can trigger conversion (incentivized with small reward)
+  - Share issuance proportional to contribution: `shares = (contribution / totalPending) × liquidityUnitsAdded`
+  - Delta-based fee claims support multiple claims per benefactor
+- **V4 Hook Integration**: Swap taxes routed to vault with source project attribution via `receiveHookTax()`
+- **Share-Based Accounting**: Elegant alternative to epoch-based tracking (O(1) claims, unlimited scalability)
 
 ## Repository Structure
 
@@ -81,28 +85,27 @@ Central indexing and governance:
 - Multi-factory support
 
 ### Vault System (`src/vaults/`)
-- `UltraAlignmentVault.sol` - Fee hub with trailing epoch condenser + three-pool treasury
-  - **Three-Pool Treasury Architecture**:
-    - `conversionPool`: ETH reserved for ETH → token → LP operations
-    - `feeClaimPool`: ETH reserved for benefactor fee claim payouts
-    - `operatorIncentivePool`: ETH reserved for epoch keepers and converters
-  - Owner-controlled rebalancing (`reallocateTreasuryForFeeClaims()`, `reallocateTreasuryForOperators()`)
-  - Receives ETH from ERC404 hooks and ERC1155 tithes (auto-allocates to conversionPool)
-  - Converts accumulated ETH to target token and creates V4 LP positions
-  - **Async Epoch Finalization**: No auto-triggers or gas spikes on conversions
-    - Decentralized epoch finalization with keeper incentives (`finalizeEpochAndStartNew()`)
-    - Optional finalization (keepers call when epoch reaches advisory threshold or own discretion)
-  - **Epoch Boundary Configuration** (advisory, non-blocking):
-    - `maxConversionsPerEpoch`: Advisory threshold (default 100) - doesn't stop conversions
-    - Conversions proceed freely regardless of epoch size
-  - **Trailing Epoch Condenser**: O(1) fee claims via lifetime contribution ratio model
-  - Automatic rolling window compression (`_compressOldestEpoch()`) - keeps last 3 epochs active
-  - Scales to 5000+ conversions and 2000+ benefactors without gas bloat
-  - Treasury accounting: tracks allocated ETH and withdrawn amounts per pool
-- `LPPositionValuation.sol` - Epoch-based tracking with immutable conversion records
-  - EpochRecord struct for batching conversions and tracking benefactor contributions
-  - BenefactorState minimalist tracking (lifetime ETH, last claim, timestamps)
-  - Support for historical query access (backwards compatibility)
+- `UltraAlignmentVault.sol` - Share-based fee hub with V2/V3/V4 liquidity management
+  - **Share-Based Architecture** (elegant refactor of epoch-based complexity):
+    - Contributions accumulate in dragnet from multiple sources (direct transfers, hooks, project taxes)
+    - Single batch conversion triggered by anyone (incentivized with small reward)
+    - Shares issued proportional to contributions: `shares = (contribution / totalPending) × liquidityUnitsAdded`
+    - O(1) fee claims via share ratio: `ethClaimed = (accumulatedFees × benefactorShares) / totalShares`
+    - Multi-claim support via delta tracking: only new fees since last claim are transferred
+  - **DEX Integration** (realistic V2/V3/V4 routing):
+    - `_swapETHForTarget()`: Routes through V2/V3 pools where target token typically has deep liquidity
+    - Accounts for slippage and majority token positioning in V2/V3 pools
+    - `_checkTargetAssetPriceAndPurchasePower()`: Queries DEX prices, validates oracle alignment
+    - `_calculateProportionOfEthToSwapBasedOnVaultOwnedLpTickValues()`: Dynamic swap ratio based on vault's LP position
+    - `_checkCurrentVaultOwnedLpTickValues()`: Tracks vault's V4 LP position range and liquidity
+  - **Performance**:
+    - O(1) receive operations (direct contribution tracking)
+    - O(1) fee claims (share-based ratio calculation, no iteration)
+    - O(n) conversion (n = active benefactors in current dragnet)
+    - Scales to unlimited conversions and benefactors
+  - **Receiver Functions**:
+    - `receive() external payable`: Direct ETH contributions, auto-tracked as pending
+    - `receiveHookTax(Currency, uint256, address)`: Hook-attributed contributions with project source tracking
 
 ### ERC404 Ecosystem (`src/factories/erc404/`)
 - `ERC404Factory.sol` - Creates bonding instances with vault-specific hooks
@@ -116,16 +119,25 @@ Central indexing and governance:
 
 ## Documentation
 
-### Essential Guides
-- **[MANUAL_REVIEW_GUIDE.md](./MANUAL_REVIEW_GUIDE.md)** - Comprehensive review checklist (15 sections, 100+ verification points)
-- **[SWAP_AND_LP_STUBS.md](./SWAP_AND_LP_STUBS.md)** - Implementation guide for swap and LP position stubs
-- **[benefactor-accounting-redesign.md](./.claude/plans/benefactor-accounting-redesign.md)** - Multi-conversion accounting architecture (in .claude/plans/)
+### Vault Architecture
+- **[ULTRA_ALIGNMENT.md](./docs/ULTRA_ALIGNMENT.md)** - High-level system overview of share-based fee distribution
+  - Dragnet accumulation model, share issuance, delta-based claims
+  - Integration points with ERC404 hooks and ERC1155 tithes
+  - Real-world fee distribution examples with walkthroughs
+- **[VAULT_ARCHITECTURE.md](./docs/VAULT_ARCHITECTURE.md)** - Technical deep-dive into share-based vault design
+  - Data structures and storage layout
+  - Complete function reference and signatures
+  - Performance characteristics and scaling analysis
+  - V2→V3→V4 pool routing for DEX integration
 
 ### Key Concepts
-- **Conversion-Indexed Benefactor Accounting**: Per-conversion immutable records instead of singular overwriting mappings
-- **Multi-Claim Support**: Benefactors claim multiple times from same conversion as LP fees accumulate
-- **Frozen Percentages**: Benefactor stakes locked at conversion time, independent of LP value fluctuations
-- **O(k) Scaling**: Benefactor claims loop through conversions they participated in (k ≈ 50-100), not all conversions
+- **Share-Based Accounting**: Replacement for complex epoch-based tracking
+  - Shares = (contribution / totalPending) × liquidityUnitsAdded
+  - Fee distribution = (accumulatedFees × benefactorShares) / totalShares
+- **Dragnet Contribution Model**: Accumulate contributions until batch conversion, deferred to public function
+- **Multi-Claim Support**: Delta tracking via `shareValueAtLastClaim` enables multiple claims
+- **O(1) Fee Claims**: No iteration required, pure ratio-based calculation
+- **V2/V3/V4 Integration**: Realistic DEX routing considering majority token positioning
 
 ## Development
 

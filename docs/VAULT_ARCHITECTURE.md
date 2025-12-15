@@ -1,179 +1,279 @@
-# Ultra-Alignment Vault Architecture
+# Ultra-Alignment Vault V2 Architecture
 
 ## Vision
 
-The Ultra-Alignment Vault captures upside from ms2fun platform projects and converts it into aligned liquidity positions, while allowing benefactors to participate in the upside through staking.
+The Ultra-Alignment Vault V2 is a simplified, elegant share-based system that collects ETH contributions, converts them into liquidity positions for an alignment target token, and allows contributors to claim fees proportional to their share of the LP position.
+
+## Core Design Principles
+
+1. **Dragnet Accumulation**: Contributions accumulate in pending state until batch-converted to LP positions
+2. **Share-Based Accounting**: Fee distribution uses simple share ratios instead of complex epoch tracking
+3. **O(1) Operations**: Fee claims and calculations are constant-time using proportional sharing
+4. **Minimal State**: Track only what's essential: total contributions (bragging rights) and LP stakes
 
 ## Core Components
 
-### 1. Fee Collection System
+### 1. Contribution Tracking
 
-#### ERC404 Projects
-- **Source**: V4 hook taxes on swap volume
-- **Flow**: Hook accumulates taxes → sends to vault → vault converts to alignment target liquidity
-- **Tracking**: Track volume per project instance
+The vault receives ETH contributions from multiple sources:
 
-#### ERC1155 Projects  
-- **Source**: 20% tithe on creator withdrawals
-- **Flow**: Instance sends ETH directly to vault → vault converts to alignment target liquidity
-- **Tracking**: Track withdrawal volume per project instance
+#### Direct Contributions
+- **Source**: `receive()` function accepts ETH from any address
+- **Flow**: Sender becomes benefactor, ETH added to pending dragnet
+- **Tracking**: `benefactorTotalETH[benefactor]` accumulates total historical contribution (for bragging rights)
 
-### 2. Alignment Target Conversion
+#### Hook-Based Contributions
+- **Source**: V4 hooks call `receiveHookTax()` with explicit benefactor attribution
+- **Flow**: Hook specifies source project/hook, ETH added to pending dragnet
+- **Tracking**: Same as direct, but with clear source attribution
 
-The vault converts collected fees into liquidity positions for an "alignment target" (e.g., CULT):
+#### Dragnet System
+- **Pending Contributions**: `pendingETH[benefactor]` accumulates contributions until conversion
+- **Active Benefactors**: `conversionParticipants[]` tracks all contributors in current round
+- **Reset Pattern**: Pending state clears after each conversion, ready for next round
 
-1. **Accumulate Fees**: Collect ETH/tokens from hooks and withdrawals
-2. **Convert to Target**: Swap accumulated assets → buy alignment target token
-3. **Provide Liquidity**: Add liquidity to alignment target pool (V3 or V4)
-4. **Track Position**: Store liquidity position NFT ID and details
+### 2. Conversion & Liquidity (Dragnet-to-LP)
 
-### 3. Benefactor System
+The core operation batches pending contributions into a single LP position addition:
 
-Benefactors stake assets (e.g., EXEC tokens) to participate in fee distribution:
+```
+convertAndAddLiquidity(minOutTarget, tickLower, tickUpper)
+├─ Calculate caller reward (0.05% of pending ETH)
+├─ Check target asset price and vault's current LP position
+├─ Determine optimal swap ratio (ETH to swap vs hold)
+├─ Swap portion of ETH for alignment token
+├─ Add liquidity to V4 pool with both ETH and target token
+├─ Issue shares proportionally to all benefactors
+│  ├─ For each benefactor: shares = (contribution / totalPending) × totalSharesIssued
+│  └─ Update benefactorShares[benefactor]
+├─ Clear pending contributions for next round
+└─ Pay caller incentive reward
+```
 
-- **Staking**: Stake ERC20 tokens (typically alignment target or platform tokens)
-- **Fee Distribution**: Claim fees proportional to stake
-- **Fee Source**: Fees collected from liquidity positions (V3 position fees)
-- **Competition**: Multiple projects can see their contribution percentage
+**Key Insight**: All benefactors receive shares in a single LP position addition, eliminating per-contribution tracking.
 
-### 4. Project Contribution Tracking
+### 3. Share-Based Fee Distribution
 
-Track which projects contribute to the vault:
+Contributors claim fees based on their share of total LP liquidity:
 
-- **Per-Project Metrics**:
-  - Total volume contributed (ERC404 swap volume)
-  - Total withdrawals taxed (ERC1155)
-  - Total value contributed (ETH equivalent)
-  - Percentage of total vault value
-- **Indexable Queries**:
-  - `getProjectContribution(address projectInstance)`
-  - `getTopContributors(uint256 limit)`
-  - `getTotalVaultValue()`
+```
+calculateClaimable(benefactor) = (accumulatedFees × benefactorShares[benefactor]) / totalShares
+claimFees(benefactor) = currentClaimable - shareValueAtLastClaim[benefactor]
+```
 
-### 5. Liquidity Position Management
+**Delta Tracking**: Each benefactor tracks their last claim value to support multiple claims over time.
 
-- **V3 Positions**: Track NFT position IDs, collect fees, increase liquidity
-- **V4 Positions**: Track salt-based positions, collect fees, manage ranges
-- **Pool Creation**: Create V4 pools for alignment target if they don't exist
-- **Fee Collection**: Collect fees from positions and distribute to benefactors
+### 4. LP Position Management
+
+The vault manages a single V4 LP position per alignment target:
+
+- **Position Tracking**: `totalLPUnits` accumulates liquidity units across conversions
+- **Fee Accumulation**: `accumulatedFees` tracks fees collected from the position
+- **Pool Configuration**: `v4Pool` and `alignmentToken` specify the target pool
+- **Tick Management**: Position uses specified tick range for concentrated liquidity
 
 ## Data Structures
 
 ```solidity
-struct ProjectContribution {
-    address projectInstance;
-    address projectFactory; // ERC404 or ERC1155
-    uint256 totalVolume;    // Swap volume (ERC404) or withdrawal volume (ERC1155)
-    uint256 totalValue;     // ETH equivalent contributed
-    uint256 lastUpdated;
-}
+// Benefactor contribution and share tracking
+mapping(address => uint256) public benefactorTotalETH;      // Historical total (bragging rights)
+mapping(address => uint256) public benefactorShares;        // LP share units
+mapping(address => uint256) public pendingETH;              // Dragnet accumulator
 
-struct BenefactorStake {
-    address benefactor;
-    address stakingToken;   // Token being staked (e.g., EXEC)
-    uint256 amount;
-    uint256 stakedAt;
-    uint256 claimedFees;    // Total fees claimed
-}
+// Claim state for multi-claim support
+mapping(address => uint256) public shareValueAtLastClaim;   // Last claim amount
+mapping(address => uint256) public lastClaimTimestamp;      // Claim timestamp
 
-struct LiquidityPosition {
-    bool isV3;
-    uint256 positionId;     // NFT ID for V3, salt for V4
-    address pool;
-    uint256 liquidity;
-    uint256 feesAccumulated;
-    uint256 lastFeeCollection;
-}
+// Global state
+uint256 public totalShares;           // Total shares issued across all conversions
+uint256 public totalPendingETH;        // Sum of all pending contributions
+uint256 public accumulatedFees;        // Fees collected from LP position
+uint256 public totalLPUnits;           // Liquidity units in vault's LP position
 
-struct AlignmentTarget {
-    address token;
-    address v3Pool;         // Existing V3 pool (if any)
-    address v4Pool;         // V4 pool (created if needed)
-    uint256 totalLiquidity;
-    uint256 totalFeesCollected;
-}
+// Dragnet participants
+address[] public conversionParticipants;           // Benefactors in current round
+mapping(address => uint256) public lastConversionParticipantIndex;
+
+// Configuration
+address public immutable weth;         // WETH contract
+address public immutable poolManager;  // V4 PoolManager
+address public alignmentToken;         // Target token for liquidity position
+address public v4Pool;                 // V4 pool address
+uint256 public conversionRewardBps;    // Caller incentive (default 5 = 0.05%)
 ```
 
 ## Key Functions
 
-### Fee Collection
-- `receiveERC404Tax(Currency currency, uint256 amount, address projectInstance)`
-- `receiveERC1155Tithe(address projectInstance)` (payable)
+### Contribution Functions
 
-### Conversion & Liquidity
-- `convertToAlignmentTarget()` - Swap accumulated assets → buy target → add liquidity
-- `addLiquidityV3(uint256 amount0, uint256 amount1)` - Add to existing V3 pool
-- `createV4PoolAndAddLiquidity()` - Create V4 pool if needed, add liquidity
+#### `receive() external payable`
+- Direct ETH contributions without source attribution
+- Adds to dragnet for next conversion
 
-### Benefactor System
-- `stake(address token, uint256 amount)` - Stake tokens to become benefactor
-- `unstake(address token, uint256 amount)` - Unstake tokens
-- `claimFees()` - Claim proportional share of collected fees
+#### `receiveHookTax(Currency currency, uint256 amount, address benefactor) external payable`
+- Explicit benefactor attribution for hook-based contributions
+- Supports clear source project tracking
 
-### Project Tracking
-- `getProjectContribution(address projectInstance)` - Get project metrics
-- `getTopContributors(uint256 limit)` - Get top N contributors
-- `getProjectRank(address projectInstance)` - Get project's rank
+### Conversion Function
 
-### Liquidity Management
-- `collectV3Fees(uint256 positionId)` - Collect fees from V3 position
-- `collectV4Fees(bytes32 salt)` - Collect fees from V4 position
-- `increaseLiquidity(uint256 amount0, uint256 amount1)` - Add more liquidity
+#### `convertAndAddLiquidity(uint256 minOutTarget, int24 tickLower, int24 tickUpper) external returns (uint256 lpPositionValue)`
+- Batch-converts all pending ETH to LP position
+- Distributes shares proportionally to all pending benefactors
+- Returns total value of LP position added
 
-## Integration Points
+**Process**:
+1. Calculate caller reward (incentive for execution)
+2. Check target asset price and vault's LP tick configuration
+3. Calculate optimal swap ratio (what % of ETH to swap vs hold)
+4. Swap calculated ETH for alignment target token
+5. Add liquidity to V4 pool with swapped token and remaining ETH
+6. Calculate new shares: `totalSharesIssued = liquidityUnitsAdded`
+7. For each benefactor, issue: `shares = (contribution / ethToAdd) × totalSharesIssued`
+8. Clear pending dragnet for next round
+9. Pay caller reward
 
-### ERC404 Hook Integration
+### Fee Claim Functions
+
+#### `claimFees() external returns (uint256 ethClaimed)`
+- O(1) calculation using share ratio
+- Supports multiple claims (delta-based)
+- Formula: `ethClaimed = (accumulatedFees × shares) / totalShares - lastClaimed`
+
+#### `recordAccumulatedFees(uint256 feeAmount) external onlyOwner`
+- Owner records fees collected from LP position
+- Fees then available for benefactor claims
+
+### Query Functions
+
+#### `getBenefactorContribution(address) external view returns (uint256)`
+- Total historical ETH contributed (for bragging rights/leaderboards)
+
+#### `getBenefactorShares(address) external view returns (uint256)`
+- Current share balance
+
+#### `calculateClaimableAmount(address) external view returns (uint256)`
+- Total claimable (not delta) for given benefactor
+
+#### `getUnclaimedFees(address) external view returns (uint256)`
+- Unclaimed fees since last claim (delta)
+
+## Internal Helper Functions (Stubs for Integration)
+
 ```solidity
-// In UltraAlignmentV4Hook.afterSwap()
-if (taxAmount > 0) {
-    vault.receiveERC404Tax(taxCurrency, taxAmount, projectInstance);
-}
+// Swap ETH for alignment target token (DEX integration)
+_swapETHForTarget(ethAmount, minOutTarget) → tokenReceived
+
+// Add to V4 LP position (V4 modifyLiquidity integration)
+_addToLpPosition(amount0, amount1, tickLower, tickUpper) → liquidityUnits
+
+// Check target asset price and purchase power (price oracle)
+_checkTargetAssetPriceAndPurchasePower() → void
+
+// Inspect vault's current LP position tick configuration
+_checkCurrentVaultOwnedLpTickValues() → void
+
+// Calculate optimal swap proportion based on LP position
+_calculateProportionOfEthToSwapBasedOnVaultOwnedLpTickValues() → proportionToSwap
 ```
 
-### ERC1155 Instance Integration
-```solidity
-// In ERC1155Instance.withdraw()
-uint256 taxAmount = (amount * 20) / 100;
-vault.receiveERC1155Tithe{value: taxAmount}(address(this));
-```
+## Configuration Functions
+
+#### `setAlignmentToken(address newToken) external onlyOwner`
+- Set target token for liquidity positions
+
+#### `setV4Pool(address newPool) external onlyOwner`
+- Set target V4 pool address
+
+#### `setConversionRewardBps(uint256 newBps) external onlyOwner`
+- Adjust caller incentive (max 1%, default 0.05%)
+
+#### `depositFees(uint256 amount) external payable onlyOwner`
+- Owner can manually deposit fees (alternative to `recordAccumulatedFees`)
 
 ## Fee Distribution Math
 
-### Benefactor Share Calculation
+### Share-Based Distribution
 ```
-totalStaked = sum of all benefactor stakes
-benefactorShare = benefactorStake / totalStaked
-claimableFees = totalFeesCollected * benefactorShare - alreadyClaimed
+benefactorClaimable = (accumulatedFees × benefactorShares[benefactor]) / totalShares
 ```
 
-### Project Contribution Calculation
+### Share Issuance on Conversion
 ```
-projectContribution% = (projectTotalValue / totalVaultValue) * 100
+// For each benefactor in the dragnet:
+sharePercent = (benefactorPendingETH / totalPendingETH) × 1e18
+sharesToIssue = (totalSharesIssued × sharePercent) / 1e18
+```
+
+### Multi-Claim Support (Delta)
+```
+currentValue = (accumulatedFees × benefactorShares) / totalShares
+unclaimedFees = currentValue - shareValueAtLastClaim[benefactor]
 ```
 
 ## Events
 
 ```solidity
-event ERC404TaxReceived(address indexed projectInstance, Currency currency, uint256 amount);
-event ERC1155TitheReceived(address indexed projectInstance, uint256 amount);
-event AlignmentTargetConverted(uint256 ethAmount, uint256 targetAmount, uint256 liquidity);
-event BenefactorStaked(address indexed benefactor, address token, uint256 amount);
-event FeesClaimed(address indexed benefactor, uint256 amount);
-event ProjectContributionUpdated(address indexed projectInstance, uint256 totalValue);
+event ContributionReceived(address indexed benefactor, uint256 amount);
+event LiquidityAdded(
+    uint256 ethSwapped,
+    uint256 tokenReceived,
+    uint256 lpPositionValue,
+    uint256 sharesIssued,
+    uint256 callerReward
+);
+event FeesClaimed(address indexed benefactor, uint256 ethAmount);
+event FeesAccumulated(uint256 amount);
+```
+
+## Integration Points
+
+### Direct Contribution (Any Address)
+```solidity
+// User sends ETH to vault
+(bool success, ) = payable(address(vault)).call{value: ethAmount}("");
+// Vault emits ContributionReceived and adds to dragnet
+```
+
+### V4 Hook Integration
+```solidity
+// In UltraAlignmentV4Hook.afterSwap()
+if (taxAmount > 0) {
+    vault.receiveHookTax(taxCurrency, taxAmount, msg.sender);  // msg.sender = project hook
+}
+```
+
+### Conversion Incentive
+```solidity
+// Anyone can call to trigger conversion
+vault.convertAndAddLiquidity(minOutTarget, tickLower, tickUpper);
+// Caller receives 0.05% reward from pending ETH
 ```
 
 ## Security Considerations
 
-1. **Access Control**: Only hooks and instances can send fees
-2. **Reentrancy**: All state-changing functions protected
-3. **Slippage Protection**: Use min amounts in swaps
-4. **Position Limits**: Prevent excessive liquidity concentration
-5. **Fee Claim Limits**: Prevent front-running fee claims
+1. **Reentrancy Protection**: All state-changing functions use `nonReentrant` guard
+2. **Ownership Control**: Configuration functions restricted to owner
+3. **Input Validation**: All amounts and addresses validated
+4. **Slippage Protection**: Swap functions require minimum output
+5. **Delta Tracking**: Prevents duplicate fee claims across multiple calls
 
-## Gas Optimization
+## Performance Characteristics
 
-1. **Batch Operations**: Batch fee collections
-2. **Lazy Evaluation**: Don't convert on every small fee
-3. **Thresholds**: Only convert when threshold met
-4. **Storage Packing**: Pack structs efficiently
+| Operation | Complexity | Notes |
+|-----------|-----------|-------|
+| `receive()` | O(1) | Direct contribution, dragnet tracking |
+| `convertAndAddLiquidity()` | O(n) | Linear in active benefactors (n = dragnet size) |
+| `claimFees()` | O(1) | Share ratio calculation, no iteration |
+| `recordAccumulatedFees()` | O(1) | Simple accumulator update |
+
+## Comparison to V1
+
+**Eliminated Complexity**:
+- ❌ Epoch-based tracking → ✅ Simple share model
+- ❌ Per-conversion per-benefactor tracking → ✅ Single dragnet per round
+- ❌ Complex fee distribution loop → ✅ O(1) ratio calculation
+- ❌ Accumulated state bloat → ✅ Minimal required storage
+
+**Key Improvement**:
+Share-based abstraction reduces fee distribution from O(m×n) (benefactors × conversions) to O(1) while simultaneously simplifying the conversion process from complex epoch management to a simple dragnet pattern.
 

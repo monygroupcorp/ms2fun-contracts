@@ -108,22 +108,32 @@ contract FullWorkflowIntegrationTest is Test {
             address(0) // vault
         );
 
-        // Step 5: Purchase featured promotion
-        uint256 tierIndex = 0;
-        uint256 currentPrice = IMasterRegistry(proxy).getCurrentPrice(tierIndex);
-        
+        // Step 5: Rent featured position (queue-based)
+        uint256 desiredPosition = 1; // Position 1 (front of queue)
+        uint256 duration = 7 days;
+        uint256 currentPrice = IMasterRegistry(proxy).calculateRentalCost(desiredPosition, duration);
+
         vm.deal(purchaser, currentPrice);
         vm.prank(purchaser);
-        IMasterRegistry(proxy).purchaseFeaturedPromotion{value: currentPrice}(
+        IMasterRegistry(proxy).rentFeaturedPosition{value: currentPrice}(
             instance,
-            tierIndex
+            desiredPosition,
+            duration
         );
 
         // Verify promotion purchased
-        IMasterRegistry.TierPricingInfo memory pricing = 
-            IMasterRegistry(proxy).getTierPricingInfo(tierIndex);
-        assertEq(pricing.totalPurchases, 1);
-        assertGt(pricing.utilizationRate, 0);
+        (
+            IMasterRegistry.RentalSlot memory promo,
+            uint256 position,
+            ,
+            bool isExpired
+        ) = IMasterRegistry(proxy).getRentalInfo(instance);
+
+        assertEq(promo.instance, instance);
+        assertEq(promo.renter, purchaser);
+        assertEq(position, 1); // First in queue
+        assertFalse(isExpired);
+        assertTrue(promo.active);
     }
 
     function test_FullWorkflow_MultipleFactoriesAndInstances() public {
@@ -258,13 +268,15 @@ contract FullWorkflowIntegrationTest is Test {
             address(0) // vault
         );
 
-        // Purchase multiple promotions and verify price changes
-        uint256 tierIndex = 0;
+        // Rent multiple positions and verify price changes
+        uint256 duration = 7 days;
         uint256[] memory prices = new uint256[](3);
-        
+
         for (uint256 i = 0; i < 3; i++) {
-            prices[i] = IMasterRegistry(proxy).getCurrentPrice(tierIndex);
-            
+            // Each subsequent rental will be for the next position (1, 2, 3)
+            uint256 position = i + 1;
+            prices[i] = IMasterRegistry(proxy).calculateRentalCost(position, duration);
+
             address instanceAddr = address(uint160(0xAAA + i));
             if (i > 0) {
                 // Register additional instances for different promotions
@@ -278,12 +290,13 @@ contract FullWorkflowIntegrationTest is Test {
                     address(0) // vault
                 );
             }
-            
+
             vm.deal(purchaser, prices[i] * 2);
             vm.prank(purchaser);
-            IMasterRegistry(proxy).purchaseFeaturedPromotion{value: prices[i]}(
+            IMasterRegistry(proxy).rentFeaturedPosition{value: prices[i]}(
                 instanceAddr,
-                tierIndex
+                position,
+                duration
             );
         }
 

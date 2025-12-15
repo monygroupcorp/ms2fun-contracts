@@ -19,6 +19,7 @@ import { TickMath } from "v4-core/libraries/TickMath.sol";
 import { StateLibrary } from "v4-core/libraries/StateLibrary.sol";
 import { PoolId } from "v4-core/types/PoolId.sol";
 import { CurrencySettler } from "../../../lib/v4-core/test/utils/CurrencySettler.sol";
+import { UltraAlignmentVault } from "../../vaults/UltraAlignmentVault.sol";
 
 interface IWETH {
     function deposit() external payable;
@@ -89,6 +90,7 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IUnlockCallba
     IHooks public v4Hook; // Can be set after deployment
     address public immutable factory;
     address public immutable weth;
+    UltraAlignmentVault public vault; // Can be set after deployment for staking support
 
     uint256 public bondingOpenTime;  // Set by owner, 0 = not set
     bool public bondingActive;       // Toggle for open/close
@@ -112,6 +114,13 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IUnlockCallba
     // Reroll system
     mapping(address => uint256) public rerollEscrow;  // user => tokens held for reroll
 
+    // Staking system (optional holder alignment rewards)
+    bool public stakingEnabled;
+    mapping(address => uint256) public stakedBalance;     // user => staked token amount
+    uint256 public totalStaked;                            // total tokens staked across all users
+    uint256 public lastVaultFeesClaimed;                   // tracks last fee amount from vault
+    mapping(address => uint256) public stakeRewardsTracking; // user => last fee point when they claimed
+
     // Events
     event BondingSale(address indexed user, uint256 amount, uint256 cost, bool isBuy);
     event BondingOpenTimeSet(uint256 openTime);
@@ -119,6 +128,10 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IUnlockCallba
     event LiquidityDeployed(address indexed pool, uint256 amountToken, uint256 amountETH);
     event RerollInitiated(address indexed user, uint256 tokenAmount, uint256[] exemptedNFTIds);
     event RerollCompleted(address indexed user, uint256 tokensReturned);
+    event StakingEnabled();
+    event Staked(address indexed user, uint256 amount, uint256 newStakedBalance, uint256 newTotalStaked);
+    event Unstaked(address indexed user, uint256 amount, uint256 newStakedBalance, uint256 newTotalStaked);
+    event StakerRewardsClaimed(address indexed user, uint256 rewardAmount, uint256 newTrackingPoint);
 
     // ┌─────────────────────────┐
     // │      Constructor        │
@@ -223,6 +236,17 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IUnlockCallba
         require(_hook != address(0), "Invalid hook");
         require(address(v4Hook) == address(0), "Hook already set");
         v4Hook = IHooks(_hook);
+    }
+
+    /**
+     * @notice Set vault for staking support
+     * @dev Can be called after deployment to enable holder staking
+     * @param _vault Vault address
+     */
+    function setVault(address payable _vault) external onlyOwner {
+        require(_vault != address(0), "Invalid vault");
+        require(address(vault) == address(0), "Vault already set");
+        vault = UltraAlignmentVault(_vault);
     }
 
     // ┌─────────────────────────┐
@@ -792,6 +816,203 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IUnlockCallba
      */
     function getRerollEscrow(address user) external view returns (uint256 escrowAmount) {
         return rerollEscrow[user];
+    }
+
+    // ┌─────────────────────────┐
+    // │  Staking Functionality  │
+    // └─────────────────────────┘
+
+    /**
+     * @notice Enable holder staking system (owner only, irreversible)
+     * @dev Once enabled, instance becomes a staking pool where holders earn vault fees
+     *      Instance remains benefactor in vault, but delegates fee distribution to stakers
+     *      This is an aggressive move - owner forfeits direct fee control
+     */
+    function enableStaking() external onlyOwner {
+        require(!stakingEnabled, "Staking already enabled");
+        stakingEnabled = true;
+        emit StakingEnabled();
+    }
+
+    /**
+     * @notice Stake tokens to receive proportional share of vault fees
+     * @dev Transfers tokens from caller to contract and tracks stake
+     * @param amount Amount of tokens to stake (must have balance)
+     */
+    function stake(uint256 amount) external nonReentrant {
+        require(stakingEnabled, "Staking not enabled");
+        require(amount > 0, "Amount must be positive");
+        require(balanceOf(msg.sender) >= amount, "Insufficient balance");
+
+        // Transfer tokens to contract (locked in staking)
+        _transfer(msg.sender, address(this), amount);
+
+        // Update staking state
+        stakedBalance[msg.sender] += amount;
+        totalStaked += amount;
+
+        // Initialize tracking if first time
+        if (stakeRewardsTracking[msg.sender] == 0) {
+            stakeRewardsTracking[msg.sender] = lastVaultFeesClaimed;
+        }
+
+        emit Staked(msg.sender, amount, stakedBalance[msg.sender], totalStaked);
+    }
+
+    /**
+     * @notice Unstake tokens (no lock duration, instant redemption)
+     * @dev Automatically claims any pending rewards before unstaking
+     *      - Calls claimStakerRewards if user has pending rewards
+     *      - Transfers staked tokens back to caller after claiming
+     * @param amount Amount of tokens to unstake
+     */
+    function unstake(uint256 amount) external nonReentrant {
+        require(stakingEnabled, "Staking not enabled");
+        require(amount > 0, "Amount must be positive");
+        require(stakedBalance[msg.sender] >= amount, "Insufficient staked balance");
+
+        // Auto-claim pending rewards before unstaking
+        if (address(vault) != address(0) && totalStaked > 0) {
+            uint256 currentVaultFees = vault.claimFees();
+            uint256 userProportionalShare = (currentVaultFees * stakedBalance[msg.sender]) / totalStaked;
+            uint256 userAlreadyReceived = stakeRewardsTracking[msg.sender];
+
+            if (userProportionalShare > userAlreadyReceived) {
+                uint256 rewardAmount = userProportionalShare - userAlreadyReceived;
+                stakeRewardsTracking[msg.sender] = userProportionalShare;
+                SafeTransferLib.safeTransferETH(msg.sender, rewardAmount);
+                emit StakerRewardsClaimed(msg.sender, rewardAmount, userProportionalShare);
+            }
+        }
+
+        // Update staking state
+        stakedBalance[msg.sender] -= amount;
+        totalStaked -= amount;
+
+        // Transfer tokens back to user
+        _transfer(address(this), msg.sender, amount);
+
+        emit Unstaked(msg.sender, amount, stakedBalance[msg.sender], totalStaked);
+    }
+
+    /**
+     * @notice Claim proportional share of vault fees accumulated since last personal claim
+     * @dev On-demand claiming with per-user tracking for accurate permissionless claiming
+     *      - Pulls all accumulated fees from vault (using this contract as benefactor)
+     *      - Calculates user's proportional share of ALL fees: (totalFees × userStake / totalStaked)
+     *      - Subtracts what user has already received: pending = proportional - alreadyReceived
+     *      - Transfers pending amount to staker
+     *      - Dust (rounding loss) accumulates in contract, available for owner withdrawal
+     * @return rewardAmount ETH distributed to staker
+     */
+    function claimStakerRewards() external nonReentrant returns (uint256 rewardAmount) {
+        require(stakingEnabled, "Staking not enabled");
+        require(stakedBalance[msg.sender] > 0, "No staked balance");
+        require(totalStaked > 0, "No stakers");
+
+        // Pull all accumulated vault fees (instance is benefactor in vault)
+        uint256 currentVaultFees = vault.claimFees();
+
+        // Calculate user's proportional share of ALL accumulated fees
+        // userShare = (currentVaultFees × userStake) / totalStaked
+        uint256 userProportionalShare = (currentVaultFees * stakedBalance[msg.sender]) / totalStaked;
+
+        // How much has this user already claimed?
+        uint256 userAlreadyReceived = stakeRewardsTracking[msg.sender];
+
+        // Calculate pending: what user is entitled to minus what they've already received
+        rewardAmount = userProportionalShare - userAlreadyReceived;
+
+        require(rewardAmount > 0, "No pending rewards");
+
+        // Update user's tracking point to their new proportional share
+        stakeRewardsTracking[msg.sender] = userProportionalShare;
+
+        // Transfer reward to staker
+        SafeTransferLib.safeTransferETH(msg.sender, rewardAmount);
+
+        emit StakerRewardsClaimed(msg.sender, rewardAmount, userProportionalShare);
+        return rewardAmount;
+    }
+
+    /**
+     * @notice Calculate pending rewards for a staker without claiming
+     * @param staker Address of staker
+     * @return pendingReward Estimated reward available to claim
+     */
+    function calculatePendingRewards(address staker) external view returns (uint256 pendingReward) {
+        if (!stakingEnabled || stakedBalance[staker] == 0 || totalStaked == 0) {
+            return 0;
+        }
+
+        // Get current total fees accumulated in vault for this instance
+        uint256 currentVaultFees = vault.calculateClaimableAmount(address(this));
+
+        // Calculate staker's proportional share of ALL accumulated fees
+        uint256 userProportionalShare = (currentVaultFees * stakedBalance[staker]) / totalStaked;
+
+        // How much has user already claimed?
+        uint256 userAlreadyReceived = stakeRewardsTracking[staker];
+
+        // Pending is the difference
+        pendingReward = userProportionalShare > userAlreadyReceived
+            ? userProportionalShare - userAlreadyReceived
+            : 0;
+
+        return pendingReward;
+    }
+
+    /**
+     * @notice Get staking information for a user
+     * @param user User address
+     * @return staked Amount staked by user
+     * @return totalStakedGlobal Total tokens staked
+     * @return userProportion User's proportion as bps (basis points)
+     * @return lastTrackedFees Last fee point when user claimed
+     */
+    function getStakingInfo(address user) external view returns (
+        uint256 staked,
+        uint256 totalStakedGlobal,
+        uint256 userProportion,
+        uint256 lastTrackedFees
+    ) {
+        staked = stakedBalance[user];
+        totalStakedGlobal = totalStaked;
+        userProportion = totalStaked > 0 ? (staked * 10000) / totalStaked : 0; // in basis points
+        lastTrackedFees = stakeRewardsTracking[user];
+    }
+
+    /**
+     * @notice Get global staking statistics
+     * @return enabled Whether staking is enabled
+     * @return globalTotalStaked Total tokens staked
+     * @return globalLastVaultFeesClaimed Last fee amount pulled from vault
+     * @return contractBalance Contract's ETH balance
+     */
+    function getStakingStats() external view returns (
+        bool enabled,
+        uint256 globalTotalStaked,
+        uint256 globalLastVaultFeesClaimed,
+        uint256 contractBalance
+    ) {
+        return (
+            stakingEnabled,
+            totalStaked,
+            lastVaultFeesClaimed,
+            address(this).balance
+        );
+    }
+
+    /**
+     * @notice Owner withdrawal of unclaimed dust and contract balance
+     * @dev Available to withdraw: contract balance minus totalStaked (staked tokens)
+     *      This recovers rounding dust from fee distributions
+     * @param amount Amount to withdraw
+     */
+    function withdrawDust(uint256 amount) external onlyOwner nonReentrant {
+        uint256 dustAvailable = address(this).balance;
+        require(amount <= dustAvailable, "Amount exceeds available balance");
+        SafeTransferLib.safeTransferETH(owner(), amount);
     }
 
     // ┌─────────────────────────┐

@@ -101,11 +101,26 @@ contract UltraAlignmentV4Hook is BaseTestHooks, ReentrancyGuard, Ownable {
         BalanceDelta delta,
         bytes calldata hookData
     ) external override onlyPoolManager returns (bytes4, int128) {
+        // Calculate tax and send to vault
+        int128 taxDelta = _processTax(sender, key, params, delta);
+        return (IHooks.afterSwap.selector, taxDelta);
+    }
+
+    /**
+     * @dev Internal function to process tax calculation and transfer
+     * Extracted to avoid stack too deep errors
+     */
+    function _processTax(
+        address sender,
+        PoolKey calldata key,
+        IPoolManager.SwapParams calldata params,
+        BalanceDelta delta
+    ) private returns (int128) {
         // Calculate which currency is being swapped out (the unspecified currency)
         bool specifiedTokenIs0 = (params.amountSpecified < 0 == params.zeroForOne);
         Currency taxCurrency;
         int128 swapAmount;
-        
+
         if (specifiedTokenIs0) {
             // Swapping token0 for token1, tax is on token1 (output)
             taxCurrency = key.currency1;
@@ -115,13 +130,13 @@ contract UltraAlignmentV4Hook is BaseTestHooks, ReentrancyGuard, Ownable {
             taxCurrency = key.currency0;
             swapAmount = delta.amount0();
         }
-        
+
         // Get absolute value of swap amount
         if (swapAmount < 0) swapAmount = -swapAmount;
-        
+
         // Calculate tax amount
         uint256 taxAmount = (uint128(swapAmount) * taxRateBips) / 10000;
-        
+
         if (taxAmount > 0) {
             // ENFORCE: Only accept ETH/WETH taxes (pools must be ETH/WETH paired)
             address token = Currency.unwrap(taxCurrency);
@@ -129,7 +144,7 @@ contract UltraAlignmentV4Hook is BaseTestHooks, ReentrancyGuard, Ownable {
                 token == weth || token == address(0),
                 "Hook only accepts ETH/WETH taxes - pool must be ETH/WETH paired"
             );
-            
+
             // Take tokens from the pool manager
             poolManager.take(taxCurrency, address(this), taxAmount);
 
@@ -138,12 +153,12 @@ contract UltraAlignmentV4Hook is BaseTestHooks, ReentrancyGuard, Ownable {
             vault.receiveHookTax{value: taxAmount}(taxCurrency, taxAmount, sender);
 
             emit SwapTaxed(sender, taxCurrency, taxAmount, sender);
-            
+
             // Return the tax amount as positive delta (hook took tokens)
-            return (IHooks.afterSwap.selector, taxAmount.toInt128());
+            return taxAmount.toInt128();
         }
-        
-        return (IHooks.afterSwap.selector, 0);
+
+        return 0;
     }
 
 

@@ -1,0 +1,1021 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.20;
+
+import {UUPSUpgradeable} from "solady/utils/UUPSUpgradeable.sol";
+import {Ownable} from "solady/auth/Ownable.sol";
+import {ReentrancyGuard} from "solady/utils/ReentrancyGuard.sol";
+
+/**
+ * @title GenericProposalGovernance
+ * @notice Universal deposit-based governance system for any on-chain decision
+ * @dev Features:
+ *      - Multiple proposal types (factory approval, parameter changes, treasury, custom)
+ *      - Deposit-based voting (flash-loan resistant)
+ *      - Sequential challenge rounds (unlimited)
+ *      - Message system for discourse
+ *      - Generic execution via encoded calldata
+ *      - Reusable by downstream projects
+ *
+ * Proposal Flow:
+ * 1. Create proposal (type-specific requirements)
+ * 2. Initial Vote (7 days): EXEC tokens deposited to yay/nay
+ * 3. Challenge Window (7 days): Anyone can challenge with deposit ≥ cumulative yay
+ * 4. Challenge Vote (7 days): New vote round starts immediately
+ * 5. Repeat challenges sequentially until:
+ *    - Nay wins → Rejected
+ *    - Yay wins → 3-day lame duck → Execution
+ */
+contract GenericProposalGovernance is UUPSUpgradeable, Ownable, ReentrancyGuard {
+    // ============ Constants ============
+
+    uint256 public constant MIN_QUORUM = 500_000_000; // 500 EXEC NFTs (EXEC has 6 decimals)
+    uint256 public constant MIN_DEPOSIT = 1_000_000; // 1 EXEC NFT minimum per vote
+
+    uint256 public constant INITIAL_VOTING_PERIOD = 7 days;
+    uint256 public constant CHALLENGE_WINDOW = 7 days;
+    uint256 public constant CHALLENGE_VOTING_PERIOD = 7 days;
+    uint256 public constant LAME_DUCK_PERIOD = 3 days;
+
+    // ============ Enums ============
+
+    enum ProposalType {
+        FactoryApproval,    // Apply for factory registration (fee-based, open)
+        ParameterChange,    // Change protocol parameter (owner or threshold)
+        TreasurySpend,      // Spend treasury funds (threshold)
+        CustomExecution     // Execute arbitrary call (threshold)
+    }
+
+    enum ProposalPhase {
+        InitialVoting,      // 7-day initial vote
+        ChallengeWindow,    // 7-day window to challenge (if yay won)
+        ChallengeVoting,    // 7-day challenge vote
+        LameDuck,           // 3-day final window before execution
+        Approved,           // Ready for execution (permissionless)
+        Rejected,           // Failed vote or challenge
+        Executed            // Successfully executed
+    }
+
+    enum MessageActionType {
+        ProposalCreation,   // Proposal submission
+        Vote,               // Vote deposit
+        Challenge           // Challenge initiation
+    }
+
+    // ============ Structs ============
+
+    struct ProposalParams {
+        ProposalType proposalType;
+        string title;
+        string description;
+        address proposer;
+        address executionTarget;
+        bytes executionData;
+        uint256 feePaid;
+        string message;
+    }
+
+    struct FactoryProposalData {
+        address factoryAddress;
+        string contractType;
+        string title;
+        string displayTitle;
+        string metadataURI;
+        bytes32[] features;
+        string message;
+    }
+
+    struct VoteRound {
+        uint256 roundIndex;
+        uint256 yayDeposits;
+        uint256 nayDeposits;
+        uint256 startTime;
+        uint256 endTime;
+        address challenger;       // address(0) for initial round
+        uint256 challengeDeposit; // EXEC deposited to initiate challenge
+        bool resolved;
+        bool yayWon;
+    }
+
+    struct VoteDeposit {
+        uint256 amount;
+        bool supportsApproval; // true = yay, false = nay
+        bool withdrawn;
+    }
+
+    struct GovernanceMessage {
+        address sender;
+        uint128 packedData; // timestamp:32 | roundIndex:32 | actionType:8 | reserved:56
+        string message;
+    }
+
+    struct Proposal {
+        bytes32 proposalId;
+        ProposalType proposalType;
+        address proposer;
+        string title;
+        string description;
+
+        // Execution data
+        address executionTarget;    // Contract to call
+        bytes executionData;        // Encoded function call
+
+        // State management
+        ProposalPhase phase;
+        uint256 phaseDeadline;
+        uint256 createdAt;
+        uint256 proposalFee;        // Fee paid (if applicable)
+        uint256 cumulativeYayRequired; // Sum of all yay votes (for next challenge deposit)
+
+        // Voting rounds
+        VoteRound[] rounds;
+    }
+
+    struct ProposalTypeConfig {
+        uint256 proposalFee;        // Fee to create (0 = no fee)
+        uint256 proposalThreshold;  // Min EXEC balance required to propose (0 = no threshold)
+        bool requiresOwner;         // Only owner can create this type
+        bool enabled;               // Can be toggled on/off
+    }
+
+    // ============ State Variables ============
+
+    address public execToken;
+    address public defaultExecutionTarget; // Usually MasterRegistry
+    bool private _initialized;
+
+    // Proposals
+    mapping(bytes32 => Proposal) public proposals;
+    bytes32[] public proposalIds;
+    uint256 public proposalNonce;
+
+    // Voting deposits: proposalId => voter => roundIndex => deposit
+    mapping(bytes32 => mapping(address => mapping(uint256 => VoteDeposit))) public deposits;
+
+    // Message system
+    mapping(uint256 => GovernanceMessage) public governanceMessages;
+    mapping(bytes32 => uint256[]) public proposalMessages; // proposalId => messageIds[]
+    uint256 public totalMessages;
+
+    // Proposal type configurations
+    mapping(ProposalType => ProposalTypeConfig) public typeConfigs;
+
+    // Convenience mappings for backward compatibility
+    mapping(address => bytes32) public factoryToProposalId; // factory => proposalId
+
+    // ============ Events ============
+
+    event ProposalCreated(
+        bytes32 indexed proposalId,
+        ProposalType indexed proposalType,
+        address indexed proposer,
+        string title,
+        address executionTarget,
+        uint256 votingDeadline
+    );
+
+    event VoteDeposited(
+        bytes32 indexed proposalId,
+        uint256 indexed roundIndex,
+        address indexed voter,
+        bool approve,
+        uint256 amount
+    );
+
+    event VoteDepositAdded(
+        bytes32 indexed proposalId,
+        uint256 indexed roundIndex,
+        address indexed voter,
+        uint256 additionalAmount,
+        uint256 newTotal
+    );
+
+    event ChallengeInitiated(
+        bytes32 indexed proposalId,
+        uint256 indexed roundIndex,
+        address indexed challenger,
+        uint256 challengeDeposit,
+        uint256 requiredDeposit,
+        uint256 votingDeadline
+    );
+
+    event RoundFinalized(
+        bytes32 indexed proposalId,
+        uint256 indexed roundIndex,
+        bool yayWon,
+        uint256 yayVotes,
+        uint256 nayVotes
+    );
+
+    event ProposalApproved(
+        bytes32 indexed proposalId,
+        uint256 totalRounds,
+        uint256 lameDuckDeadline
+    );
+
+    event ProposalRejected(
+        bytes32 indexed proposalId,
+        uint256 indexed roundIndex,
+        string reason
+    );
+
+    event ProposalExecuted(
+        bytes32 indexed proposalId,
+        address indexed executor,
+        bool success
+    );
+
+    event DepositWithdrawn(
+        bytes32 indexed proposalId,
+        address indexed voter,
+        uint256 totalAmount
+    );
+
+    event MessagePosted(
+        uint256 indexed messageId,
+        bytes32 indexed proposalId,
+        address indexed sender,
+        MessageActionType actionType,
+        uint256 roundIndex
+    );
+
+    event ProposalTypeConfigUpdated(
+        ProposalType indexed proposalType,
+        uint256 fee,
+        uint256 threshold,
+        bool requiresOwner,
+        bool enabled
+    );
+
+    event ExecTokenSet(address indexed newToken);
+    event DefaultExecutionTargetSet(address indexed newTarget);
+
+    // ============ Constructor & Initialization ============
+
+    constructor() {
+        // Don't initialize owner here - let initialize() do it
+    }
+
+    function initialize(
+        address _execToken,
+        address _defaultExecutionTarget,
+        address _owner
+    ) public {
+        require(!_initialized, "Already initialized");
+        require(_execToken != address(0), "Invalid EXEC token");
+        require(_defaultExecutionTarget != address(0), "Invalid execution target");
+        require(_owner != address(0), "Invalid owner");
+
+        _initialized = true;
+        _initializeOwner(_owner);
+        execToken = _execToken;
+        defaultExecutionTarget = _defaultExecutionTarget;
+
+        // Initialize proposal type configs
+        // FactoryApproval: 0.1 ETH fee, open to anyone
+        typeConfigs[ProposalType.FactoryApproval] = ProposalTypeConfig({
+            proposalFee: 0.1 ether,
+            proposalThreshold: 0,
+            requiresOwner: false,
+            enabled: true
+        });
+
+        // ParameterChange: no fee, owner only
+        typeConfigs[ProposalType.ParameterChange] = ProposalTypeConfig({
+            proposalFee: 0,
+            proposalThreshold: 0,
+            requiresOwner: true,
+            enabled: true
+        });
+
+        // TreasurySpend: no fee, 10000 EXEC threshold (10M with 6 decimals)
+        typeConfigs[ProposalType.TreasurySpend] = ProposalTypeConfig({
+            proposalFee: 0,
+            proposalThreshold: 10_000_000_000, // 10000 EXEC NFTs
+            requiresOwner: false,
+            enabled: true
+        });
+
+        // CustomExecution: no fee, 5000 EXEC threshold (5M with 6 decimals)
+        typeConfigs[ProposalType.CustomExecution] = ProposalTypeConfig({
+            proposalFee: 0,
+            proposalThreshold: 5_000_000_000, // 5000 EXEC NFTs
+            requiresOwner: false,
+            enabled: true
+        });
+    }
+
+    // ============ Proposal Creation ============
+
+    /**
+     * @notice Propose a factory for approval
+     * @param factoryAddress Factory contract address
+     * @param contractType Type of factory (e.g., "ERC404", "ERC1155")
+     * @param title Short title
+     * @param displayTitle Display-friendly title
+     * @param metadataURI Metadata URI
+     * @param features Feature flags
+     * @param message Optional message explaining the proposal
+     */
+    function proposeFactoryApproval(
+        address factoryAddress,
+        string calldata contractType,
+        string calldata title,
+        string calldata displayTitle,
+        string calldata metadataURI,
+        bytes32[] calldata features,
+        string calldata message
+    ) external payable nonReentrant returns (bytes32 proposalId) {
+        return _proposeFactoryApprovalInternal(FactoryProposalData({
+            factoryAddress: factoryAddress,
+            contractType: contractType,
+            title: title,
+            displayTitle: displayTitle,
+            metadataURI: metadataURI,
+            features: features,
+            message: message
+        }), msg.sender);
+    }
+
+    function _proposeFactoryApprovalInternal(
+        FactoryProposalData calldata data,
+        address applicant
+    ) internal returns (bytes32 proposalId) {
+        ProposalTypeConfig memory config = typeConfigs[ProposalType.FactoryApproval];
+        require(config.enabled, "Factory approval proposals disabled");
+        require(msg.value >= config.proposalFee, "Insufficient fee");
+        require(data.factoryAddress != address(0), "Invalid factory address");
+
+        // Check if factory already has pending proposal
+        _checkFactoryAvailability(data.factoryAddress);
+
+        // Encode execution data
+        bytes memory executionData = abi.encodeWithSignature(
+            "registerFactoryWithFeaturesAndCreator(address,string,string,string,string,bytes32[],address)",
+            data.factoryAddress,
+            data.contractType,
+            data.title,
+            data.displayTitle,
+            data.metadataURI,
+            data.features,
+            applicant
+        );
+
+        proposalId = _createFactoryProposal(
+            data.title,
+            data.displayTitle,
+            applicant,
+            executionData,
+            data.message
+        );
+
+        // Store factory mapping for convenience
+        factoryToProposalId[data.factoryAddress] = proposalId;
+
+        // Refund excess
+        uint256 excess = msg.value - config.proposalFee;
+        if (excess > 0) {
+            payable(applicant).transfer(excess);
+        }
+
+        return proposalId;
+    }
+
+    function _checkFactoryAvailability(address factoryAddress) internal view {
+        bytes32 existingId = factoryToProposalId[factoryAddress];
+        if (existingId != bytes32(0)) {
+            ProposalPhase existingPhase = proposals[existingId].phase;
+            require(
+                existingPhase == ProposalPhase.Executed || existingPhase == ProposalPhase.Rejected,
+                "Factory already has pending proposal"
+            );
+        }
+    }
+
+    function _createFactoryProposal(
+        string calldata title,
+        string calldata displayTitle,
+        address applicant,
+        bytes memory executionData,
+        string calldata message
+    ) internal returns (bytes32) {
+        return _createProposal(ProposalParams({
+            proposalType: ProposalType.FactoryApproval,
+            title: string(abi.encodePacked("Factory: ", title)),
+            description: string(abi.encodePacked("Apply for factory approval: ", displayTitle)),
+            proposer: applicant,
+            executionTarget: defaultExecutionTarget,
+            executionData: executionData,
+            feePaid: msg.value,
+            message: message
+        }));
+    }
+
+    /**
+     * @notice Propose a parameter change (owner only)
+     * @param title Proposal title
+     * @param description Detailed description
+     * @param target Contract to call
+     * @param callData Encoded function call
+     * @param message Optional message explaining rationale
+     */
+    function proposeParameterChange(
+        string calldata title,
+        string calldata description,
+        address target,
+        bytes calldata callData,
+        string calldata message
+    ) external nonReentrant returns (bytes32 proposalId) {
+        ProposalTypeConfig memory config = typeConfigs[ProposalType.ParameterChange];
+        require(config.enabled, "Parameter change proposals disabled");
+        require(config.requiresOwner && msg.sender == owner(), "Only owner");
+
+        return _createProposal(ProposalParams({
+            proposalType: ProposalType.ParameterChange,
+            title: title,
+            description: description,
+            proposer: msg.sender,
+            executionTarget: target,
+            executionData: callData,
+            feePaid: 0,
+            message: message
+        }));
+    }
+
+    /**
+     * @notice Propose treasury spend
+     * @param title Proposal title
+     * @param description Detailed description
+     * @param target Contract to call (usually treasury)
+     * @param callData Encoded function call
+     * @param message Optional message explaining need
+     */
+    function proposeTreasurySpend(
+        string calldata title,
+        string calldata description,
+        address target,
+        bytes calldata callData,
+        string calldata message
+    ) external nonReentrant returns (bytes32 proposalId) {
+        ProposalTypeConfig memory config = typeConfigs[ProposalType.TreasurySpend];
+        require(config.enabled, "Treasury spend proposals disabled");
+
+        if (config.proposalThreshold > 0) {
+            require(
+                IERC20(execToken).balanceOf(msg.sender) >= config.proposalThreshold,
+                "Insufficient EXEC balance"
+            );
+        }
+
+        return _createProposal(ProposalParams({
+            proposalType: ProposalType.TreasurySpend,
+            title: title,
+            description: description,
+            proposer: msg.sender,
+            executionTarget: target,
+            executionData: callData,
+            feePaid: 0,
+            message: message
+        }));
+    }
+
+    /**
+     * @notice Propose custom execution
+     * @param title Proposal title
+     * @param description Detailed description
+     * @param target Contract to call
+     * @param callData Encoded function call
+     * @param message Optional message explaining proposal
+     */
+    function proposeCustomExecution(
+        string calldata title,
+        string calldata description,
+        address target,
+        bytes calldata callData,
+        string calldata message
+    ) external nonReentrant returns (bytes32 proposalId) {
+        ProposalTypeConfig memory config = typeConfigs[ProposalType.CustomExecution];
+        require(config.enabled, "Custom execution proposals disabled");
+
+        if (config.proposalThreshold > 0) {
+            require(
+                IERC20(execToken).balanceOf(msg.sender) >= config.proposalThreshold,
+                "Insufficient EXEC balance"
+            );
+        }
+
+        return _createProposal(ProposalParams({
+            proposalType: ProposalType.CustomExecution,
+            title: title,
+            description: description,
+            proposer: msg.sender,
+            executionTarget: target,
+            executionData: callData,
+            feePaid: 0,
+            message: message
+        }));
+    }
+
+    /**
+     * @notice Internal function to create proposal
+     */
+    function _createProposal(ProposalParams memory params) internal returns (bytes32 proposalId) {
+        // Generate unique proposal ID
+        proposalId = keccak256(abi.encodePacked(
+            params.proposalType,
+            params.proposer,
+            proposalNonce++,
+            block.timestamp
+        ));
+
+        // Create proposal
+        Proposal storage proposal = proposals[proposalId];
+        proposal.proposalId = proposalId;
+        proposal.proposalType = params.proposalType;
+        proposal.proposer = params.proposer;
+        proposal.title = params.title;
+        proposal.description = params.description;
+        proposal.executionTarget = params.executionTarget;
+        proposal.executionData = params.executionData;
+        proposal.phase = ProposalPhase.InitialVoting;
+        uint256 deadline = block.timestamp + INITIAL_VOTING_PERIOD;
+        proposal.phaseDeadline = deadline;
+        proposal.createdAt = block.timestamp;
+        proposal.proposalFee = params.feePaid;
+        proposal.cumulativeYayRequired = 0;
+
+        // Create initial voting round
+        proposal.rounds.push(VoteRound({
+            roundIndex: 0,
+            yayDeposits: 0,
+            nayDeposits: 0,
+            startTime: block.timestamp,
+            endTime: deadline,
+            challenger: address(0),
+            challengeDeposit: 0,
+            resolved: false,
+            yayWon: false
+        }));
+
+        // Store in array for enumeration
+        proposalIds.push(proposalId);
+
+        // Store message if provided
+        if (bytes(params.message).length > 0) {
+            _storeMessage(proposalId, params.proposer, 0, MessageActionType.ProposalCreation, params.message);
+        }
+
+        emit ProposalCreated(
+            proposalId,
+            params.proposalType,
+            params.proposer,
+            params.title,
+            params.executionTarget,
+            deadline
+        );
+
+        return proposalId;
+    }
+
+    // ============ Voting Functions ============
+
+    /**
+     * @notice Deposit EXEC tokens to vote on proposal
+     * @param proposalId Proposal to vote on
+     * @param approve true = yay, false = nay
+     * @param amount Amount of EXEC to deposit (must be >= MIN_DEPOSIT)
+     * @param message Optional message explaining vote
+     */
+    function voteWithDeposit(
+        bytes32 proposalId,
+        bool approve,
+        uint256 amount,
+        string calldata message
+    ) external nonReentrant {
+        Proposal storage proposal = proposals[proposalId];
+        require(proposal.proposer != address(0), "Proposal not found");
+        require(
+            proposal.phase == ProposalPhase.InitialVoting ||
+            proposal.phase == ProposalPhase.ChallengeVoting,
+            "Not in voting phase"
+        );
+        require(block.timestamp <= proposal.phaseDeadline, "Voting period ended");
+        require(amount >= MIN_DEPOSIT, "Below minimum deposit");
+
+        uint256 currentRound = proposal.rounds.length - 1;
+        VoteDeposit storage existingDeposit = deposits[proposalId][msg.sender][currentRound];
+
+        // If voter already has a deposit in this round, they can only add to same side
+        if (existingDeposit.amount > 0) {
+            require(
+                existingDeposit.supportsApproval == approve,
+                "Cannot vote for opposite side"
+            );
+
+            // Transfer additional EXEC
+            require(
+                IERC20(execToken).transferFrom(msg.sender, address(this), amount),
+                "Transfer failed"
+            );
+
+            existingDeposit.amount += amount;
+
+            // Update round totals
+            if (approve) {
+                proposal.rounds[currentRound].yayDeposits += amount;
+            } else {
+                proposal.rounds[currentRound].nayDeposits += amount;
+            }
+
+            emit VoteDepositAdded(
+                proposalId,
+                currentRound,
+                msg.sender,
+                amount,
+                existingDeposit.amount
+            );
+        } else {
+            // New deposit for this voter in this round
+            require(
+                IERC20(execToken).transferFrom(msg.sender, address(this), amount),
+                "Transfer failed"
+            );
+
+            deposits[proposalId][msg.sender][currentRound] = VoteDeposit({
+                amount: amount,
+                supportsApproval: approve,
+                withdrawn: false
+            });
+
+            // Update round totals
+            if (approve) {
+                proposal.rounds[currentRound].yayDeposits += amount;
+            } else {
+                proposal.rounds[currentRound].nayDeposits += amount;
+            }
+
+            emit VoteDeposited(proposalId, currentRound, msg.sender, approve, amount);
+        }
+
+        // Store message if provided
+        if (bytes(message).length > 0) {
+            _storeMessage(proposalId, msg.sender, currentRound, MessageActionType.Vote, message);
+        }
+    }
+
+    // ============ Round Finalization ============
+
+    /**
+     * @notice Finalize a completed voting round
+     * @param proposalId Proposal to finalize
+     */
+    function finalizeRound(bytes32 proposalId) external nonReentrant {
+        Proposal storage proposal = proposals[proposalId];
+        require(proposal.proposer != address(0), "Proposal not found");
+        require(
+            proposal.phase == ProposalPhase.InitialVoting ||
+            proposal.phase == ProposalPhase.ChallengeVoting,
+            "Not in voting phase"
+        );
+        require(block.timestamp > proposal.phaseDeadline, "Voting period not ended");
+
+        uint256 currentRound = proposal.rounds.length - 1;
+        VoteRound storage round = proposal.rounds[currentRound];
+        require(!round.resolved, "Round already finalized");
+
+        uint256 totalVotes = round.yayDeposits + round.nayDeposits;
+        require(totalVotes >= MIN_QUORUM, "Quorum not met");
+
+        bool yayWon = round.yayDeposits > round.nayDeposits;
+        round.resolved = true;
+        round.yayWon = yayWon;
+
+        emit RoundFinalized(proposalId, currentRound, yayWon, round.yayDeposits, round.nayDeposits);
+
+        if (yayWon) {
+            // Yay won - add to cumulative requirement and enter challenge window
+            proposal.cumulativeYayRequired += round.yayDeposits;
+            proposal.phase = ProposalPhase.ChallengeWindow;
+            proposal.phaseDeadline = block.timestamp + CHALLENGE_WINDOW;
+        } else {
+            // Nay won - proposal rejected
+            proposal.phase = ProposalPhase.Rejected;
+            proposal.phaseDeadline = 0;
+
+            emit ProposalRejected(
+                proposalId,
+                currentRound,
+                "Majority voted against approval"
+            );
+        }
+    }
+
+    // ============ Challenge System ============
+
+    /**
+     * @notice Initiate a challenge against an approved vote
+     * @param proposalId Proposal to challenge
+     * @param challengeDeposit EXEC tokens to deposit (must be >= cumulativeYayRequired)
+     * @param message Optional message explaining the challenge
+     */
+    function initiateChallenge(
+        bytes32 proposalId,
+        uint256 challengeDeposit,
+        string calldata message
+    ) external nonReentrant {
+        Proposal storage proposal = proposals[proposalId];
+        require(proposal.proposer != address(0), "Proposal not found");
+        require(
+            proposal.phase == ProposalPhase.ChallengeWindow ||
+            proposal.phase == ProposalPhase.LameDuck,
+            "Not in challenge period"
+        );
+        require(block.timestamp <= proposal.phaseDeadline, "Challenge period ended");
+        require(
+            challengeDeposit >= proposal.cumulativeYayRequired,
+            "Insufficient challenge deposit"
+        );
+
+        // Transfer challenge deposit
+        require(
+            IERC20(execToken).transferFrom(msg.sender, address(this), challengeDeposit),
+            "Transfer failed"
+        );
+
+        // Create new challenge round
+        uint256 newRoundIndex = proposal.rounds.length;
+        proposal.rounds.push(VoteRound({
+            roundIndex: newRoundIndex,
+            yayDeposits: 0,
+            nayDeposits: 0,
+            startTime: block.timestamp,
+            endTime: block.timestamp + CHALLENGE_VOTING_PERIOD,
+            challenger: msg.sender,
+            challengeDeposit: challengeDeposit,
+            resolved: false,
+            yayWon: false
+        }));
+
+        // Challenger's deposit is stored separately so they can withdraw it
+        deposits[proposalId][msg.sender][newRoundIndex] = VoteDeposit({
+            amount: challengeDeposit,
+            supportsApproval: false, // Challenger is betting on nay
+            withdrawn: false
+        });
+
+        // Update proposal phase
+        proposal.phase = ProposalPhase.ChallengeVoting;
+        proposal.phaseDeadline = block.timestamp + CHALLENGE_VOTING_PERIOD;
+
+        // Store message if provided
+        if (bytes(message).length > 0) {
+            _storeMessage(proposalId, msg.sender, newRoundIndex, MessageActionType.Challenge, message);
+        }
+
+        emit ChallengeInitiated(
+            proposalId,
+            newRoundIndex,
+            msg.sender,
+            challengeDeposit,
+            proposal.cumulativeYayRequired,
+            proposal.phaseDeadline
+        );
+    }
+
+    // ============ Execution ============
+
+    /**
+     * @notice Move from challenge window to lame duck if no challenges
+     * @param proposalId Proposal to transition
+     */
+    function enterLameDuck(bytes32 proposalId) external nonReentrant {
+        Proposal storage proposal = proposals[proposalId];
+        require(proposal.proposer != address(0), "Proposal not found");
+        require(proposal.phase == ProposalPhase.ChallengeWindow, "Not in challenge window");
+        require(block.timestamp > proposal.phaseDeadline, "Challenge window not ended");
+
+        proposal.phase = ProposalPhase.LameDuck;
+        proposal.phaseDeadline = block.timestamp + LAME_DUCK_PERIOD;
+
+        emit ProposalApproved(proposalId, proposal.rounds.length, proposal.phaseDeadline);
+    }
+
+    /**
+     * @notice Execute an approved proposal (permissionless)
+     * @param proposalId Proposal to execute
+     */
+    function executeProposal(bytes32 proposalId) external nonReentrant {
+        Proposal storage proposal = proposals[proposalId];
+        require(proposal.proposer != address(0), "Proposal not found");
+        require(proposal.phase == ProposalPhase.LameDuck, "Not in lame duck period");
+        require(block.timestamp > proposal.phaseDeadline, "Lame duck period not ended");
+
+        // Mark as approved
+        proposal.phase = ProposalPhase.Approved;
+
+        // Execute the proposal
+        (bool success, ) = proposal.executionTarget.call(proposal.executionData);
+
+        if (success) {
+            proposal.phase = ProposalPhase.Executed;
+        }
+
+        emit ProposalExecuted(proposalId, msg.sender, success);
+
+        require(success, "Execution failed");
+    }
+
+    // ============ Withdrawal ============
+
+    /**
+     * @notice Withdraw all deposited EXEC tokens after proposal is resolved
+     * @param proposalId Proposal to withdraw from
+     */
+    function withdrawDeposits(bytes32 proposalId) external nonReentrant {
+        Proposal storage proposal = proposals[proposalId];
+        require(proposal.proposer != address(0), "Proposal not found");
+        require(
+            proposal.phase == ProposalPhase.Executed ||
+            proposal.phase == ProposalPhase.Rejected,
+            "Proposal not resolved"
+        );
+
+        uint256 totalWithdrawal = 0;
+
+        // Iterate through all rounds and collect deposits
+        for (uint256 i = 0; i < proposal.rounds.length; i++) {
+            VoteDeposit storage deposit = deposits[proposalId][msg.sender][i];
+
+            if (deposit.amount > 0 && !deposit.withdrawn) {
+                totalWithdrawal += deposit.amount;
+                deposit.withdrawn = true;
+            }
+        }
+
+        require(totalWithdrawal > 0, "No deposits to withdraw");
+
+        // Transfer all EXEC back to voter
+        require(
+            IERC20(execToken).transfer(msg.sender, totalWithdrawal),
+            "Transfer failed"
+        );
+
+        emit DepositWithdrawn(proposalId, msg.sender, totalWithdrawal);
+    }
+
+    // ============ View Functions ============
+
+    function getProposal(bytes32 proposalId) external view returns (
+        ProposalType proposalType,
+        address proposer,
+        string memory title,
+        string memory description,
+        address executionTarget,
+        ProposalPhase phase,
+        uint256 phaseDeadline,
+        uint256 cumulativeYayRequired,
+        uint256 roundCount
+    ) {
+        Proposal storage proposal = proposals[proposalId];
+        return (
+            proposal.proposalType,
+            proposal.proposer,
+            proposal.title,
+            proposal.description,
+            proposal.executionTarget,
+            proposal.phase,
+            proposal.phaseDeadline,
+            proposal.cumulativeYayRequired,
+            proposal.rounds.length
+        );
+    }
+
+    function getRound(bytes32 proposalId, uint256 roundIndex)
+        external
+        view
+        returns (VoteRound memory)
+    {
+        return proposals[proposalId].rounds[roundIndex];
+    }
+
+    function getVoterDeposit(
+        bytes32 proposalId,
+        address voter,
+        uint256 roundIndex
+    ) external view returns (VoteDeposit memory) {
+        return deposits[proposalId][voter][roundIndex];
+    }
+
+    function getCurrentRound(bytes32 proposalId) external view returns (uint256) {
+        Proposal storage proposal = proposals[proposalId];
+        require(proposal.rounds.length > 0, "No rounds");
+        return proposal.rounds.length - 1;
+    }
+
+    function getProposalCount() external view returns (uint256) {
+        return proposalIds.length;
+    }
+
+    function getMessage(uint256 messageId) external view returns (
+        address sender,
+        uint32 timestamp,
+        uint32 roundIndex,
+        MessageActionType actionType,
+        string memory message
+    ) {
+        require(messageId < totalMessages, "Message does not exist");
+        GovernanceMessage memory govMsg = governanceMessages[messageId];
+        (timestamp, roundIndex, actionType) = _unpackMessageData(govMsg.packedData);
+        return (govMsg.sender, timestamp, roundIndex, actionType, govMsg.message);
+    }
+
+    function getProposalMessages(bytes32 proposalId) external view returns (uint256[] memory) {
+        return proposalMessages[proposalId];
+    }
+
+    // ============ Admin Functions ============
+
+    function setProposalTypeConfig(
+        ProposalType proposalType,
+        uint256 fee,
+        uint256 threshold,
+        bool requiresOwner,
+        bool enabled
+    ) external onlyOwner {
+        typeConfigs[proposalType] = ProposalTypeConfig({
+            proposalFee: fee,
+            proposalThreshold: threshold,
+            requiresOwner: requiresOwner,
+            enabled: enabled
+        });
+
+        emit ProposalTypeConfigUpdated(proposalType, fee, threshold, requiresOwner, enabled);
+    }
+
+    function setExecToken(address newToken) external onlyOwner {
+        require(newToken != address(0), "Invalid token");
+        execToken = newToken;
+        emit ExecTokenSet(newToken);
+    }
+
+    function setDefaultExecutionTarget(address newTarget) external onlyOwner {
+        require(newTarget != address(0), "Invalid target");
+        defaultExecutionTarget = newTarget;
+        emit DefaultExecutionTargetSet(newTarget);
+    }
+
+    function _authorizeUpgrade(address newImplementation) internal override onlyOwner {}
+
+    // ============ Internal Helper Functions ============
+
+    function _storeMessage(
+        bytes32 proposalId,
+        address sender,
+        uint256 roundIndex,
+        MessageActionType actionType,
+        string memory message
+    ) internal {
+        governanceMessages[totalMessages] = GovernanceMessage({
+            sender: sender,
+            packedData: _packMessageData(uint32(block.timestamp), uint32(roundIndex), actionType),
+            message: message
+        });
+
+        proposalMessages[proposalId].push(totalMessages);
+
+        emit MessagePosted(
+            totalMessages,
+            proposalId,
+            sender,
+            actionType,
+            roundIndex
+        );
+
+        totalMessages++;
+    }
+
+    function _packMessageData(
+        uint32 timestamp,
+        uint32 roundIndex,
+        MessageActionType actionType
+    ) internal pure returns (uint128) {
+        return uint128(timestamp) | (uint128(roundIndex) << 32) | (uint128(uint8(actionType)) << 64);
+    }
+
+    function _unpackMessageData(uint128 packedData) internal pure returns (
+        uint32 timestamp,
+        uint32 roundIndex,
+        MessageActionType actionType
+    ) {
+        timestamp = uint32(packedData);
+        roundIndex = uint32(packedData >> 32);
+        actionType = MessageActionType(uint8(packedData >> 64));
+    }
+}
+
+// ============ Interfaces ============
+
+interface IERC20 {
+    function balanceOf(address account) external view returns (uint256);
+    function transfer(address to, uint256 amount) external returns (bool);
+    function transferFrom(address from, address to, uint256 amount) external returns (bool);
+}

@@ -1,0 +1,835 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.20;
+
+import {UUPSUpgradeable} from "solady/utils/UUPSUpgradeable.sol";
+import {Ownable} from "solady/auth/Ownable.sol";
+import {ReentrancyGuard} from "solady/utils/ReentrancyGuard.sol";
+import {IMasterRegistry} from "./interfaces/IMasterRegistry.sol";
+import {MetadataUtils} from "../shared/libraries/MetadataUtils.sol";
+import {VaultRegistry} from "../registry/VaultRegistry.sol";
+import {FactoryApprovalGovernance} from "../governance/FactoryApprovalGovernance.sol";
+
+/**
+ * @title MasterRegistryV1
+ * @notice Simplified implementation of the Master Registry contract
+ * @dev UUPS upgradeable contract for managing factory registration and instance tracking
+ *
+ * Core Features:
+ * - Factory registration (pre-approved factories only)
+ * - Instance tracking and registration
+ * - Creator instance lookups
+ * - Name collision prevention
+ * - Queue-based featured promotion system
+ * - Time-based expiration with auto-renewal
+ *
+ * Additional Modules:
+ * - Vault/hook registry → VaultRegistry
+ * - Factory voting → FactoryApprovalGovernance
+ */
+contract MasterRegistryV1 is UUPSUpgradeable, Ownable, ReentrancyGuard, IMasterRegistry {
+    // Constants
+    uint256 public constant APPLICATION_FEE = 0.1 ether;
+
+    // State variables
+    uint256 public nextFactoryId;
+
+    // Mappings
+    mapping(uint256 => address) public factoryIdToAddress;
+    mapping(address => FactoryInfo) public factoryInfo;
+    mapping(address => bool) public registeredFactories;
+    mapping(bytes32 => bool) public nameHashes; // For name collision prevention
+    mapping(address => InstanceInfo) public instanceInfo;
+    mapping(address => address[]) public creatorInstances; // creator => instances[]
+
+    // Instance Enumeration (for listing all instances)
+    address[] public allInstances; // Array of all registered instances
+    mapping(address => uint256) public instanceIndex; // instance address => index in allInstances
+
+    // Phase 2 Registry Contracts
+    address public vaultRegistry;
+    address public governanceModule;
+    address public execToken; // EXEC token for governance voting
+
+    // Vault Registry - Hook is now managed by vault, not MasterRegistry
+    mapping(address => IMasterRegistry.VaultInfo) public vaultInfo;
+    mapping(address => bool) public registeredVaults;
+    address[] public vaultList;
+    uint256 public vaultRegistrationFee = 0.05 ether;
+
+    // ============ Queue-Based Featured Promotion System ============
+
+    // Featured promotion queue (ordered by position, index 0 = front)
+    address[] public featuredQueue;
+
+    // Mapping for O(1) position lookups (0 = not in queue, 1+ = position)
+    mapping(address => uint256) public queuePosition;
+
+    // Per-instance promotion details
+    mapping(address => FeaturedPromotion) public activePromotions;
+
+    // Auto-renewal deposits per instance
+    mapping(address => uint256) public renewalDeposits;
+
+    // Configuration parameters
+    uint256 public baseQueuePrice = 0.05 ether;              // Base price to push to back
+    uint256 public frontPriceMultiplier = 10;                // Multiplier for unshift cost
+    uint256 public priceScalingFactor = 0.001 ether;         // Additional cost per queue position
+    uint256 public defaultPromotionDuration = 7 days;        // Default expiration time
+    uint256 public maxQueueSize = 100;                       // Prevent excessive growth
+
+    // Cleanup rate limiting
+    uint256 public lastCleanupTime;
+    uint256 public cleanupInterval = 1 hours;
+
+    // Structs
+    struct InstanceInfo {
+        address instance;
+        address factory;
+        address creator;
+        string name;
+        string metadataURI;
+        bytes32 nameHash;
+        uint256 registeredAt;
+    }
+
+    // Events (FactoryRegistered and InstanceRegistered defined in IMasterRegistry)
+    event CreatorInstanceAdded(address indexed creator, address indexed instance);
+    event GovernanceModuleSet(address indexed newModule);
+    event VaultRegistrySet(address indexed newRegistry);
+
+    // Queue-based promotion events (additional events defined in IMasterRegistry)
+    event PromotionExpired(address indexed instance, uint256 expiredAt);
+    event PromotionAutoRenewed(address indexed instance, uint256 renewalCost, uint256 newExpiresAt);
+    event AutoRenewalDeposited(address indexed instance, address indexed depositor, uint256 amount);
+    event RenewalDepositWithdrawn(address indexed instance, address indexed recipient, uint256 amount);
+    event PromotionsCleanedUp(uint256 count);
+    event QueuePricingUpdated(uint256 basePrice, uint256 frontMultiplier, uint256 scalingFactor);
+    event PromotionDurationUpdated(uint256 newDuration);
+    event MaxQueueSizeUpdated(uint256 newMaxSize);
+    event PromotionForcedRemoval(address indexed instance);
+
+    // Constructor
+    constructor() {
+        _initializeOwner(msg.sender);
+    }
+
+    /**
+     * @notice Initialize the contract (supports flexible parameters via low-level call)
+     * @dev When called with 1 param: param is owner, execToken = address(0)
+     *      When called with 2 params: param1 = execToken, param2 = owner
+     *      This function signature must match what tests expect for .selector
+     */
+    function initialize(address param1, address param2) public {
+        // Determine which signature was used based on parameter validity
+        // If param2 is address(0), assume single-parameter call where param1 = owner
+        if (param2 == address(0)) {
+            _initializeWithOwner(address(0), param1);
+        } else {
+            // Two-parameter call: param1 = execToken, param2 = owner
+            _initializeWithOwner(param1, param2);
+        }
+    }
+
+    /**
+     * @notice Internal initialize logic
+     */
+    function _initializeWithOwner(address _execToken, address _owner) internal {
+        require(_owner != address(0), "Invalid owner");
+        _setOwner(_owner);
+        nextFactoryId = 1;
+
+        // Store EXEC token address
+        if (_execToken != address(0)) {
+            execToken = _execToken;
+        }
+
+        // Initialize vault registration fees
+        if (vaultRegistrationFee == 0) {
+            vaultRegistrationFee = 0.05 ether;
+        }
+
+        // Create governance module if EXEC token is provided and not already set
+        if (governanceModule == address(0) && _execToken != address(0)) {
+            FactoryApprovalGovernance gov = new FactoryApprovalGovernance();
+            // Initialize governance module with EXEC token and this registry
+            gov.initialize(_execToken, address(this), _owner);
+            governanceModule = address(gov);
+        }
+
+        // Initialize queue-based promotion system
+        baseQueuePrice = 0.05 ether;
+        frontPriceMultiplier = 10;
+        priceScalingFactor = 0.001 ether;
+        defaultPromotionDuration = 7 days;
+        maxQueueSize = 100;
+        lastCleanupTime = block.timestamp;
+        cleanupInterval = 1 hours;
+    }
+
+    /**
+     * @notice Register a factory (direct registration, admin only)
+     * @dev In Phase 1, factories are pre-approved and registered by admin.
+     *      In Phase 2, factory approval will be via FactoryApprovalGovernance.
+     *
+     * @param factoryAddress Address of the factory contract
+     * @param contractType Type of contract (e.g., "ERC404", "ERC1155")
+     * @param title Human-readable title
+     * @param displayTitle Display title for UI
+     * @param metadataURI URI for metadata
+     */
+    function registerFactory(
+        address factoryAddress,
+        string memory contractType,
+        string memory title,
+        string memory displayTitle,
+        string memory metadataURI
+    ) external {
+        _registerFactoryInternal(factoryAddress, contractType, title, displayTitle, metadataURI, new bytes32[](0), msg.sender);
+    }
+
+    function registerFactoryWithFeatures(
+        address factoryAddress,
+        string memory contractType,
+        string memory title,
+        string memory displayTitle,
+        string memory metadataURI,
+        bytes32[] memory features
+    ) external {
+        _registerFactoryInternal(factoryAddress, contractType, title, displayTitle, metadataURI, features, msg.sender);
+    }
+
+    function registerFactoryWithFeaturesAndCreator(
+        address factoryAddress,
+        string memory contractType,
+        string memory title,
+        string memory displayTitle,
+        string memory metadataURI,
+        bytes32[] memory features,
+        address creator
+    ) external {
+        _registerFactoryInternal(factoryAddress, contractType, title, displayTitle, metadataURI, features, creator);
+    }
+
+    function _registerFactoryInternal(
+        address factoryAddress,
+        string memory contractType,
+        string memory title,
+        string memory displayTitle,
+        string memory metadataURI,
+        bytes32[] memory features,
+        address creator
+    ) internal {
+        require(msg.sender == owner() || msg.sender == governanceModule, "Only owner or governance");
+        require(factoryAddress != address(0), "Invalid factory address");
+        require(bytes(contractType).length > 0, "Invalid contract type");
+        require(!registeredFactories[factoryAddress], "Factory already registered");
+        require(MetadataUtils.isValidName(title), "Invalid title");
+        require(MetadataUtils.isValidURI(metadataURI), "Invalid metadata URI");
+
+        uint256 factoryId = nextFactoryId++;
+        factoryIdToAddress[factoryId] = factoryAddress;
+
+        factoryInfo[factoryAddress] = FactoryInfo({
+            factoryAddress: factoryAddress,
+            factoryId: factoryId,
+            contractType: contractType,
+            title: title,
+            displayTitle: displayTitle,
+            metadataURI: metadataURI,
+            features: features,
+            creator: creator,
+            active: true,
+            registeredAt: block.timestamp
+        });
+
+        registeredFactories[factoryAddress] = true;
+
+        emit FactoryRegistered(factoryAddress, factoryId, contractType);
+    }
+
+    /**
+     * @notice Register an instance (called by factory)
+     * @param instance Instance address
+     * @param factory Factory address
+     * @param creator Creator address
+     * @param name Instance name
+     * @param metadataURI Metadata URI
+     */
+    function registerInstance(
+        address instance,
+        address factory,
+        address creator,
+        string memory name,
+        string memory metadataURI,
+        address vault
+    ) external override {
+        require(registeredFactories[factory], "Factory not registered");
+        require(msg.sender == factory, "Only factory can register instance");
+        require(instance != address(0), "Invalid instance");
+        require(creator != address(0), "Invalid creator");
+        require(MetadataUtils.isValidName(name), "Invalid name");
+        require(MetadataUtils.isValidURI(metadataURI), "Invalid metadata URI");
+
+        bytes32 nameHash = MetadataUtils.toNameHash(name);
+        require(!nameHashes[nameHash], "Name already taken");
+
+        nameHashes[nameHash] = true;
+
+        instanceInfo[instance] = InstanceInfo({
+            instance: instance,
+            factory: factory,
+            creator: creator,
+            name: name,
+            metadataURI: metadataURI,
+            nameHash: nameHash,
+            registeredAt: block.timestamp
+        });
+
+        creatorInstances[creator].push(instance);
+
+        // Track instance in enumeration array
+        instanceIndex[instance] = allInstances.length;
+        allInstances.push(instance);
+
+        emit InstanceRegistered(instance, factory, creator, name);
+        emit CreatorInstanceAdded(creator, instance);
+    }
+
+    /**
+     * @notice Get factory info by ID
+     */
+    function getFactoryInfo(uint256 factoryId) external view returns (FactoryInfo memory) {
+        address factoryAddress = factoryIdToAddress[factoryId];
+        require(factoryAddress != address(0), "Factory not found");
+        return factoryInfo[factoryAddress];
+    }
+
+    /**
+     * @notice Get factory info by address
+     */
+    function getFactoryInfoByAddress(address factoryAddress) external view returns (FactoryInfo memory) {
+        require(registeredFactories[factoryAddress], "Factory not registered");
+        return factoryInfo[factoryAddress];
+    }
+
+    /**
+     * @notice Get instance info
+     */
+    function getInstanceInfo(address instance) external view returns (InstanceInfo memory) {
+        require(instanceInfo[instance].instance != address(0), "Instance not found");
+        return instanceInfo[instance];
+    }
+
+    /**
+     * @notice Get creator instances
+     */
+    function getCreatorInstances(address creator) external view returns (address[] memory) {
+        return creatorInstances[creator];
+    }
+
+    /**
+     * @notice Get total number of factories
+     */
+    function getTotalFactories() external view returns (uint256) {
+        return nextFactoryId - 1;
+    }
+
+    /**
+     * @notice Check if factory is registered
+     */
+    function isFactoryRegistered(address factory) external view returns (bool) {
+        return registeredFactories[factory];
+    }
+
+    /**
+     * @notice Get total number of instances
+     */
+    function getTotalInstances() external view returns (uint256) {
+        return allInstances.length;
+    }
+
+    // ============ Queue-Based Featured Promotion System ============
+
+    /**
+     * @notice Calculate price to push to back of queue
+     * @return price Current price to append to queue
+     */
+    function getPushBackPrice() public view returns (uint256) {
+        uint256 queueLength = featuredQueue.length;
+        return baseQueuePrice + (queueLength * priceScalingFactor);
+    }
+
+    /**
+     * @notice Calculate price to unshift to front of queue
+     * @return price Current price to prepend to queue
+     */
+    function getUnshiftFrontPrice() public view returns (uint256) {
+        uint256 queueLength = featuredQueue.length;
+        uint256 basePositionPrice = baseQueuePrice + (queueLength * priceScalingFactor);
+        uint256 queuePenalty = queueLength * priceScalingFactor * 2;
+        return (basePositionPrice * frontPriceMultiplier) + queuePenalty;
+    }
+
+    /**
+     * @notice Get all promotion pricing information
+     */
+    function getPromotionPricing() external view returns (
+        uint256 pushBackPrice,
+        uint256 unshiftFrontPrice,
+        uint256 queueLength,
+        uint256 basePrice,
+        uint256 scalingFactor,
+        uint256 frontMultiplier
+    ) {
+        return (
+            getPushBackPrice(),
+            getUnshiftFrontPrice(),
+            featuredQueue.length,
+            baseQueuePrice,
+            priceScalingFactor,
+            frontPriceMultiplier
+        );
+    }
+
+    /**
+     * @notice Purchase featured promotion for an instance
+     * @param instance Instance address to promote
+     * @param unshiftToFront true = front position (expensive), false = back (cheaper)
+     */
+    function purchaseFeaturedPromotion(
+        address instance,
+        bool unshiftToFront
+    ) external payable nonReentrant {
+        require(instanceInfo[instance].instance != address(0), "Instance not registered");
+        require(queuePosition[instance] == 0, "Already promoted");
+
+        uint256 price;
+        if (unshiftToFront) {
+            price = getUnshiftFrontPrice();
+            require(msg.value >= price, "Insufficient payment for front position");
+            _unshiftToFront(instance);
+        } else {
+            price = getPushBackPrice();
+            require(msg.value >= price, "Insufficient payment for back position");
+            _pushToBack(instance);
+        }
+
+        activePromotions[instance] = FeaturedPromotion({
+            instance: instance,
+            purchaser: msg.sender,
+            tierIndex: unshiftToFront ? 1 : 0,
+            pricePaid: price,
+            purchasedAt: block.timestamp,
+            expiresAt: block.timestamp + defaultPromotionDuration
+        });
+
+        if (msg.value > price) {
+            (bool success, ) = payable(msg.sender).call{value: msg.value - price}("");
+            require(success, "Refund failed");
+        }
+
+        emit FeaturedPromotionPurchased(instance, msg.sender, unshiftToFront ? 1 : 0, price);
+    }
+
+    /**
+     * @notice Get featured instances in queue order
+     */
+    function getFeaturedInstances(
+        uint256 startIndex,
+        uint256 endIndex
+    ) external view returns (address[] memory instances, uint256 total) {
+        require(endIndex > startIndex, "Invalid range");
+        require(endIndex <= featuredQueue.length, "End index out of bounds");
+
+        uint256 resultSize = endIndex - startIndex;
+        address[] memory result = new address[](resultSize);
+
+        for (uint256 i = startIndex; i < endIndex; i++) {
+            result[i - startIndex] = featuredQueue[i];
+        }
+
+        return (result, featuredQueue.length);
+    }
+
+    /**
+     * @notice Get promotion info for an instance
+     */
+    function getPromotionInfo(address instance) external view returns (
+        FeaturedPromotion memory promotion,
+        uint256 position,
+        uint256 renewalDeposit,
+        bool isExpired
+    ) {
+        return (
+            activePromotions[instance],
+            queuePosition[instance],
+            renewalDeposits[instance],
+            queuePosition[instance] > 0 && block.timestamp >= activePromotions[instance].expiresAt
+        );
+    }
+
+    /**
+     * @notice Deposit funds for auto-renewal
+     */
+    function depositForAutoRenewal(address instance) external payable nonReentrant {
+        require(queuePosition[instance] > 0, "Instance not promoted");
+        require(msg.value > 0, "Must deposit funds");
+
+        renewalDeposits[instance] += msg.value;
+        emit AutoRenewalDeposited(instance, msg.sender, msg.value);
+    }
+
+    /**
+     * @notice Withdraw unused auto-renewal deposit
+     */
+    function withdrawRenewalDeposit(address instance) external nonReentrant {
+        require(
+            msg.sender == activePromotions[instance].purchaser ||
+            msg.sender == instanceInfo[instance].creator,
+            "Not authorized"
+        );
+
+        uint256 deposit = renewalDeposits[instance];
+        require(deposit > 0, "No deposit to withdraw");
+
+        renewalDeposits[instance] = 0;
+
+        (bool success, ) = payable(msg.sender).call{value: deposit}("");
+        require(success, "Transfer failed");
+
+        emit RenewalDepositWithdrawn(instance, msg.sender, deposit);
+    }
+
+    /**
+     * @notice Cleanup expired promotions (anyone can call)
+     */
+    function cleanupExpiredPromotions(uint256 maxCleanup) public {
+        require(maxCleanup > 0 && maxCleanup <= 50, "Invalid cleanup limit");
+        require(
+            block.timestamp >= lastCleanupTime + cleanupInterval,
+            "Cleanup called too frequently"
+        );
+
+        uint256 cleanedCount = 0;
+        uint256 i = 0;
+
+        while (i < featuredQueue.length && cleanedCount < maxCleanup) {
+            address instance = featuredQueue[i];
+            FeaturedPromotion storage promo = activePromotions[instance];
+
+            if (block.timestamp >= promo.expiresAt) {
+                if (_attemptAutoRenewal(instance)) {
+                    i++;
+                } else {
+                    _removeFromQueue(instance);
+                    cleanedCount++;
+                    emit PromotionExpired(instance, promo.expiresAt);
+                }
+            } else {
+                i++;
+            }
+        }
+
+        lastCleanupTime = block.timestamp;
+        emit PromotionsCleanedUp(cleanedCount);
+    }
+
+    /**
+     * @notice Set queue pricing parameters (admin only)
+     */
+    function setQueuePricing(
+        uint256 _baseQueuePrice,
+        uint256 _frontPriceMultiplier,
+        uint256 _priceScalingFactor
+    ) external onlyOwner {
+        require(_baseQueuePrice > 0, "Invalid base price");
+        require(_frontPriceMultiplier > 1, "Multiplier must be > 1");
+
+        baseQueuePrice = _baseQueuePrice;
+        frontPriceMultiplier = _frontPriceMultiplier;
+        priceScalingFactor = _priceScalingFactor;
+
+        emit QueuePricingUpdated(_baseQueuePrice, _frontPriceMultiplier, _priceScalingFactor);
+    }
+
+    /**
+     * @notice Set promotion duration (admin only)
+     */
+    function setPromotionDuration(uint256 _duration) external onlyOwner {
+        require(_duration >= 1 days && _duration <= 365 days, "Invalid duration");
+        defaultPromotionDuration = _duration;
+        emit PromotionDurationUpdated(_duration);
+    }
+
+    /**
+     * @notice Set max queue size (admin only)
+     */
+    function setMaxQueueSize(uint256 _maxSize) external onlyOwner {
+        require(_maxSize >= 10 && _maxSize <= 500, "Invalid max size");
+        maxQueueSize = _maxSize;
+        emit MaxQueueSizeUpdated(_maxSize);
+    }
+
+    /**
+     * @notice Force remove promotion (admin only)
+     */
+    function forceRemovePromotion(address instance) external onlyOwner {
+        require(queuePosition[instance] > 0, "Not in queue");
+        _removeFromQueue(instance);
+        emit PromotionForcedRemoval(instance);
+    }
+
+    // ============ Internal Queue Management Functions ============
+
+    /**
+     * @notice Internal: Push instance to back of queue
+     */
+    function _pushToBack(address instance) internal {
+        require(queuePosition[instance] == 0, "Already in queue");
+        require(featuredQueue.length < maxQueueSize, "Queue full");
+
+        featuredQueue.push(instance);
+        queuePosition[instance] = featuredQueue.length;
+    }
+
+    /**
+     * @notice Internal: Unshift instance to front of queue
+     */
+    function _unshiftToFront(address instance) internal {
+        require(queuePosition[instance] == 0, "Already in queue");
+        require(featuredQueue.length < maxQueueSize, "Queue full");
+
+        uint256 currentLength = featuredQueue.length;
+
+        featuredQueue.push(address(0));
+
+        for (uint256 i = currentLength; i > 0; i--) {
+            featuredQueue[i] = featuredQueue[i - 1];
+            queuePosition[featuredQueue[i]] = i + 1;
+        }
+
+        featuredQueue[0] = instance;
+        queuePosition[instance] = 1;
+    }
+
+    /**
+     * @notice Internal: Remove instance from queue
+     */
+    function _removeFromQueue(address instance) internal {
+        uint256 position = queuePosition[instance];
+        require(position > 0, "Not in queue");
+
+        uint256 index = position - 1;
+        uint256 lastIndex = featuredQueue.length - 1;
+
+        if (index != lastIndex) {
+            address lastInstance = featuredQueue[lastIndex];
+            featuredQueue[index] = lastInstance;
+            queuePosition[lastInstance] = position;
+        }
+
+        featuredQueue.pop();
+        queuePosition[instance] = 0;
+        delete activePromotions[instance];
+    }
+
+    /**
+     * @notice Internal: Attempt auto-renewal
+     */
+    function _attemptAutoRenewal(address instance) internal returns (bool) {
+        FeaturedPromotion storage promo = activePromotions[instance];
+        uint256 deposit = renewalDeposits[instance];
+
+        uint256 renewalPrice = promo.tierIndex == 0
+            ? getPushBackPrice()
+            : getUnshiftFrontPrice();
+
+        if (deposit >= renewalPrice) {
+            renewalDeposits[instance] -= renewalPrice;
+
+            _removeFromQueue(instance);
+            _pushToBack(instance);
+
+            promo.expiresAt = block.timestamp + defaultPromotionDuration;
+            promo.purchasedAt = block.timestamp;
+            promo.tierIndex = 0;
+
+            emit PromotionAutoRenewed(instance, renewalPrice, promo.expiresAt);
+            return true;
+        }
+
+        return false;
+    }
+
+
+    // Phase 2 Features - Vault Registry
+
+    function registerVault(
+        address vault,
+        string memory name,
+        string memory metadataURI
+    ) external payable override {
+        require(vault != address(0), "Invalid vault address");
+        require(bytes(name).length > 0 && bytes(name).length <= 256, "Invalid name");
+        require(msg.value >= vaultRegistrationFee, "Insufficient registration fee");
+        require(!registeredVaults[vault], "Vault already registered");
+        require(MetadataUtils.isValidURI(metadataURI), "Invalid metadata URI");
+        require(vault.code.length > 0, "Vault must be a contract");
+
+        registeredVaults[vault] = true;
+        vaultList.push(vault);
+
+        vaultInfo[vault] = IMasterRegistry.VaultInfo({
+            vault: vault,
+            creator: msg.sender,
+            name: name,
+            metadataURI: metadataURI,
+            active: true,
+            registeredAt: block.timestamp,
+            instanceCount: 0
+        });
+
+        // Refund excess
+        if (msg.value > vaultRegistrationFee) {
+            (bool success, ) = payable(msg.sender).call{value: msg.value - vaultRegistrationFee}("");
+            require(success, "Refund failed");
+        }
+
+        emit VaultRegistered(vault, msg.sender, name, vaultRegistrationFee);
+    }
+
+    function getVaultInfo(address vault) external view override returns (VaultInfo memory) {
+        require(registeredVaults[vault], "Vault not registered");
+        return vaultInfo[vault];
+    }
+
+    function getVaultList() external view override returns (address[] memory) {
+        return vaultList;
+    }
+
+    function isVaultRegistered(address vault) external view override returns (bool) {
+        return registeredVaults[vault] && vaultInfo[vault].active;
+    }
+
+    function deactivateVault(address vault) external override onlyOwner {
+        require(registeredVaults[vault], "Vault not registered");
+        vaultInfo[vault].active = false;
+        emit VaultDeactivated(vault);
+    }
+
+    // Phase 2 Features - Hook Registry
+
+    // Hook registry removed - vaults now manage their own canonical hooks
+}
+
+// Interfaces for extension modules
+interface IFactoryApprovalGovernance {
+    enum ApplicationStatus {
+        Pending,
+        Approved,
+        Rejected,
+        Withdrawn
+    }
+
+    struct FactoryApplication {
+        address factoryAddress;
+        address applicant;
+        string contractType;
+        string title;
+        string displayTitle;
+        string metadataURI;
+        bytes32[] features;
+        ApplicationStatus status;
+        uint256 applicationFee;
+        uint256 createdAt;
+        uint256 approvalVotes;
+        uint256 rejectionVotes;
+        string rejectionReason;
+    }
+
+    function submitApplication(
+        address factoryAddress,
+        string memory contractType,
+        string memory title,
+        string memory displayTitle,
+        string memory metadataURI,
+        bytes32[] memory features
+    ) external payable;
+
+    function submitApplicationWithApplicant(
+        address factoryAddress,
+        string memory contractType,
+        string memory title,
+        string memory displayTitle,
+        string memory metadataURI,
+        bytes32[] memory features,
+        address applicant
+    ) external payable;
+
+    function voteOnApplication(address factoryAddress, bool approve) external;
+
+    function voteOnApplicationWithVoter(address factoryAddress, address voter, bool approve) external;
+
+    function finalizeApplication(address factoryAddress) external;
+
+    function getApplication(address factoryAddress) external view returns (FactoryApplication memory);
+}
+
+interface IVaultRegistry {
+    function registerVault(address vault, string memory name, string memory metadataURI) external payable;
+
+    function registerHook(address hook, address vault, string memory name, string memory metadataURI) external payable;
+
+    function getVaultInfo(address vault) external view returns (
+        address,
+        address,
+        string memory,
+        string memory,
+        bool,
+        uint256,
+        uint256
+    );
+
+    function getHookInfo(address hook) external view returns (
+        address,
+        address,
+        address,
+        string memory,
+        string memory,
+        bool,
+        uint256,
+        uint256
+    );
+
+    function getVaultList() external view returns (address[] memory);
+
+    function getHookList() external view returns (address[] memory);
+
+    function getHooksByVault(address vault) external view returns (address[] memory);
+
+    function isVaultRegistered(address vault) external view returns (bool);
+
+    function isHookRegistered(address hook) external view returns (bool);
+
+    function deactivateVault(address vault) external;
+
+    function deactivateHook(address hook) external;
+
+    function vaultRegistrationFee() external view returns (uint256);
+
+    function hookRegistrationFee() external view returns (uint256);
+}
+
+// Data structures (needed by interface)
+struct FactoryInfo {
+    address factoryAddress;
+    uint256 factoryId;
+    string contractType;
+    string title;
+    string displayTitle;
+    string metadataURI;
+    bytes32[] features;
+    address creator;
+    bool active;
+    uint256 registeredAt;
+}

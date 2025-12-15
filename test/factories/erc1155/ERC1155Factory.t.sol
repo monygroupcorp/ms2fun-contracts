@@ -30,13 +30,11 @@ contract ERC1155FactoryTest is Test {
         // Deploy mock token for vault
         token = new MockEXECToken(1000000e18);
 
-        // Deploy vault
+        // Deploy vault (WETH, PoolManager, AlignmentToken)
         vault = new UltraAlignmentVault(
-            address(token),                                        // alignment target
             address(0x2222222222222222222222222222222222222222),  // WETH
             address(0x4444444444444444444444444444444444444444),  // V4 pool manager
-            address(0x5555555555555555555555555555555555555555),  // Router
-            address(0x6666666666666666666666666666666666666666)   // Hook factory
+            address(token)                                        // alignment target
         );
 
         // Create a mock registry that doesn't revert on registerInstance/registerFactory
