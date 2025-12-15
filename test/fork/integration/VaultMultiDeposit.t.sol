@@ -34,7 +34,7 @@ contract VaultMultiDepositTest is ForkTestBase {
         charlie = makeAddr("charlie");
 
         // Deploy vault with router addresses
-        address alignmentToken = makeAddr("alignmentToken");
+        address alignmentToken = USDC; // Use real USDC for fork tests (has V3 pool with WETH)
         vm.prank(owner);
         vault = new UltraAlignmentVault(
             WETH,

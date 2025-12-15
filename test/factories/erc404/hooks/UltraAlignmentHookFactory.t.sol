@@ -6,6 +6,9 @@ import {UltraAlignmentHookFactory} from "../../../../src/factories/erc404/hooks/
 import {UltraAlignmentVault} from "../../../../src/vaults/UltraAlignmentVault.sol";
 import {MockEXECToken} from "../../../mocks/MockEXECToken.sol";
 import {MockPoolManager} from "../../../mocks/MockPoolManager.sol";
+import {Currency} from "v4-core/types/Currency.sol";
+import {PoolKey} from "v4-core/types/PoolKey.sol";
+import {IHooks} from "v4-core/interfaces/IHooks.sol";
 
 /**
  * @title UltraAlignmentHookFactoryTest
@@ -46,12 +49,24 @@ contract UltraAlignmentHookFactoryTest is Test {
         // Deploy mock token for vault
         token = new MockEXECToken(1000000e18);
 
-        // Deploy vault
+        // Deploy vault (WETH, PoolManager, V3Router, V2Router, AlignmentToken)
         vault = new UltraAlignmentVault(
             wethAddr,
             address(poolManager),
+            address(0x5555555555555555555555555555555555555555),  // V3 router
+            address(0x6666666666666666666666666666666666666666),  // V2 router
             address(token)
         );
+
+        // Set V4 pool key
+        PoolKey memory mockPoolKey = PoolKey({
+            currency0: Currency.wrap(wethAddr),
+            currency1: Currency.wrap(address(token)),
+            fee: 3000,
+            tickSpacing: 60,
+            hooks: IHooks(address(0))
+        });
+        vault.setV4PoolKey(mockPoolKey);
 
         // Deploy factory
         factory = new UltraAlignmentHookFactory(address(0), wethAddr);

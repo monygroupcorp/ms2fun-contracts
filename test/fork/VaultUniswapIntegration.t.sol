@@ -29,7 +29,7 @@ contract VaultUniswapIntegrationTest is ForkTestBase {
         alice = makeAddr("alice");
         bob = makeAddr("bob");
         charlie = makeAddr("charlie");
-        alignmentToken = makeAddr("alignmentToken"); // Mock token
+        alignmentToken = USDC; // Use real USDC for fork tests (has V3 pool with WETH)
 
         // Deploy vault with router addresses
         vm.prank(owner);

@@ -7,6 +7,9 @@ import {ERC1155Instance} from "../../../src/factories/erc1155/ERC1155Instance.so
 import {UltraAlignmentVault} from "../../../src/vaults/UltraAlignmentVault.sol";
 import {MockEXECToken} from "../../mocks/MockEXECToken.sol";
 import {MockMasterRegistry} from "../../mocks/MockMasterRegistry.sol";
+import {Currency} from "v4-core/types/Currency.sol";
+import {PoolKey} from "v4-core/types/PoolKey.sol";
+import {IHooks} from "v4-core/interfaces/IHooks.sol";
 
 /**
  * @title ERC1155FactoryTest
@@ -30,12 +33,24 @@ contract ERC1155FactoryTest is Test {
         // Deploy mock token for vault
         token = new MockEXECToken(1000000e18);
 
-        // Deploy vault (WETH, PoolManager, AlignmentToken)
+        // Deploy vault (WETH, PoolManager, V3Router, V2Router, AlignmentToken)
         vault = new UltraAlignmentVault(
             address(0x2222222222222222222222222222222222222222),  // WETH
             address(0x4444444444444444444444444444444444444444),  // V4 pool manager
+            address(0x5555555555555555555555555555555555555555),  // V3 router
+            address(0x6666666666666666666666666666666666666666),  // V2 router
             address(token)                                        // alignment target
         );
+
+        // Set V4 pool key
+        PoolKey memory mockPoolKey = PoolKey({
+            currency0: Currency.wrap(address(0x2222222222222222222222222222222222222222)),
+            currency1: Currency.wrap(address(token)),
+            fee: 3000,
+            tickSpacing: 60,
+            hooks: IHooks(address(0))
+        });
+        vault.setV4PoolKey(mockPoolKey);
 
         // Create a mock registry that doesn't revert on registerInstance/registerFactory
         // This simulates a real registry being there
