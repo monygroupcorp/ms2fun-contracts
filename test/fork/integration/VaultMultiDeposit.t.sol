@@ -3,6 +3,9 @@ pragma solidity ^0.8.20;
 
 import { ForkTestBase } from "../helpers/ForkTestBase.sol";
 import { UltraAlignmentVault } from "src/vaults/UltraAlignmentVault.sol";
+import { Currency } from "v4-core/types/Currency.sol";
+import { PoolKey } from "v4-core/types/PoolKey.sol";
+import { IHooks } from "v4-core/interfaces/IHooks.sol";
 
 /**
  * @title VaultMultiDeposit
@@ -30,16 +33,27 @@ contract VaultMultiDepositTest is ForkTestBase {
         bob = makeAddr("bob");
         charlie = makeAddr("charlie");
 
-        // Deploy vault
+        // Deploy vault with router addresses
+        address alignmentToken = makeAddr("alignmentToken");
         vm.prank(owner);
         vault = new UltraAlignmentVault(
             WETH,
             UNISWAP_V4_POOL_MANAGER,
-            makeAddr("alignmentToken")
+            UNISWAP_V3_ROUTER,
+            UNISWAP_V2_ROUTER,
+            alignmentToken
         );
 
+        // Set V4 pool key
         vm.prank(owner);
-        vault.setV4Pool(makeAddr("mockV4Pool"));
+        PoolKey memory mockPoolKey = PoolKey({
+            currency0: Currency.wrap(WETH),
+            currency1: Currency.wrap(alignmentToken),
+            fee: 3000,
+            tickSpacing: 60,
+            hooks: IHooks(address(0))
+        });
+        vault.setV4PoolKey(mockPoolKey);
 
         // Label addresses
         vm.label(address(vault), "UltraAlignmentVault");

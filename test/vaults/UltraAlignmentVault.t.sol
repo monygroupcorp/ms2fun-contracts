@@ -5,6 +5,8 @@ import {Test, console2} from "forge-std/Test.sol";
 import {UltraAlignmentVault} from "../../src/vaults/UltraAlignmentVault.sol";
 import {MockEXECToken} from "../mocks/MockEXECToken.sol";
 import {Currency} from "v4-core/types/Currency.sol";
+import {PoolKey} from "v4-core/types/PoolKey.sol";
+import {IHooks} from "v4-core/interfaces/IHooks.sol";
 
 /**
  * @title UltraAlignmentVaultTest
@@ -23,7 +25,8 @@ contract UltraAlignmentVaultTest is Test {
 
     address public mockWETH = address(0x1111111111111111111111111111111111111111);
     address public mockPoolManager = address(0x2222222222222222222222222222222222222222);
-    address public mockV4Pool = address(0x3333333333333333333333333333333333333333);
+    address public mockV3Router = address(0x3333333333333333333333333333333333333333);
+    address public mockV2Router = address(0x4444444444444444444444444444444444444444);
 
     // Events
     event ContributionReceived(address indexed benefactor, uint256 amount);
@@ -47,11 +50,20 @@ contract UltraAlignmentVaultTest is Test {
         vault = new UltraAlignmentVault(
             mockWETH,
             mockPoolManager,
+            mockV3Router,
+            mockV2Router,
             address(alignmentToken)
         );
 
-        // Set V4 pool for conversion tests
-        vault.setV4Pool(mockV4Pool);
+        // Set V4 pool key for conversion tests
+        PoolKey memory mockPoolKey = PoolKey({
+            currency0: Currency.wrap(mockWETH),
+            currency1: Currency.wrap(address(alignmentToken)),
+            fee: 3000,
+            tickSpacing: 60,
+            hooks: IHooks(address(0))
+        });
+        vault.setV4PoolKey(mockPoolKey);
 
         vm.stopPrank();
 
