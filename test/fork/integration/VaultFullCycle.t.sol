@@ -22,9 +22,9 @@ contract VaultFullCycleTest is ForkTestBase {
         emit log_string("TODO: Hook taxation in full cycle");
     }
 
-    function test_fullCycle_multipleEpochs() public {
-        // TODO: Multiple conversion epochs
-        emit log_string("TODO: Multiple epochs test");
+    function test_fullCycle_multipleConversions() public {
+        // TODO: Multiple conversion rounds
+        emit log_string("TODO: Multiple conversion rounds test");
     }
 
     function test_callerReward_incentivizesConversion() public {
