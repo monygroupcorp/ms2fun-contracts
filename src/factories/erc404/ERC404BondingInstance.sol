@@ -14,11 +14,11 @@ import { Currency, CurrencyLibrary } from "v4-core/types/Currency.sol";
 import { IHooks } from "v4-core/interfaces/IHooks.sol";
 import { IUnlockCallback } from "v4-core/interfaces/callback/IUnlockCallback.sol";
 import { BalanceDelta } from "v4-core/types/BalanceDelta.sol";
-import { LiquidityAmounts } from "../../../lib/v4-core/test/utils/LiquidityAmounts.sol";
+import { LiquidityAmounts } from "../../libraries/v4/LiquidityAmounts.sol";
 import { TickMath } from "v4-core/libraries/TickMath.sol";
 import { StateLibrary } from "v4-core/libraries/StateLibrary.sol";
 import { PoolId } from "v4-core/types/PoolId.sol";
-import { CurrencySettler } from "../../../lib/v4-core/test/utils/CurrencySettler.sol";
+import { CurrencySettler } from "../../libraries/v4/CurrencySettler.sol";
 import { UltraAlignmentVault } from "../../vaults/UltraAlignmentVault.sol";
 
 interface IWETH {

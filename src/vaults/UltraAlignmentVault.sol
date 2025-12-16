@@ -8,7 +8,7 @@ import {IPoolManager} from "v4-core/interfaces/IPoolManager.sol";
 import {IUnlockCallback} from "v4-core/interfaces/callback/IUnlockCallback.sol";
 import {PoolKey} from "v4-core/types/PoolKey.sol";
 import {BalanceDelta, BalanceDeltaLibrary} from "v4-core/types/BalanceDelta.sol";
-import {CurrencySettler} from "../../lib/v4-core/test/utils/CurrencySettler.sol";
+import {CurrencySettler} from "../libraries/v4/CurrencySettler.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 // ========== External Protocol Interfaces ==========
