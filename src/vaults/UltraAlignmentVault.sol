@@ -145,8 +145,15 @@ contract UltraAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback {
     /**
      * @notice Receive ETH contributions from any source
      * @dev Tracks msg.sender as benefactor, adds to pending dragnet
+     *      Allows WETH unwrapping (from internal withdrawals) without reentrancy issues
      */
-    receive() external payable nonReentrant {
+    receive() external payable {
+        // If ETH is from WETH withdrawal (internal operation), just accept it
+        if (msg.sender == weth) {
+            return;
+        }
+
+        // External ETH contribution - apply reentrancy guard and track
         require(msg.value > 0, "Amount must be positive");
         _trackBenefactorContribution(msg.sender, msg.value);
         emit ContributionReceived(msg.sender, msg.value);
@@ -200,9 +207,16 @@ contract UltraAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback {
         require(alignmentToken != address(0), "No alignment target set");
         require(Currency.unwrap(v4PoolKey.currency0) != address(0) || Currency.unwrap(v4PoolKey.currency1) != address(0), "V4 pool key not set");
 
-        // Step 1: Calculate caller reward upfront
+        // Step 1: Calculate and RESERVE caller reward upfront by wrapping it temporarily
+        // This ensures it doesn't get consumed by subsequent operations
         uint256 callerReward = (totalPendingETH * conversionRewardBps) / 10000;
         uint256 ethToAdd = totalPendingETH - callerReward;
+
+        // Wrap caller reward to WETH temporarily to reserve it
+        // We'll unwrap it back to ETH before paying
+        if (callerReward > 0) {
+            IWETH9(weth).deposit{value: callerReward}();
+        }
 
         // Step 1.2: CHECK TARGET ASSET PRICE AND PURCHASE POWER (v2/v3/v4 source)
         _checkTargetAssetPriceAndPurchasePower();
@@ -272,11 +286,16 @@ contract UltraAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback {
         lpPositionValue = ethToSwap + targetTokenReceived;
 
         // Step 7: Pay caller reward
-        // If we don't have enough native ETH (because excess was returned as WETH), unwrap some
-        if (address(this).balance < callerReward) {
-            uint256 needed = callerReward - address(this).balance;
-            IWETH9(weth).withdraw(needed);
+        // Unwrap ALL WETH to get native ETH for reward
+        // This includes: caller reward WETH (reserved earlier) + any excess from LP
+        uint256 wethBalance = IWETH9(weth).balanceOf(address(this));
+        if (wethBalance > 0) {
+            IWETH9(weth).withdraw(wethBalance);
         }
+
+        // Now pay the caller reward in native ETH
+        // We should have at least callerReward ETH from the unwrap above
+        require(address(this).balance >= callerReward, "Insufficient ETH for reward");
         (bool success, ) = payable(msg.sender).call{value: callerReward}("");
         require(success, "Caller reward transfer failed");
 
@@ -324,7 +343,14 @@ contract UltraAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback {
 
         require(ethClaimed > 0, "No new fees to claim");
 
+        // Unwrap any WETH to ensure we have native ETH for fees
+        uint256 wethBalance = IWETH9(weth).balanceOf(address(this));
+        if (wethBalance > 0) {
+            IWETH9(weth).withdraw(wethBalance);
+        }
+
         // Transfer ETH to benefactor
+        require(address(this).balance >= ethClaimed, "Insufficient ETH for claim");
         (bool success, ) = payable(benefactor).call{value: ethClaimed}("");
         require(success, "ETH transfer failed");
 
