@@ -60,6 +60,13 @@ contract VaultMultiDepositTest is ForkTestBase {
         vm.label(alice, "Alice");
         vm.label(bob, "Bob");
         vm.label(charlie, "Charlie");
+
+        // CRITICAL: In fork mode, makeAddr() might generate addresses that already have code on mainnet
+        // Remove any existing code from test addresses to ensure they behave as EOAs
+        vm.etch(alice, "");
+        vm.etch(bob, "");
+        vm.etch(charlie, "");
+        vm.etch(owner, "");
     }
 
     /// @notice Helper to contribute ETH
