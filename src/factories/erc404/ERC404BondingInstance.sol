@@ -1150,7 +1150,7 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IUnlockCallba
         uint256 amountToken,
         uint256 amountETH,
         uint160 sqrtPriceX96
-    ) external payable nonReentrant returns (uint128 liquidity) {
+    ) external payable onlyOwner nonReentrant returns (uint128 liquidity) {
         require(bondingOpenTime != 0, "Bonding not configured");
         require(block.timestamp >= bondingOpenTime, "Too early");
         require(liquidityPool == address(0), "Already deployed");

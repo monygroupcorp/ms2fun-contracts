@@ -2,6 +2,7 @@
 pragma solidity ^0.8.20;
 
 import {Ownable} from "solady/auth/Ownable.sol";
+import {SafeTransferLib} from "solady/utils/SafeTransferLib.sol";
 
 /**
  * @title VaultRegistry
@@ -110,8 +111,9 @@ contract VaultRegistry is Ownable {
         });
 
         // Refund excess
+        require(msg.value >= vaultRegistrationFee, "Insufficient payment");
         if (msg.value > vaultRegistrationFee) {
-            payable(msg.sender).transfer(msg.value - vaultRegistrationFee);
+            SafeTransferLib.safeTransferETH(msg.sender, msg.value - vaultRegistrationFee);
         }
 
         emit VaultRegistered(vault, msg.sender, name, vaultRegistrationFee);
@@ -156,8 +158,9 @@ contract VaultRegistry is Ownable {
         });
 
         // Refund excess
+        require(msg.value >= hookRegistrationFee, "Insufficient payment");
         if (msg.value > hookRegistrationFee) {
-            payable(msg.sender).transfer(msg.value - hookRegistrationFee);
+            SafeTransferLib.safeTransferETH(msg.sender, msg.value - hookRegistrationFee);
         }
 
         emit HookRegistered(hook, msg.sender, vault, name, hookRegistrationFee);

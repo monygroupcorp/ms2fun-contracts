@@ -3,6 +3,7 @@ pragma solidity ^0.8.20;
 
 import {Ownable} from "solady/auth/Ownable.sol";
 import {ReentrancyGuard} from "solady/utils/ReentrancyGuard.sol";
+import {SafeTransferLib} from "solady/utils/SafeTransferLib.sol";
 import {IMasterRegistry} from "../../master/interfaces/IMasterRegistry.sol";
 import {FeatureUtils} from "../../master/libraries/FeatureUtils.sol";
 import {UltraAlignmentHookFactory} from "./hooks/UltraAlignmentHookFactory.sol";
@@ -135,8 +136,9 @@ contract ERC404Factory is Ownable, ReentrancyGuard {
 
         // Refund excess
         uint256 totalFee = instanceCreationFee + (vault != address(0) ? hookFactory.hookCreationFee() : 0);
+        require(msg.value >= totalFee, "Insufficient payment");
         if (msg.value > totalFee) {
-            payable(msg.sender).transfer(msg.value - totalFee);
+            SafeTransferLib.safeTransferETH(msg.sender, msg.value - totalFee);
         }
 
         emit InstanceCreated(instance, creator, name, symbol, hook);

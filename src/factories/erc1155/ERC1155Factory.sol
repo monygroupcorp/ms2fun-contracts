@@ -3,6 +3,7 @@ pragma solidity ^0.8.24;
 
 import {Ownable} from "solady/auth/Ownable.sol";
 import {ReentrancyGuard} from "solady/utils/ReentrancyGuard.sol";
+import {SafeTransferLib} from "solady/utils/SafeTransferLib.sol";
 import {IMasterRegistry} from "../../master/interfaces/IMasterRegistry.sol";
 import {ERC1155Instance} from "./ERC1155Instance.sol";
 import {UltraAlignmentVault} from "../../vaults/UltraAlignmentVault.sol";
@@ -88,8 +89,9 @@ contract ERC1155Factory is Ownable, ReentrancyGuard {
         );
 
         // Refund excess
+        require(msg.value >= instanceCreationFee, "Insufficient payment");
         if (msg.value > instanceCreationFee) {
-            payable(msg.sender).transfer(msg.value - instanceCreationFee);
+            SafeTransferLib.safeTransferETH(msg.sender, msg.value - instanceCreationFee);
         }
 
         emit InstanceCreated(instance, creator, name, vault);
