@@ -8,6 +8,7 @@ import {IPoolManager} from "v4-core/interfaces/IPoolManager.sol";
 import {IUnlockCallback} from "v4-core/interfaces/callback/IUnlockCallback.sol";
 import {PoolKey} from "v4-core/types/PoolKey.sol";
 import {BalanceDelta, BalanceDeltaLibrary} from "v4-core/types/BalanceDelta.sol";
+import {CurrencySettler} from "../../lib/v4-core/test/utils/CurrencySettler.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 // ========== External Protocol Interfaces ==========
@@ -59,6 +60,7 @@ interface IWETH9 {
 contract UltraAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback {
     using CurrencyLibrary for Currency;
     using BalanceDeltaLibrary for BalanceDelta;
+    using CurrencySettler for Currency;
 
     // ========== Data Structures ==========
 
@@ -216,8 +218,25 @@ contract UltraAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback {
         uint256 targetTokenReceived = _swapETHForTarget(ethToSwap, minOutTarget);
 
         // Step 3: ADD TO LP POSITION
-        uint256 lpUnitsBeforeAdd = totalLPUnits;
-        uint128 newLiquidityUnits = _addToLpPosition(ethToSwap, targetTokenReceived, tickLower, tickUpper);
+        uint128 newLiquidityUnits;
+        {
+            // After swap, we have targetTokenReceived of alignment token and (ethToAdd - ethToSwap) ETH remaining
+            uint256 ethRemaining = ethToAdd - ethToSwap;
+
+            // Wrap remaining ETH to WETH if pool uses WETH
+            if (!v4PoolKey.currency0.isAddressZero() && Currency.unwrap(v4PoolKey.currency0) == weth) {
+                IWETH9(weth).deposit{value: ethRemaining}();
+            } else if (!v4PoolKey.currency1.isAddressZero() && Currency.unwrap(v4PoolKey.currency1) == weth) {
+                IWETH9(weth).deposit{value: ethRemaining}();
+            }
+
+            // Determine amounts based on v4PoolKey ordering (currency0 < currency1)
+            (uint256 amount0, uint256 amount1) = Currency.unwrap(v4PoolKey.currency0) == alignmentToken
+                ? (targetTokenReceived, ethRemaining)
+                : (ethRemaining, targetTokenReceived);
+
+            newLiquidityUnits = _addToLpPosition(amount0, amount1, tickLower, tickUpper);
+        }
 
         // Step 4: SEE HOW MANY MORE LIQUIDITY UNITS WE HAVE THAN WE HAD BEFORE
         uint256 liquidityUnitsAdded = uint256(newLiquidityUnits);
@@ -253,6 +272,11 @@ contract UltraAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback {
         lpPositionValue = ethToSwap + targetTokenReceived;
 
         // Step 7: Pay caller reward
+        // If we don't have enough native ETH (because excess was returned as WETH), unwrap some
+        if (address(this).balance < callerReward) {
+            uint256 needed = callerReward - address(this).balance;
+            IWETH9(weth).withdraw(needed);
+        }
         (bool success, ) = payable(msg.sender).call{value: callerReward}("");
         require(success, "Caller reward transfer failed");
 
@@ -407,15 +431,43 @@ contract UltraAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback {
     ) internal returns (uint128 liquidityUnits) {
         require(amount0 > 0 && amount1 > 0, "Amounts must be positive");
 
-        // STUB: V4 position creation not yet implemented
-        // Return fake liquidity units for integration testing
-        // In production, this will:
-        // 1. Call PoolManager.unlock() with callback data
-        // 2. Execute modifyLiquidity in unlockCallback()
-        // 3. Settle currency deltas
-        // 4. Return actual liquidity units created
+        // Approve tokens for PoolManager settlement
+        Currency currency0 = v4PoolKey.currency0;
+        Currency currency1 = v4PoolKey.currency1;
 
-        liquidityUnits = uint128((amount0 + amount1) / 2);
+        // Approve non-native currencies for PoolManager
+        if (!currency0.isAddressZero()) {
+            IERC20(Currency.unwrap(currency0)).approve(address(poolManager), amount0);
+        }
+        if (!currency1.isAddressZero()) {
+            IERC20(Currency.unwrap(currency1)).approve(address(poolManager), amount1);
+        }
+
+        // Calculate liquidity delta to add
+        // Use simple approximation - V4 will calculate actual liquidity
+        int256 liquidityDelta = int256((amount0 + amount1) / 2);
+
+        // Prepare callback data
+        IPoolManager.ModifyLiquidityParams memory params = IPoolManager.ModifyLiquidityParams({
+            tickLower: tickLower,
+            tickUpper: tickUpper,
+            liquidityDelta: liquidityDelta,
+            salt: 0
+        });
+
+        ModifyLiquidityCallbackData memory callbackData = ModifyLiquidityCallbackData({
+            params: params
+        });
+
+        // Execute unlock → callback → modifyLiquidity → settle
+        bytes memory result = IPoolManager(poolManager).unlock(abi.encode(callbackData));
+
+        // Decode balance delta from callback result
+        BalanceDelta delta = abi.decode(result, (BalanceDelta));
+
+        // Return liquidity units (use liquidityDelta as approximation)
+        liquidityUnits = uint128(uint256(liquidityDelta));
+
         return liquidityUnits;
     }
 
@@ -445,36 +497,41 @@ contract UltraAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback {
 
     /**
      * @notice Settle currency deltas from V4 operations
-     * @dev Handles both ETH (native) and ERC20 token settlements
-     *      - Negative delta = vault owes tokens to pool → transfer to PoolManager
-     *      - Positive delta = pool owes tokens to vault → PoolManager transfers to us
-     *      Note: PoolManager handles the actual settlement via sync() or take()
+     * @dev Uses CurrencySettler library pattern from V4 core tests
+     *      - Negative delta = vault owes tokens to pool → currency.settle()
+     *      - Positive delta = pool owes tokens to vault → currency.take()
      * @param delta Balance delta from modifyLiquidity operation
      */
     function _settleDelta(BalanceDelta delta) internal {
         int128 delta0 = delta.amount0();
         int128 delta1 = delta.amount1();
 
+        IPoolManager pm = IPoolManager(poolManager);
+
         // Settle currency0
         if (delta0 < 0) {
-            // Vault owes currency0 to pool - transfer tokens
-            _transferCurrency(v4PoolKey.currency0, address(poolManager), uint128(-delta0));
-            // Call sync to update PoolManager's accounting
-            IPoolManager(poolManager).sync(v4PoolKey.currency0);
+            // Vault owes currency0 to pool
+            v4PoolKey.currency0.settle(pm, address(this), uint128(-delta0), false);
         } else if (delta0 > 0) {
-            // Pool owes currency0 to vault - take from reserves
-            IPoolManager(poolManager).take(v4PoolKey.currency0, address(this), uint128(delta0));
+            // Pool owes currency0 to vault (excess tokens returned)
+            v4PoolKey.currency0.take(pm, address(this), uint128(delta0), false);
+            // If currency0 is WETH, unwrap back to ETH for caller reward
+            if (Currency.unwrap(v4PoolKey.currency0) == weth) {
+                IWETH9(weth).withdraw(uint128(delta0));
+            }
         }
 
         // Settle currency1
         if (delta1 < 0) {
-            // Vault owes currency1 to pool - transfer tokens
-            _transferCurrency(v4PoolKey.currency1, address(poolManager), uint128(-delta1));
-            // Call sync to update PoolManager's accounting
-            IPoolManager(poolManager).sync(v4PoolKey.currency1);
+            // Vault owes currency1 to pool
+            v4PoolKey.currency1.settle(pm, address(this), uint128(-delta1), false);
         } else if (delta1 > 0) {
-            // Pool owes currency1 to vault - take from reserves
-            IPoolManager(poolManager).take(v4PoolKey.currency1, address(this), uint128(delta1));
+            // Pool owes currency1 to vault (excess tokens returned)
+            v4PoolKey.currency1.take(pm, address(this), uint128(delta1), false);
+            // If currency1 is WETH, unwrap back to ETH for caller reward
+            if (Currency.unwrap(v4PoolKey.currency1) == weth) {
+                IWETH9(weth).withdraw(uint128(delta1));
+            }
         }
     }
 

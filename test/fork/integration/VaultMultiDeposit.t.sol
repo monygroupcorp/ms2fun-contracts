@@ -44,16 +44,16 @@ contract VaultMultiDepositTest is ForkTestBase {
             alignmentToken
         );
 
-        // Set V4 pool key
+        // Set V4 pool key - use WETH/USDC pool with proper currency ordering
         vm.prank(owner);
-        PoolKey memory mockPoolKey = PoolKey({
-            currency0: Currency.wrap(WETH),
-            currency1: Currency.wrap(alignmentToken),
+        PoolKey memory poolKey = PoolKey({
+            currency0: Currency.wrap(WETH < alignmentToken ? WETH : alignmentToken),
+            currency1: Currency.wrap(WETH < alignmentToken ? alignmentToken : WETH),
             fee: 3000,
             tickSpacing: 60,
             hooks: IHooks(address(0))
         });
-        vault.setV4PoolKey(mockPoolKey);
+        vault.setV4PoolKey(poolKey);
 
         // Label addresses
         vm.label(address(vault), "UltraAlignmentVault");

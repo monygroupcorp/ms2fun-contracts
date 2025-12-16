@@ -41,16 +41,16 @@ contract VaultUniswapIntegrationTest is ForkTestBase {
             alignmentToken
         );
 
-        // Set V4 pool key (mock for now - using WETH/alignment token pool)
+        // Set V4 pool key - use WETH/USDC pool with proper currency ordering
         vm.prank(owner);
-        PoolKey memory mockPoolKey = PoolKey({
-            currency0: Currency.wrap(WETH),
-            currency1: Currency.wrap(alignmentToken),
+        PoolKey memory poolKey = PoolKey({
+            currency0: Currency.wrap(WETH < alignmentToken ? WETH : alignmentToken),
+            currency1: Currency.wrap(WETH < alignmentToken ? alignmentToken : WETH),
             fee: 3000,
             tickSpacing: 60,
             hooks: IHooks(address(0))
         });
-        vault.setV4PoolKey(mockPoolKey);
+        vault.setV4PoolKey(poolKey);
 
         // Label addresses for better trace output
         vm.label(address(vault), "UltraAlignmentVault");

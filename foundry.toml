@@ -40,7 +40,8 @@ evm_version = "cancun"
 
 # Fork configuration
 # eth_rpc_url should be passed via --fork-url flag or loaded from .env
-fork_block_number = 21000000
+# fork_block_number = 21000000 # Old block, V4 liquidity limited
+# Use latest block for V4 testing (December 2025)
 gas_limit = 30000000
 verbosity = 2
 
