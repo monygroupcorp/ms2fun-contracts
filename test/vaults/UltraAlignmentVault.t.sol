@@ -27,6 +27,8 @@ contract UltraAlignmentVaultTest is Test {
     address public mockPoolManager = address(0x2222222222222222222222222222222222222222);
     address public mockV3Router = address(0x3333333333333333333333333333333333333333);
     address public mockV2Router = address(0x4444444444444444444444444444444444444444);
+    address public mockV2Factory = address(0x5555555555555555555555555555555555555555);
+    address public mockV3Factory = address(0x6666666666666666666666666666666666666666);
 
     // Events
     event ContributionReceived(address indexed benefactor, uint256 amount);
@@ -52,6 +54,8 @@ contract UltraAlignmentVaultTest is Test {
             mockPoolManager,
             mockV3Router,
             mockV2Router,
+            mockV2Factory,
+            mockV3Factory,
             address(alignmentToken)
         );
 
@@ -94,17 +98,17 @@ contract UltraAlignmentVaultTest is Test {
 
     function test_Constructor_RevertsOnInvalidWETH() public {
         vm.expectRevert("Invalid WETH");
-        new UltraAlignmentVault(address(0), mockPoolManager, mockV3Router, mockV2Router, address(alignmentToken));
+        new UltraAlignmentVault(address(0), mockPoolManager, mockV3Router, mockV2Router, mockV2Factory, mockV3Factory, address(alignmentToken));
     }
 
     function test_Constructor_RevertsOnInvalidPoolManager() public {
         vm.expectRevert("Invalid pool manager");
-        new UltraAlignmentVault(mockWETH, address(0), mockV3Router, mockV2Router, address(alignmentToken));
+        new UltraAlignmentVault(mockWETH, address(0), mockV3Router, mockV2Router, mockV2Factory, mockV3Factory, address(alignmentToken));
     }
 
     function test_Constructor_RevertsOnInvalidAlignmentToken() public {
         vm.expectRevert("Invalid alignment token");
-        new UltraAlignmentVault(mockWETH, mockPoolManager, mockV3Router, mockV2Router, address(0));
+        new UltraAlignmentVault(mockWETH, mockPoolManager, mockV3Router, mockV2Router, mockV2Factory, mockV3Factory, address(0));
     }
 
     // ========== Direct ETH Contribution Tests (receive) ==========
@@ -408,6 +412,8 @@ contract UltraAlignmentVaultTest is Test {
             mockPoolManager,
             mockV3Router,
             mockV2Router,
+            mockV2Factory,
+            mockV3Factory,
             address(alignmentToken)
         );
         vm.stopPrank();
@@ -805,7 +811,7 @@ contract UltraAlignmentVaultTest is Test {
 
     function test_SetV4PoolKey_OwnerCanUpdate() public {
         PoolKey memory newPoolKey = PoolKey({
-            currency0: Currency.wrap(address(0x8888)),
+            currency0: Currency.wrap(mockWETH),
             currency1: Currency.wrap(address(alignmentToken)),
             fee: 3000,
             tickSpacing: 60,
@@ -828,7 +834,7 @@ contract UltraAlignmentVaultTest is Test {
         });
 
         vm.prank(owner);
-        vm.expectRevert("Invalid pool key");
+        vm.expectRevert("Invalid pool key: no currencies set");
         vault.setV4PoolKey(invalidPoolKey);
     }
 
