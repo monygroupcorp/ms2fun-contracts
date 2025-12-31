@@ -79,7 +79,9 @@ contract ERC404BondingInstanceTest is Test {
             address(0), // Hook set later
             mockWETH,
             address(this), // Factory
-            owner
+            mockMasterRegistry, // MasterRegistry
+            owner,
+            "" // styleUri
         );
         
         vm.stopPrank();

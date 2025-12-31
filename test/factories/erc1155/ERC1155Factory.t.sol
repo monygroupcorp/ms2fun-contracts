@@ -10,12 +10,15 @@ import {MockMasterRegistry} from "../../mocks/MockMasterRegistry.sol";
 import {Currency} from "v4-core/types/Currency.sol";
 import {PoolKey} from "v4-core/types/PoolKey.sol";
 import {IHooks} from "v4-core/interfaces/IHooks.sol";
+import {GlobalMessagingTestBase} from "../../base/GlobalMessagingTestBase.sol";
+import {GlobalMessageTypes} from "../../../src/libraries/GlobalMessageTypes.sol";
+import {GlobalMessageRegistry} from "../../../src/registry/GlobalMessageRegistry.sol";
 
 /**
  * @title ERC1155FactoryTest
  * @notice Comprehensive test suite for ERC1155 Factory
  */
-contract ERC1155FactoryTest is Test {
+contract ERC1155FactoryTest is GlobalMessagingTestBase {
     ERC1155Factory public factory;
     UltraAlignmentVault public vault;
     MockEXECToken public token;
@@ -33,12 +36,14 @@ contract ERC1155FactoryTest is Test {
         // Deploy mock token for vault
         token = new MockEXECToken(1000000e18);
 
-        // Deploy vault (WETH, PoolManager, V3Router, V2Router, AlignmentToken)
+        // Deploy vault (WETH, PoolManager, V3Router, V2Router, V2Factory, V3Factory, AlignmentToken)
         vault = new UltraAlignmentVault(
             address(0x2222222222222222222222222222222222222222),  // WETH
             address(0x4444444444444444444444444444444444444444),  // V4 pool manager
             address(0x5555555555555555555555555555555555555555),  // V3 router
             address(0x6666666666666666666666666666666666666666),  // V2 router
+            address(0x7777777777777777777777777777777777777777),  // V2 factory
+            address(0x8888888888888888888888888888888888888888),  // V3 factory
             address(token)                                        // alignment target
         );
 
@@ -55,6 +60,9 @@ contract ERC1155FactoryTest is Test {
         // Create a mock registry that doesn't revert on registerInstance/registerFactory
         // This simulates a real registry being there
         address mockRegistry = address(new MockMasterRegistry());
+
+        // Set up global messaging
+        _setUpGlobalMessaging(mockRegistry);
 
         // Deploy factory
         factory = new ERC1155Factory(mockRegistry, mockInstanceTemplate);
@@ -79,7 +87,8 @@ contract ERC1155FactoryTest is Test {
             "Test Collection",
             "ipfs://test",
             creator,
-            address(vault)
+            address(vault),
+            "" // styleUri
         );
         
         assertTrue(instance != address(0));
@@ -102,7 +111,8 @@ contract ERC1155FactoryTest is Test {
             "Test Collection",
             "ipfs://test",
             creator,
-            address(vault)
+            address(vault),
+            "" // styleUri
         );
         
         vm.stopPrank();
@@ -116,7 +126,8 @@ contract ERC1155FactoryTest is Test {
             "Test Collection",
             "ipfs://test",
             creator,
-            address(vault)
+            address(vault),
+            "" // styleUri
         );
         
         uint256 editionId = factory.addEdition(
@@ -150,7 +161,8 @@ contract ERC1155FactoryTest is Test {
             "Test Collection",
             "ipfs://test",
             creator,
-            address(vault)
+            address(vault),
+            "" // styleUri
         );
         
         uint256 editionId = factory.addEdition(
@@ -181,7 +193,8 @@ contract ERC1155FactoryTest is Test {
             "Test Collection",
             "ipfs://test",
             creator,
-            address(vault)
+            address(vault),
+            "" // styleUri
         );
         
         uint256 editionId = factory.addEdition(
@@ -213,7 +226,8 @@ contract ERC1155FactoryTest is Test {
             "Test Collection",
             "ipfs://test",
             creator,
-            address(vault)
+            address(vault),
+            "" // styleUri
         );
         
         factory.addEdition(
@@ -249,7 +263,8 @@ contract ERC1155FactoryTest is Test {
             "Test Collection",
             "ipfs://test",
             creator,
-            address(vault)
+            address(vault),
+            "" // styleUri
         );
         
         factory.addEdition(
@@ -293,7 +308,8 @@ contract ERC1155FactoryTest is Test {
             "Test Collection",
             "ipfs://test",
             creator,
-            address(vault)
+            address(vault),
+            "" // styleUri
         );
         
         factory.addEdition(
@@ -333,7 +349,8 @@ contract ERC1155FactoryTest is Test {
             "Test Collection",
             "ipfs://test",
             creator,
-            address(vault)
+            address(vault),
+            "" // styleUri
         );
         
         factory.addEdition(
@@ -355,16 +372,22 @@ contract ERC1155FactoryTest is Test {
             1,
             "Hello from minter!"
         );
-        
-        // Check message
-        (address sender, uint32 timestamp, uint32 editionId, uint32 amount, string memory message) = 
-            instanceContract.getMessageDetails(0);
-        
-        assertEq(sender, minter1);
-        assertEq(editionId, 1);
-        assertEq(amount, 1);
-        assertEq(message, "Hello from minter!");
-        
+
+        // Check message in global registry
+        _assertMessageCount(1);
+        _assertInstanceMessageCount(instance, 1);
+
+        _assertGlobalMessageWithAmount({
+            messageId: 0,
+            expectedInstance: instance,
+            expectedSender: minter1,
+            expectedFactoryType: GlobalMessageTypes.FACTORY_ERC1155,
+            expectedActionType: GlobalMessageTypes.ACTION_MINT,
+            expectedContextId: 1, // editionId
+            expectedAmount: 1, // amount minted
+            expectedMessage: "Hello from minter!"
+        });
+
         vm.stopPrank();
     }
 
@@ -377,7 +400,8 @@ contract ERC1155FactoryTest is Test {
             "Test Collection",
             "ipfs://test",
             creator,
-            address(vault)
+            address(vault),
+            "" // styleUri
         );
         
         factory.addEdition(
@@ -424,7 +448,8 @@ contract ERC1155FactoryTest is Test {
             "Test Collection",
             "ipfs://test",
             creator,
-            address(vault)
+            address(vault),
+            "" // styleUri
         );
         
         factory.addEdition(
@@ -447,20 +472,34 @@ contract ERC1155FactoryTest is Test {
         instanceContract.mintWithMessage{value: 0.1 ether}(1, 1, "Message 2");
         vm.stopPrank();
         
-        // Get batch
-        (
-            address[] memory senders,
-            uint32[] memory timestamps,
-            uint32[] memory editionIds,
-            uint32[] memory amounts,
-            string[] memory messages
-        ) = instanceContract.getMessagesBatch(0, 1);
-        
-        assertEq(senders.length, 2);
-        assertEq(senders[0], minter1);
-        assertEq(senders[1], minter2);
-        assertEq(messages[0], "Message 1");
-        assertEq(messages[1], "Message 2");
+        // Get messages from global registry
+        GlobalMessageRegistry.GlobalMessage[] memory instanceMessages = _getInstanceMessages(instance, 2);
+
+        assertEq(instanceMessages.length, 2, "Should have 2 messages");
+
+        // Verify first message
+        _assertGlobalMessageWithAmount({
+            messageId: 0,
+            expectedInstance: instance,
+            expectedSender: minter1,
+            expectedFactoryType: GlobalMessageTypes.FACTORY_ERC1155,
+            expectedActionType: GlobalMessageTypes.ACTION_MINT,
+            expectedContextId: 1,
+            expectedAmount: 1,
+            expectedMessage: "Message 1"
+        });
+
+        // Verify second message
+        _assertGlobalMessageWithAmount({
+            messageId: 1,
+            expectedInstance: instance,
+            expectedSender: minter2,
+            expectedFactoryType: GlobalMessageTypes.FACTORY_ERC1155,
+            expectedActionType: GlobalMessageTypes.ACTION_MINT,
+            expectedContextId: 1,
+            expectedAmount: 1,
+            expectedMessage: "Message 2"
+        });
     }
 
     function test_UpdateEditionMetadata() public {
@@ -471,7 +510,8 @@ contract ERC1155FactoryTest is Test {
             "Test Collection",
             "ipfs://test",
             creator,
-            address(vault)
+            address(vault),
+            "" // styleUri
         );
         
         factory.addEdition(
@@ -501,7 +541,8 @@ contract ERC1155FactoryTest is Test {
             "Test Collection",
             "ipfs://test",
             creator,
-            address(vault)
+            address(vault),
+            "" // styleUri
         );
         
         factory.addEdition(
@@ -531,7 +572,8 @@ contract ERC1155FactoryTest is Test {
             "Test Collection",
             "ipfs://test",
             creator,
-            address(vault)
+            address(vault),
+            "" // styleUri
         );
         
         factory.addEdition(
@@ -579,7 +621,8 @@ contract ERC1155FactoryTest is Test {
             "Test Collection",
             "ipfs://test",
             creator,
-            address(vault)
+            address(vault),
+            "" // styleUri
         );
         
         factory.addEdition(instance, "Piece 1", 0.1 ether, 0, "ipfs://1", ERC1155Instance.PricingModel.UNLIMITED, 0);
@@ -607,7 +650,8 @@ contract ERC1155FactoryTest is Test {
             "Test Collection",
             "ipfs://test",
             creator,
-            address(vault)
+            address(vault),
+            "" // styleUri
         );
         
         factory.addEdition(instance, "Piece 1", 0.1 ether, 0, "ipfs://1", ERC1155Instance.PricingModel.UNLIMITED, 0);
@@ -644,7 +688,8 @@ contract ERC1155FactoryTest is Test {
             "Test Collection",
             "ipfs://test",
             creator,
-            address(vault)
+            address(vault),
+            "" // styleUri
         );
         
         ERC1155Instance instanceContract = ERC1155Instance(instance);
@@ -656,7 +701,8 @@ contract ERC1155FactoryTest is Test {
             address instanceVault,
             uint256 totalEditions,
             uint256 totalProceeds,
-            uint256 contractBalance
+            uint256 contractBalance,
+            string memory instanceStyleUri
         ) = instanceContract.getInstanceMetadata();
         
         assertEq(instanceName, "Test Collection");
@@ -677,7 +723,8 @@ contract ERC1155FactoryTest is Test {
             "Test Collection",
             "ipfs://test",
             creator,
-            address(vault)
+            address(vault),
+            "" // styleUri
         );
         
         factory.addEdition(
@@ -721,7 +768,8 @@ contract ERC1155FactoryTest is Test {
             "Test Collection",
             "ipfs://test",
             creator,
-            address(vault)
+            address(vault),
+            "" // styleUri
         );
         
         factory.addEdition(
@@ -761,7 +809,8 @@ contract ERC1155FactoryTest is Test {
             "Test Collection",
             "ipfs://test",
             creator,
-            address(vault)
+            address(vault),
+            "" // styleUri
         );
         
         factory.addEdition(

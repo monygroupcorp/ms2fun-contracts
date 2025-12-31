@@ -15,6 +15,7 @@ contract ERC404RerollTest is Test {
     address mockHook = address(0x2);
     address mockWETH = address(0x3);
     address factory = address(0x4);
+    address mockMasterRegistry = address(0x6);
     address owner = address(0x5);
     address user1 = address(0x10);
     address user2 = address(0x20);
@@ -70,7 +71,9 @@ contract ERC404RerollTest is Test {
             mockHook,
             mockWETH,
             factory,
-            owner
+            mockMasterRegistry,
+            owner,
+            "" // styleUri
         );
 
         // Fund users
