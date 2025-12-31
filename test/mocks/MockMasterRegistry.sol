@@ -20,10 +20,6 @@ contract MockMasterRegistry is IMasterRegistry {
         bytes32[] memory
     ) external payable override {}
 
-    function voteOnApplication(address, bool) external payable override {}
-
-    function finalizeApplication(address) external override {}
-
     function registerInstance(
         address,
         address,
@@ -195,5 +191,9 @@ contract MockMasterRegistry is IMasterRegistry {
 
     function vaultRegistrationFee() external view override returns (uint256) {
         return 0;
+    }
+
+    function getGlobalMessageRegistry() external view override returns (address) {
+        return address(0); // No global registry in mock
     }
 }

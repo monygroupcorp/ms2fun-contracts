@@ -52,13 +52,15 @@ contract ERC1155Factory is Ownable, ReentrancyGuard {
      * @param metadataURI Base metadata URI
      * @param creator Creator address
      * @param vault UltraAlignmentVault address for tax collection
+     * @param styleUri Style URI (ipfs://, ar://, https://, or inline:css:/inline:js:)
      * @return instance Address of the created instance
      */
     function createInstance(
         string memory name,
         string memory metadataURI,
         address creator,
-        address vault
+        address vault,
+        string memory styleUri
     ) external payable nonReentrant returns (address instance) {
         require(msg.value >= instanceCreationFee, "Insufficient fee");
         require(bytes(name).length > 0, "Invalid name");
@@ -72,7 +74,9 @@ contract ERC1155Factory is Ownable, ReentrancyGuard {
             metadataURI,
             creator,
             address(this),
-            vault
+            vault,
+            styleUri,
+            address(masterRegistry)
         ));
 
         // Store vault mapping

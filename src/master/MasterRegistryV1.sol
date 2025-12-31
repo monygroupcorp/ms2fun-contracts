@@ -8,6 +8,7 @@ import {IMasterRegistry} from "./interfaces/IMasterRegistry.sol";
 import {MetadataUtils} from "../shared/libraries/MetadataUtils.sol";
 import {VaultRegistry} from "../registry/VaultRegistry.sol";
 import {FactoryApprovalGovernance} from "../governance/FactoryApprovalGovernance.sol";
+import {GlobalMessageRegistry} from "../registry/GlobalMessageRegistry.sol";
 
 /**
  * @title MasterRegistryV1
@@ -50,6 +51,7 @@ contract MasterRegistryV1 is UUPSUpgradeable, Ownable, ReentrancyGuard, IMasterR
     address public vaultRegistry;
     address public governanceModule;
     address public execToken; // EXEC token for governance voting
+    address public globalMessageRegistry; // Global message registry for protocol-wide activity tracking
 
     // Vault Registry - Hook is now managed by vault, not MasterRegistry
     mapping(address => IMasterRegistry.VaultInfo) public vaultInfo;
@@ -286,6 +288,11 @@ contract MasterRegistryV1 is UUPSUpgradeable, Ownable, ReentrancyGuard, IMasterR
         // Track instance in enumeration array
         instanceIndex[instance] = allInstances.length;
         allInstances.push(instance);
+
+        // Authorize instance in global message registry (if set)
+        if (globalMessageRegistry != address(0)) {
+            GlobalMessageRegistry(globalMessageRegistry).authorizeInstance(instance);
+        }
 
         emit InstanceRegistered(instance, factory, creator, name);
         emit CreatorInstanceAdded(creator, instance);
@@ -919,6 +926,26 @@ contract MasterRegistryV1 is UUPSUpgradeable, Ownable, ReentrancyGuard, IMasterR
         emit VaultDeactivated(vault);
     }
 
+    // ============ Global Message Registry ============
+
+    /**
+     * @notice Set global message registry address
+     * @dev Only owner can set the registry
+     * @param _globalMessageRegistry Address of the GlobalMessageRegistry contract
+     */
+    function setGlobalMessageRegistry(address _globalMessageRegistry) external onlyOwner {
+        require(_globalMessageRegistry != address(0), "Invalid registry address");
+        globalMessageRegistry = _globalMessageRegistry;
+    }
+
+    /**
+     * @notice Get global message registry address
+     * @return Address of the GlobalMessageRegistry contract
+     */
+    function getGlobalMessageRegistry() external view override returns (address) {
+        return globalMessageRegistry;
+    }
+
     // Phase 2 Features - Hook Registry
 
     // Hook registry removed - vaults now manage their own canonical hooks
@@ -948,21 +975,6 @@ contract MasterRegistryV1 is UUPSUpgradeable, Ownable, ReentrancyGuard, IMasterR
         );
     }
 
-    function voteOnApplication(address factoryAddress, bool approve) external payable override {
-        require(governanceModule != address(0), "Governance module not set");
-        // Note: This is a legacy interface - new system uses voteWithDeposit directly
-        // Forwards to governance module, msg.value should contain EXEC deposit amount
-        // This function is kept for backwards compatibility but users should call
-        // FactoryApprovalGovernance.voteWithDeposit() directly
-        revert("Use voteWithDeposit on FactoryApprovalGovernance directly");
-    }
-
-    function finalizeApplication(address factoryAddress) external override {
-        require(governanceModule != address(0), "Governance module not set");
-        // Note: New system uses finalizeRound() which is permissionless
-        // This function is kept for backwards compatibility
-        revert("Use finalizeRound on FactoryApprovalGovernance directly");
-    }
 
     function getFactoryApplication(address factoryAddress) external view override returns (FactoryApplication memory) {
         require(governanceModule != address(0), "Governance module not set");

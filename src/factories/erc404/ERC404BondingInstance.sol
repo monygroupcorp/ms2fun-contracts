@@ -7,7 +7,6 @@ import { Ownable } from "solady/auth/Ownable.sol";
 import { ReentrancyGuard } from "solady/utils/ReentrancyGuard.sol";
 import { SafeTransferLib } from "solady/utils/SafeTransferLib.sol";
 import { BondingCurveMath } from "./libraries/BondingCurveMath.sol";
-import { MessagePacking } from "./libraries/MessagePacking.sol";
 import { IPoolManager } from "v4-core/interfaces/IPoolManager.sol";
 import { PoolKey } from "v4-core/types/PoolKey.sol";
 import { Currency, CurrencyLibrary } from "v4-core/types/Currency.sol";
@@ -20,6 +19,10 @@ import { StateLibrary } from "v4-core/libraries/StateLibrary.sol";
 import { PoolId } from "v4-core/types/PoolId.sol";
 import { CurrencySettler } from "../../libraries/v4/CurrencySettler.sol";
 import { UltraAlignmentVault } from "../../vaults/UltraAlignmentVault.sol";
+import { GlobalMessageRegistry } from "../../registry/GlobalMessageRegistry.sol";
+import { GlobalMessagePacking } from "../../libraries/GlobalMessagePacking.sol";
+import { GlobalMessageTypes } from "../../libraries/GlobalMessageTypes.sol";
+import { IMasterRegistry } from "../../master/interfaces/IMasterRegistry.sol";
 
 interface IWETH {
     function deposit() external payable;
@@ -38,7 +41,6 @@ interface IERC20 {
  */
 contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IUnlockCallback {
     using BondingCurveMath for BondingCurveMath.Params;
-    using MessagePacking for uint128;
     using CurrencyLibrary for Currency;
     using StateLibrary for IPoolManager;
     using CurrencySettler for Currency;
@@ -67,14 +69,8 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IUnlockCallba
         uint256[] tierUnlockTimes; // For TIME_BASED mode (relative to bondingOpenTime)
     }
 
-    struct BondingMessage {
-        address sender;
-        uint128 packedData;
-        string message;
-    }
-
     // ┌─────────────────────────┐
-    // │      State Variables     │
+    // │      State Variables    │
     // └─────────────────────────┘
 
     string private _name;
@@ -91,8 +87,14 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IUnlockCallba
     address public immutable factory;
     address public immutable weth;
     UltraAlignmentVault public vault; // Can be set after deployment for staking support
+    IMasterRegistry public immutable masterRegistry;
+    GlobalMessageRegistry private cachedGlobalRegistry; // Lazy-loaded from masterRegistry
+
+    // Customization
+    string public styleUri;
 
     uint256 public bondingOpenTime;  // Set by owner, 0 = not set
+    uint256 public bondingMaturityTime; // When anyone can deploy liquidity, 0 = not set
     bool public bondingActive;       // Toggle for open/close
     uint256 public totalBondingSupply;
     uint256 public reserve;
@@ -102,10 +104,6 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IUnlockCallba
     mapping(bytes32 => uint256) public tierByPasswordHash; // hash => tier index (0 = no tier)
     mapping(address => uint256) public userTierUnlocked;    // user => highest tier unlocked
     mapping(address => uint256) public userPurchaseVolume;   // For volume cap mode
-
-    // Message system
-    mapping(uint256 => BondingMessage) public bondingMessages;
-    uint256 public totalMessages;
 
     // Free mint system (optional)
     uint256 public freeSupply;
@@ -118,12 +116,13 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IUnlockCallba
     bool public stakingEnabled;
     mapping(address => uint256) public stakedBalance;     // user => staked token amount
     uint256 public totalStaked;                            // total tokens staked across all users
-    uint256 public lastVaultFeesClaimed;                   // tracks last fee amount from vault
-    mapping(address => uint256) public stakeRewardsTracking; // user => last fee point when they claimed
+    uint256 public totalFeesAccumulatedFromVault;          // cumulative total fees received from vault (share-based accounting)
+    mapping(address => uint256) public stakerFeesAlreadyClaimed; // user => cumulative fees already claimed (share-based accounting)
 
     // Events
     event BondingSale(address indexed user, uint256 amount, uint256 cost, bool isBuy);
     event BondingOpenTimeSet(uint256 openTime);
+    event BondingMaturityTimeSet(uint256 maturityTime);
     event BondingActiveChanged(bool active);
     event LiquidityDeployed(address indexed pool, uint256 amountToken, uint256 amountETH);
     event RerollInitiated(address indexed user, uint256 tokenAmount, uint256[] exemptedNFTIds);
@@ -148,7 +147,9 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IUnlockCallba
         address _v4Hook,
         address _weth,
         address _factory,
-        address _owner
+        address _masterRegistry,
+        address _owner,
+        string memory _styleUri
     ) {
         require(_maxSupply > 0, "Invalid max supply");
         require(_liquidityReservePercent < 100, "Invalid reserve percent");
@@ -156,10 +157,11 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IUnlockCallba
         require(_weth != address(0), "Invalid WETH");
         // Hook can be address(0) initially and set later
         require(_factory != address(0), "Invalid factory");
+        require(_masterRegistry != address(0), "Invalid master registry");
         require(_owner != address(0), "Invalid owner");
         require(_tierConfig.passwordHashes.length > 0, "No tiers");
         require(
-            _tierConfig.tierType == TierType.VOLUME_CAP 
+            _tierConfig.tierType == TierType.VOLUME_CAP
                 ? _tierConfig.volumeCaps.length == _tierConfig.passwordHashes.length
                 : _tierConfig.tierUnlockTimes.length == _tierConfig.passwordHashes.length,
             "Tier config mismatch"
@@ -185,6 +187,8 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IUnlockCallba
         v4Hook = IHooks(_v4Hook); // Can be address(0)
         weth = _weth;
         factory = _factory;
+        masterRegistry = IMasterRegistry(_masterRegistry);
+        styleUri = _styleUri;
 
         // Initialize password hash mapping
         for (uint256 i = 0; i < _tierConfig.passwordHashes.length; i++) {
@@ -210,6 +214,19 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IUnlockCallba
         require(timestamp > block.timestamp, "Time must be in future");
         bondingOpenTime = timestamp;
         emit BondingOpenTimeSet(timestamp);
+    }
+
+    /**
+     * @notice Set the bonding curve maturity time (when permissionless liquidity deployment is allowed)
+     * @dev After maturity, anyone can call deployLiquidity to transition to V4 pool
+     * @param timestamp Unix timestamp for when bonding curve matures
+     */
+    function setBondingMaturityTime(uint256 timestamp) external onlyOwner {
+        require(timestamp > block.timestamp, "Time must be in future");
+        require(bondingOpenTime != 0, "Open time must be set first");
+        require(timestamp > bondingOpenTime, "Maturity must be after open time");
+        bondingMaturityTime = timestamp;
+        emit BondingMaturityTimeSet(timestamp);
     }
 
     /**
@@ -247,6 +264,32 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IUnlockCallba
         require(_vault != address(0), "Invalid vault");
         require(address(vault) == address(0), "Vault already set");
         vault = UltraAlignmentVault(_vault);
+    }
+
+    // ┌─────────────────────────┐
+    // │  Global Message Helpers │
+    // └─────────────────────────┘
+
+    /**
+     * @notice Internal helper to lazy-load global message registry
+     * @dev Caches registry address to avoid repeated external calls
+     * @return GlobalMessageRegistry instance
+     */
+    function _getGlobalMessageRegistry() private returns (GlobalMessageRegistry) {
+        if (address(cachedGlobalRegistry) == address(0)) {
+            address registryAddr = masterRegistry.getGlobalMessageRegistry();
+            require(registryAddr != address(0), "Global registry not set");
+            cachedGlobalRegistry = GlobalMessageRegistry(registryAddr);
+        }
+        return cachedGlobalRegistry;
+    }
+
+    /**
+     * @notice Get global message registry address (public getter for frontend)
+     * @return Address of the GlobalMessageRegistry contract
+     */
+    function getGlobalMessageRegistry() external view returns (address) {
+        return masterRegistry.getGlobalMessageRegistry();
     }
 
     // ┌─────────────────────────┐
@@ -374,20 +417,19 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IUnlockCallba
             userPurchaseVolume[msg.sender] += amount;
         }
 
-        // Store message
+        // Store message in global registry
         if (bytes(message).length > 0) {
-            uint64 scaledAmount = uint64(amount / 1e18);
-            require(scaledAmount <= type(uint64).max, "Amount too large for msg");
-            
-            bondingMessages[totalMessages++] = BondingMessage({
-                sender: msg.sender,
-                packedData: MessagePacking.packData(
-                    uint32(block.timestamp),
-                    uint96(scaledAmount),
-                    true
-                ),
-                message: message
-            });
+            GlobalMessageRegistry registry = _getGlobalMessageRegistry();
+
+            uint256 packedData = GlobalMessagePacking.pack(
+                uint32(block.timestamp),
+                GlobalMessageTypes.FACTORY_ERC404,
+                GlobalMessageTypes.ACTION_BUY,
+                0, // contextId: 0 for ERC404 (no editions)
+                uint96(amount / 1e18) // Normalize to whole tokens
+            );
+
+            registry.addMessage(address(this), msg.sender, packedData, message);
         }
 
         // Reset skipNFT
@@ -420,6 +462,10 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IUnlockCallba
         require(liquidityPool == address(0), "Bonding ended");
         require(address(v4Hook) != address(0), "Hook not configured");
 
+        // Lock sells when bonding curve is full to preserve best case scenario for liquidity deployment
+        uint256 maxBondingSupply = MAX_SUPPLY - LIQUIDITY_RESERVE;
+        require(totalBondingSupply < maxBondingSupply, "Bonding curve full - sells locked");
+
         // Check tier access (for sellBonding, mainly TIME_BASED tiers)
         uint256 tier = passwordHash == bytes32(0) ? 0 : tierByPasswordHash[passwordHash];
         require(tier != 0 || passwordHash == bytes32(0), "Invalid password");
@@ -448,18 +494,19 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IUnlockCallba
         totalBondingSupply -= amount;
         reserve -= refund;
 
-        // Store message
+        // Store message in global registry
         if (bytes(message).length > 0) {
-            require(amount / 1 ether <= type(uint64).max, "Amount too large for msg");
-            bondingMessages[totalMessages++] = BondingMessage({
-                sender: msg.sender,
-                packedData: MessagePacking.packData(
-                    uint32(block.timestamp),
-                    uint64(amount / 1 ether),
-                    false
-                ),
-                message: message
-            });
+            GlobalMessageRegistry registry = _getGlobalMessageRegistry();
+
+            uint256 packedData = GlobalMessagePacking.pack(
+                uint32(block.timestamp),
+                GlobalMessageTypes.FACTORY_ERC404,
+                GlobalMessageTypes.ACTION_SELL,
+                0, // contextId: 0 for ERC404
+                uint96(amount / 1e18) // Normalize to whole tokens
+            );
+
+            registry.addMessage(address(this), msg.sender, packedData, message);
         }
 
         // Refund ETH (no tax - handled by hook)
@@ -518,6 +565,7 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IUnlockCallba
      * @return factoryAddress Factory address
      * @return v4HookAddress V4 hook address (address(0) if not set)
      * @return wethAddress WETH address
+     * @return projectStyleUri Style URI for customization
      */
     function getProjectMetadata() external view returns (
         string memory projectName,
@@ -531,7 +579,8 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IUnlockCallba
         address liquidityPoolAddress,
         address factoryAddress,
         address v4HookAddress,
-        address wethAddress
+        address wethAddress,
+        string memory projectStyleUri
     ) {
         return (
             _name,
@@ -545,7 +594,8 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IUnlockCallba
             liquidityPool,
             factory,
             address(v4Hook),
-            weth
+            weth,
+            styleUri
         );
     }
 
@@ -652,6 +702,35 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IUnlockCallba
     }
 
     /**
+     * @notice Check if liquidity deployment is permissionless (anyone can call)
+     * @dev Deployment becomes permissionless when:
+     *      - Bonding curve is full (totalBondingSupply >= MAX_SUPPLY - LIQUIDITY_RESERVE), OR
+     *      - Maturity time is reached (block.timestamp >= bondingMaturityTime)
+     * @return isPermissionless Whether anyone can deploy liquidity
+     * @return reason Human-readable reason ("full", "matured", "owner_only", or "already_deployed")
+     */
+    function canDeployPermissionless() external view returns (
+        bool isPermissionless,
+        string memory reason
+    ) {
+        if (liquidityPool != address(0)) {
+            return (false, "already_deployed");
+        }
+
+        uint256 maxBondingSupply = MAX_SUPPLY - LIQUIDITY_RESERVE;
+        bool isFull = totalBondingSupply >= maxBondingSupply;
+        bool isMatured = bondingMaturityTime != 0 && block.timestamp >= bondingMaturityTime;
+
+        if (isFull) {
+            return (true, "full");
+        } else if (isMatured) {
+            return (true, "matured");
+        } else {
+            return (false, "owner_only");
+        }
+    }
+
+    /**
      * @notice Get current pricing information
      * @param amount Amount of tokens to price
      * @return buyCost Cost to buy the amount
@@ -705,14 +784,6 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IUnlockCallba
     }
 
     /**
-     * @notice Get message count
-     * @return count Total number of messages
-     */
-    function getMessageCount() external view returns (uint256 count) {
-        return totalMessages;
-    }
-
-    /**
      * @notice Get total supply information
      * @return maxSupply Maximum total supply
      * @return liquidityReserve Liquidity reserve amount
@@ -740,6 +811,26 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IUnlockCallba
             available,
             $.totalSupply
         );
+    }
+
+    // ┌─────────────────────────┐
+    // │   Style Management      │
+    // └─────────────────────────┘
+
+    /**
+     * @notice Set project styling (owner only)
+     * @param uri Style URI (ipfs://, ar://, https://, or inline:css:... / inline:js:...)
+     */
+    function setStyle(string memory uri) external onlyOwner {
+        styleUri = uri;
+    }
+
+    /**
+     * @notice Get project style URI
+     * @return uri Style URI
+     */
+    function getStyle() external view returns (string memory uri) {
+        return styleUri;
     }
 
     // ┌─────────────────────────┐
@@ -851,9 +942,13 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IUnlockCallba
         stakedBalance[msg.sender] += amount;
         totalStaked += amount;
 
-        // Initialize tracking if first time
-        if (stakeRewardsTracking[msg.sender] == 0) {
-            stakeRewardsTracking[msg.sender] = lastVaultFeesClaimed;
+        // Initialize tracking if first time staking
+        // Set their "already claimed" watermark to their current proportional share of accumulated fees
+        // This ensures they only earn fees from this point forward, not retroactively
+        if (stakerFeesAlreadyClaimed[msg.sender] == 0 && totalFeesAccumulatedFromVault > 0) {
+            // Calculate their share of existing fees (which they didn't contribute to earning)
+            // Set this as their "already claimed" amount so they don't get retroactive fees
+            stakerFeesAlreadyClaimed[msg.sender] = (totalFeesAccumulatedFromVault * stakedBalance[msg.sender]) / totalStaked;
         }
 
         emit Staked(msg.sender, amount, stakedBalance[msg.sender], totalStaked);
@@ -873,15 +968,30 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IUnlockCallba
 
         // Auto-claim pending rewards before unstaking
         if (address(vault) != address(0) && totalStaked > 0) {
-            uint256 currentVaultFees = vault.claimFees();
-            uint256 userProportionalShare = (currentVaultFees * stakedBalance[msg.sender]) / totalStaked;
-            uint256 userAlreadyReceived = stakeRewardsTracking[msg.sender];
+            // Step 1: Update global fee counter by querying vault for TOTAL cumulative fees
+            uint256 vaultTotalFees = vault.calculateClaimableAmount(address(this));
 
-            if (userProportionalShare > userAlreadyReceived) {
-                uint256 rewardAmount = userProportionalShare - userAlreadyReceived;
-                stakeRewardsTracking[msg.sender] = userProportionalShare;
+            // Step 2: Claim the delta from vault (transfers ETH to this contract)
+            uint256 deltaReceived = vault.claimFees();
+
+            // Step 3: Update our cumulative total
+            totalFeesAccumulatedFromVault = vaultTotalFees;
+
+            // Step 4: Calculate this user's total entitlement (cumulative)
+            uint256 userTotalEntitlement = (totalFeesAccumulatedFromVault * stakedBalance[msg.sender]) / totalStaked;
+
+            // Step 5: Calculate pending (delta between entitlement and already claimed)
+            uint256 userAlreadyClaimed = stakerFeesAlreadyClaimed[msg.sender];
+
+            if (userTotalEntitlement > userAlreadyClaimed) {
+                uint256 rewardAmount = userTotalEntitlement - userAlreadyClaimed;
+
+                // Update user's watermark
+                stakerFeesAlreadyClaimed[msg.sender] = userTotalEntitlement;
+
+                // Transfer reward
                 SafeTransferLib.safeTransferETH(msg.sender, rewardAmount);
-                emit StakerRewardsClaimed(msg.sender, rewardAmount, userProportionalShare);
+                emit StakerRewardsClaimed(msg.sender, rewardAmount, userTotalEntitlement);
             }
         }
 
@@ -897,12 +1007,24 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IUnlockCallba
 
     /**
      * @notice Claim proportional share of vault fees accumulated since last personal claim
-     * @dev On-demand claiming with per-user tracking for accurate permissionless claiming
-     *      - Pulls all accumulated fees from vault (using this contract as benefactor)
-     *      - Calculates user's proportional share of ALL fees: (totalFees × userStake / totalStaked)
-     *      - Subtracts what user has already received: pending = proportional - alreadyReceived
-     *      - Transfers pending amount to staker
-     *      - Dust (rounding loss) accumulates in contract, available for owner withdrawal
+     * @dev Share-based accounting ensures accurate fee distribution across multiple stakers claiming at different times
+     *      Algorithm:
+     *      1. Query vault for TOTAL cumulative fees for this instance: vault.calculateClaimableAmount(address(this))
+     *      2. Claim the delta from vault (transfers new ETH to contract): vault.claimFees()
+     *      3. Update instance's cumulative total: totalFeesAccumulatedFromVault
+     *      4. Calculate staker's total entitlement: (totalFeesAccumulatedFromVault × stakerBalance) / totalStaked
+     *      5. Subtract what staker already claimed: pending = entitlement - stakerFeesAlreadyClaimed[staker]
+     *      6. Update staker's watermark: stakerFeesAlreadyClaimed[staker] = entitlement
+     *      7. Transfer pending ETH to staker
+     *
+     *      Example with 2 stakers (50% each):
+     *      - Vault accumulates 100 ETH total for instance
+     *      - Staker A claims: gets 50 ETH (50% of 100), watermark = 50
+     *      - Vault accumulates 100 more ETH (200 total now)
+     *      - Staker B claims: totalFees = 200, entitlement = 100, already claimed = 0, gets 100 ETH
+     *      - Staker A claims again: totalFees = 200, entitlement = 100, already claimed = 50, gets 50 ETH
+     *
+     *      Dust (rounding loss) accumulates in contract, available for owner withdrawal
      * @return rewardAmount ETH distributed to staker
      */
     function claimStakerRewards() external nonReentrant returns (uint256 rewardAmount) {
@@ -910,28 +1032,33 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IUnlockCallba
         require(stakedBalance[msg.sender] > 0, "No staked balance");
         require(totalStaked > 0, "No stakers");
 
-        // Pull all accumulated vault fees (instance is benefactor in vault)
-        uint256 currentVaultFees = vault.claimFees();
+        // Step 1: Query vault for TOTAL cumulative fees (not delta)
+        uint256 vaultTotalFees = vault.calculateClaimableAmount(address(this));
 
-        // Calculate user's proportional share of ALL accumulated fees
-        // userShare = (currentVaultFees × userStake) / totalStaked
-        uint256 userProportionalShare = (currentVaultFees * stakedBalance[msg.sender]) / totalStaked;
+        // Step 2: Claim the delta from vault (transfers ETH to this contract)
+        uint256 deltaReceived = vault.claimFees();
 
-        // How much has this user already claimed?
-        uint256 userAlreadyReceived = stakeRewardsTracking[msg.sender];
+        // Step 3: Update our cumulative total with the vault's authoritative total
+        totalFeesAccumulatedFromVault = vaultTotalFees;
 
-        // Calculate pending: what user is entitled to minus what they've already received
-        rewardAmount = userProportionalShare - userAlreadyReceived;
+        // Step 4: Calculate this staker's total entitlement (cumulative, not delta)
+        // Formula: (total accumulated fees × this staker's balance) / all staked tokens
+        uint256 userTotalEntitlement = (totalFeesAccumulatedFromVault * stakedBalance[msg.sender]) / totalStaked;
 
-        require(rewardAmount > 0, "No pending rewards");
+        // Step 5: Calculate pending reward (delta between total entitlement and what they've already claimed)
+        uint256 userAlreadyClaimed = stakerFeesAlreadyClaimed[msg.sender];
 
-        // Update user's tracking point to their new proportional share
-        stakeRewardsTracking[msg.sender] = userProportionalShare;
+        require(userTotalEntitlement > userAlreadyClaimed, "No pending rewards");
 
-        // Transfer reward to staker
+        rewardAmount = userTotalEntitlement - userAlreadyClaimed;
+
+        // Step 6: Update staker's watermark to their new cumulative entitlement
+        stakerFeesAlreadyClaimed[msg.sender] = userTotalEntitlement;
+
+        // Step 7: Transfer pending reward to staker
         SafeTransferLib.safeTransferETH(msg.sender, rewardAmount);
 
-        emit StakerRewardsClaimed(msg.sender, rewardAmount, userProportionalShare);
+        emit StakerRewardsClaimed(msg.sender, rewardAmount, userTotalEntitlement);
         return rewardAmount;
     }
 
@@ -945,18 +1072,18 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IUnlockCallba
             return 0;
         }
 
-        // Get current total fees accumulated in vault for this instance
-        uint256 currentVaultFees = vault.calculateClaimableAmount(address(this));
+        // Get current total fees accumulated in vault for this instance (authoritative source)
+        uint256 vaultTotalFees = vault.calculateClaimableAmount(address(this));
 
-        // Calculate staker's proportional share of ALL accumulated fees
-        uint256 userProportionalShare = (currentVaultFees * stakedBalance[staker]) / totalStaked;
+        // Calculate staker's total entitlement (cumulative)
+        uint256 stakerTotalEntitlement = (vaultTotalFees * stakedBalance[staker]) / totalStaked;
 
-        // How much has user already claimed?
-        uint256 userAlreadyReceived = stakeRewardsTracking[staker];
+        // How much has staker already claimed? (cumulative watermark)
+        uint256 stakerAlreadyClaimed = stakerFeesAlreadyClaimed[staker];
 
-        // Pending is the difference
-        pendingReward = userProportionalShare > userAlreadyReceived
-            ? userProportionalShare - userAlreadyReceived
+        // Pending is the difference between total entitlement and already claimed
+        pendingReward = stakerTotalEntitlement > stakerAlreadyClaimed
+            ? stakerTotalEntitlement - stakerAlreadyClaimed
             : 0;
 
         return pendingReward;
@@ -968,37 +1095,37 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IUnlockCallba
      * @return staked Amount staked by user
      * @return totalStakedGlobal Total tokens staked
      * @return userProportion User's proportion as bps (basis points)
-     * @return lastTrackedFees Last fee point when user claimed
+     * @return feesAlreadyClaimed Cumulative fees user has already claimed (watermark)
      */
     function getStakingInfo(address user) external view returns (
         uint256 staked,
         uint256 totalStakedGlobal,
         uint256 userProportion,
-        uint256 lastTrackedFees
+        uint256 feesAlreadyClaimed
     ) {
         staked = stakedBalance[user];
         totalStakedGlobal = totalStaked;
         userProportion = totalStaked > 0 ? (staked * 10000) / totalStaked : 0; // in basis points
-        lastTrackedFees = stakeRewardsTracking[user];
+        feesAlreadyClaimed = stakerFeesAlreadyClaimed[user];
     }
 
     /**
      * @notice Get global staking statistics
      * @return enabled Whether staking is enabled
      * @return globalTotalStaked Total tokens staked
-     * @return globalLastVaultFeesClaimed Last fee amount pulled from vault
+     * @return totalFeesFromVault Cumulative total fees received from vault (share-based accounting)
      * @return contractBalance Contract's ETH balance
      */
     function getStakingStats() external view returns (
         bool enabled,
         uint256 globalTotalStaked,
-        uint256 globalLastVaultFeesClaimed,
+        uint256 totalFeesFromVault,
         uint256 contractBalance
     ) {
         return (
             stakingEnabled,
             totalStaked,
-            lastVaultFeesClaimed,
+            totalFeesAccumulatedFromVault,
             address(this).balance
         );
     }
@@ -1057,67 +1184,6 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IUnlockCallba
     }
 
     // ┌─────────────────────────┐
-    // │   Message System        │
-    // └─────────────────────────┘
-
-    /**
-     * @notice Get message details
-     * @param messageId Message ID
-     * @return sender Message sender
-     * @return timestamp Timestamp
-     * @return amount Token amount
-     * @return isBuy Whether it's a buy
-     * @return message Message text
-     */
-    function getMessageDetails(uint256 messageId) external view returns (
-        address sender,
-        uint32 timestamp,
-        uint96 amount,
-        bool isBuy,
-        string memory message
-    ) {
-        require(messageId < totalMessages, "Message does not exist");
-        BondingMessage memory bondingMsg = bondingMessages[messageId];
-        (timestamp, amount, isBuy) = MessagePacking.unpackData(bondingMsg.packedData);
-        return (bondingMsg.sender, timestamp, amount, isBuy, bondingMsg.message);
-    }
-
-    /**
-     * @notice Get batch of messages
-     * @param start Start index
-     * @param end End index (inclusive)
-     * @return senders Array of senders
-     * @return timestamps Array of timestamps
-     * @return amounts Array of amounts
-     * @return isBuys Array of isBuy flags
-     * @return messages Array of messages
-     */
-    function getMessagesBatch(uint256 start, uint256 end) external view returns (
-        address[] memory senders,
-        uint32[] memory timestamps,
-        uint96[] memory amounts,
-        bool[] memory isBuys,
-        string[] memory messages
-    ) {
-        require(end >= start, "Invalid range");
-        require(end < totalMessages, "End out of bounds");
-        
-        uint256 size = end - start + 1;
-        senders = new address[](size);
-        timestamps = new uint32[](size);
-        amounts = new uint96[](size);
-        isBuys = new bool[](size);
-        messages = new string[](size);
-        
-        for (uint256 i = 0; i < size; i++) {
-            BondingMessage memory bondingMsg = bondingMessages[start + i];
-            senders[i] = bondingMsg.sender;
-            (timestamps[i], amounts[i], isBuys[i]) = MessagePacking.unpackData(bondingMsg.packedData);
-            messages[i] = bondingMsg.message;
-        }
-    }
-
-    // ┌─────────────────────────┐
     // │  V4 Liquidity Deploy   │
     // └─────────────────────────┘
 
@@ -1132,11 +1198,17 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IUnlockCallba
 
     /**
      * @notice Deploy liquidity to Uniswap V4
-     * @dev Creates a new pool with hook attached and adds initial liquidity
+     * @dev Creates a new pool with hook attached and adds FULL-RANGE (infinite range) liquidity
+     *      Full-range means tickLower = minUsableTick and tickUpper = maxUsableTick
+     *      This ensures liquidity is available at all price points
+     *
+     *      Permissionless deployment allowed when:
+     *      - Bonding curve is full (reached max capacity), OR
+     *      - Maturity time is reached (if set)
+     *      Otherwise, only owner can deploy
+     *
      * @param poolFee Pool fee (e.g., 3000 for 0.3%)
-     * @param tickSpacing Tick spacing
-     * @param tickLower Lower tick for liquidity range
-     * @param tickUpper Upper tick for liquidity range
+     * @param tickSpacing Tick spacing (must match poolFee: 10 for 0.05%, 60 for 0.3%, 200 for 1%)
      * @param amountToken Amount of tokens to add
      * @param amountETH Amount of ETH to add
      * @param sqrtPriceX96 Initial sqrt price for pool (Q64.96 format)
@@ -1145,96 +1217,108 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IUnlockCallba
     function deployLiquidity(
         uint24 poolFee,
         int24 tickSpacing,
-        int24 tickLower,
-        int24 tickUpper,
         uint256 amountToken,
         uint256 amountETH,
         uint160 sqrtPriceX96
-    ) external payable onlyOwner nonReentrant returns (uint128 liquidity) {
+    ) external payable nonReentrant returns (uint128 liquidity) {
         require(bondingOpenTime != 0, "Bonding not configured");
         require(block.timestamp >= bondingOpenTime, "Too early");
         require(liquidityPool == address(0), "Already deployed");
+
+        // Check if permissionless deployment is allowed
+        uint256 maxBondingSupply = MAX_SUPPLY - LIQUIDITY_RESERVE;
+        bool isFull = totalBondingSupply >= maxBondingSupply;
+        bool isMatured = bondingMaturityTime != 0 && block.timestamp >= bondingMaturityTime;
+        bool isPermissionless = isFull || isMatured;
+
+        // Only owner can deploy if not permissionless
+        if (!isPermissionless) {
+            require(msg.sender == owner(), "Only owner can deploy before maturity/full");
+        }
         require(msg.value >= amountETH, "Insufficient ETH");
         require(amountToken <= LIQUIDITY_RESERVE, "Exceeds reserve");
         require(address(v4Hook) != address(0), "Hook not set");
         require(sqrtPriceX96 >= TickMath.MIN_SQRT_PRICE && sqrtPriceX96 <= TickMath.MAX_SQRT_PRICE, "Invalid sqrt price");
-        require(tickLower < tickUpper, "Invalid tick range");
-        require(tickLower >= TickMath.minUsableTick(tickSpacing), "Tick lower out of bounds");
-        require(tickUpper <= TickMath.maxUsableTick(tickSpacing), "Tick upper out of bounds");
 
-        // Create pool key
-        Currency currency0 = Currency.wrap(address(this));
-        Currency currency1 = Currency.wrap(weth);
-        bool token0IsThis = currency0 < currency1;
-        
-        if (!token0IsThis) {
-            (currency0, currency1) = (currency1, currency0);
-            (amountToken, amountETH) = (amountETH, amountToken);
+        // ENFORCE FULL-RANGE LIQUIDITY: Always use min/max usable ticks
+        int24 tickLower = TickMath.minUsableTick(tickSpacing);
+        int24 tickUpper = TickMath.maxUsableTick(tickSpacing);
+
+        // Store original amounts before any swapping
+        uint256 originalTokenAmount = amountToken;
+        uint256 originalETHAmount = amountETH;
+
+        // Create pool key and determine currency ordering
+        PoolKey memory poolKey;
+        bool token0IsThis;
+        {
+            Currency currency0 = Currency.wrap(address(this));
+            Currency currency1 = Currency.wrap(weth);
+            token0IsThis = currency0 < currency1;
+
+            if (!token0IsThis) {
+                (currency0, currency1) = (currency1, currency0);
+                (amountToken, amountETH) = (amountETH, amountToken);
+            }
+
+            poolKey = PoolKey({
+                currency0: currency0,
+                currency1: currency1,
+                fee: poolFee,
+                tickSpacing: tickSpacing,
+                hooks: v4Hook
+            });
         }
-
-        PoolKey memory poolKey = PoolKey({
-            currency0: currency0,
-            currency1: currency1,
-            fee: poolFee,
-            tickSpacing: tickSpacing,
-            hooks: v4Hook
-        });
 
         // Wrap ETH to WETH if needed
-        if (amountETH > 0) {
-            IWETH(weth).deposit{value: amountETH}();
+        if (originalETHAmount > 0) {
+            IWETH(weth).deposit{value: originalETHAmount}();
         }
 
-        // Approve pool manager to spend tokens
-        // For ERC20 (WETH), approve directly
-        // For DN404 tokens, CurrencySettler will handle transferFrom in unlock callback
+        // Approve pool manager to spend WETH if needed
         if (!token0IsThis) {
-            IERC20(weth).approve(address(v4PoolManager), amountETH);
+            IERC20(weth).approve(address(v4PoolManager), originalETHAmount);
         }
-        // For token0 (this contract), we'll transfer in the unlock callback
-        // CurrencySettler handles the transferFrom for us
 
         // Initialize pool with initial price
         v4PoolManager.initialize(poolKey, sqrtPriceX96);
 
-        // Calculate liquidity amount from token amounts
-        uint160 sqrtPriceAX96 = TickMath.getSqrtPriceAtTick(tickLower);
-        uint160 sqrtPriceBX96 = TickMath.getSqrtPriceAtTick(tickUpper);
-        
-        liquidity = LiquidityAmounts.getLiquidityForAmounts(
-            sqrtPriceX96,
-            sqrtPriceAX96,
-            sqrtPriceBX96,
-            token0IsThis ? amountToken : amountETH,
-            token0IsThis ? amountETH : amountToken
-        );
+        // Calculate liquidity and add to pool
+        {
+            uint160 sqrtPriceAX96 = TickMath.getSqrtPriceAtTick(tickLower);
+            uint160 sqrtPriceBX96 = TickMath.getSqrtPriceAtTick(tickUpper);
 
-        // Prepare liquidity deployment params
-        LiquidityDeployParams memory deployParams = LiquidityDeployParams({
-            poolKey: poolKey,
-            tickLower: tickLower,
-            tickUpper: tickUpper,
-            amount0: token0IsThis ? amountToken : amountETH,
-            amount1: token0IsThis ? amountETH : amountToken,
-            sender: address(this) // Contract pays for liquidity
-        });
+            liquidity = LiquidityAmounts.getLiquidityForAmounts(
+                sqrtPriceX96,
+                sqrtPriceAX96,
+                sqrtPriceBX96,
+                amountToken,
+                amountETH
+            );
 
-        // Use unlock callback pattern to add liquidity
-        BalanceDelta delta = abi.decode(
-            v4PoolManager.unlock(abi.encode(deployParams)),
-            (BalanceDelta)
-        );
+            // Prepare and execute liquidity deployment
+            LiquidityDeployParams memory deployParams = LiquidityDeployParams({
+                poolKey: poolKey,
+                tickLower: tickLower,
+                tickUpper: tickUpper,
+                amount0: amountToken,
+                amount1: amountETH,
+                sender: address(this)
+            });
 
-        // Store pool address
-        liquidityPool = address(v4PoolManager);
-        reserve -= amountToken;
-
-        // Refund excess ETH
-        if (msg.value > amountETH) {
-            SafeTransferLib.safeTransferETH(msg.sender, msg.value - amountETH);
+            v4PoolManager.unlock(abi.encode(deployParams));
         }
 
-        emit LiquidityDeployed(liquidityPool, amountToken, amountETH);
+        // Store pool address and update reserve
+        liquidityPool = address(v4PoolManager);
+        reserve -= originalTokenAmount;
+
+        // Refund excess ETH
+        if (msg.value > originalETHAmount) {
+            SafeTransferLib.safeTransferETH(msg.sender, msg.value - originalETHAmount);
+        }
+
+        emit LiquidityDeployed(liquidityPool, originalTokenAmount, originalETHAmount);
     }
 
     /**

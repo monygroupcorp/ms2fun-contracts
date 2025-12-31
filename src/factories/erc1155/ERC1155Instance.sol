@@ -5,8 +5,11 @@ import { Ownable } from "solady/auth/Ownable.sol";
 import { ReentrancyGuard } from "solady/utils/ReentrancyGuard.sol";
 import { SafeTransferLib } from "solady/utils/SafeTransferLib.sol";
 import { EditionPricing } from "./libraries/EditionPricing.sol";
-import { EditionMessagePacking } from "./libraries/EditionMessagePacking.sol";
 import { UltraAlignmentVault } from "../../vaults/UltraAlignmentVault.sol";
+import { GlobalMessageRegistry } from "../../registry/GlobalMessageRegistry.sol";
+import { GlobalMessagePacking } from "../../libraries/GlobalMessagePacking.sol";
+import { GlobalMessageTypes } from "../../libraries/GlobalMessageTypes.sol";
+import { IMasterRegistry } from "../../master/interfaces/IMasterRegistry.sol";
 
 /**
  * @title ERC1155Instance
@@ -15,7 +18,6 @@ import { UltraAlignmentVault } from "../../vaults/UltraAlignmentVault.sol";
  */
 contract ERC1155Instance is Ownable, ReentrancyGuard {
     using EditionPricing for uint256;
-    using EditionMessagePacking for uint128;
 
     // ┌─────────────────────────┐
     // │         Types           │
@@ -38,12 +40,6 @@ contract ERC1155Instance is Ownable, ReentrancyGuard {
         uint256 priceIncreaseRate; // For dynamic pricing (basis points, e.g., 100 = 1%)
     }
 
-    struct MintMessage {
-        address sender;
-        uint128 packedData; // timestamp:32 | editionId:32 | amount:32 | reserved:32
-        string message;
-    }
-
     // ┌─────────────────────────┐
     // │      State Variables     │
     // └─────────────────────────┘
@@ -52,6 +48,12 @@ contract ERC1155Instance is Ownable, ReentrancyGuard {
     address public creator;
     address public factory;
     UltraAlignmentVault public vault;
+    IMasterRegistry public immutable masterRegistry;
+    GlobalMessageRegistry private cachedGlobalRegistry; // Lazy-loaded from masterRegistry
+
+    // Customization
+    string public styleUri;
+    mapping(uint256 => string) public editionStyleUri;
 
     mapping(uint256 => Edition) public editions;
     mapping(address => mapping(uint256 => uint256)) public balanceOf;
@@ -59,10 +61,6 @@ contract ERC1155Instance is Ownable, ReentrancyGuard {
 
     uint256 public nextEditionId;
     uint256 public totalProceeds; // Total ETH collected from mints
-
-    // Message system
-    mapping(uint256 => MintMessage) public mintMessages;
-    uint256 public totalMessages;
 
     // Events
     event TransferSingle(
@@ -119,18 +117,23 @@ contract ERC1155Instance is Ownable, ReentrancyGuard {
         string memory /* metadataURI */,
         address _creator,
         address _factory,
-        address _vault
+        address _vault,
+        string memory _styleUri,
+        address _masterRegistry
     ) {
         require(bytes(_name).length > 0, "Invalid name");
         require(_creator != address(0), "Invalid creator");
         require(_factory != address(0), "Invalid factory");
         require(_vault != address(0), "Invalid vault");
+        require(_masterRegistry != address(0), "Invalid master registry");
 
         _initializeOwner(_creator);
         name = _name;
         creator = _creator;
         factory = _factory;
         vault = UltraAlignmentVault(payable(_vault));
+        masterRegistry = IMasterRegistry(_masterRegistry);
+        styleUri = _styleUri;
         nextEditionId = 1;
     }
 
@@ -192,9 +195,35 @@ contract ERC1155Instance is Ownable, ReentrancyGuard {
     function updateEditionMetadata(uint256 editionId, string memory metadataURI) external {
         require(msg.sender == creator, "Not creator");
         require(editions[editionId].id != 0, "Edition not found");
-        
+
         editions[editionId].metadataURI = metadataURI;
         emit EditionMetadataUpdated(editionId, metadataURI);
+    }
+
+    // ┌─────────────────────────┐
+    // │  Global Message Helpers │
+    // └─────────────────────────┘
+
+    /**
+     * @notice Internal helper to lazy-load global message registry
+     * @dev Caches registry address to avoid repeated external calls
+     * @return GlobalMessageRegistry instance
+     */
+    function _getGlobalMessageRegistry() private returns (GlobalMessageRegistry) {
+        if (address(cachedGlobalRegistry) == address(0)) {
+            address registryAddr = masterRegistry.getGlobalMessageRegistry();
+            require(registryAddr != address(0), "Global registry not set");
+            cachedGlobalRegistry = GlobalMessageRegistry(registryAddr);
+        }
+        return cachedGlobalRegistry;
+    }
+
+    /**
+     * @notice Get global message registry address (public getter for frontend)
+     * @return Address of the GlobalMessageRegistry contract
+     */
+    function getGlobalMessageRegistry() external view returns (address) {
+        return masterRegistry.getGlobalMessageRegistry();
     }
 
     // ┌─────────────────────────┐
@@ -302,20 +331,22 @@ contract ERC1155Instance is Ownable, ReentrancyGuard {
         balanceOf[msg.sender][editionId] += amount;
         totalProceeds += totalCost;
 
-        // Store message if provided
+        // Store message in global registry if provided
         if (bytes(message).length > 0) {
+            GlobalMessageRegistry registry = _getGlobalMessageRegistry();
+
             require(editionId <= type(uint32).max, "EditionId too large");
-            require(amount <= type(uint32).max, "Amount too large");
-            
-            mintMessages[totalMessages++] = MintMessage({
-                sender: msg.sender,
-                packedData: EditionMessagePacking.packData(
-                    uint32(block.timestamp),
-                    uint32(editionId),
-                    uint32(amount)
-                ),
-                message: message
-            });
+            require(amount <= type(uint96).max, "Amount too large");
+
+            uint256 packedData = GlobalMessagePacking.pack(
+                uint32(block.timestamp),
+                GlobalMessageTypes.FACTORY_ERC1155,
+                GlobalMessageTypes.ACTION_MINT,
+                uint32(editionId), // contextId: edition being minted
+                uint96(amount)
+            );
+
+            registry.addMessage(address(this), msg.sender, packedData, message);
         }
 
         // Refund excess
@@ -377,67 +408,6 @@ contract ERC1155Instance is Ownable, ReentrancyGuard {
         // Route all claimed fees to the creator
         require(totalClaimed > 0, "No fees to claim");
         SafeTransferLib.safeTransferETH(creator, totalClaimed);
-    }
-
-    // ┌─────────────────────────┐
-    // │   Message System        │
-    // └─────────────────────────┘
-
-    /**
-     * @notice Get message details
-     * @param messageId Message ID
-     * @return sender Message sender
-     * @return timestamp Timestamp
-     * @return editionId Edition ID
-     * @return amount Amount minted
-     * @return message Message text
-     */
-    function getMessageDetails(uint256 messageId) external view returns (
-        address sender,
-        uint32 timestamp,
-        uint32 editionId,
-        uint32 amount,
-        string memory message
-    ) {
-        require(messageId < totalMessages, "Message does not exist");
-        MintMessage memory mintMsg = mintMessages[messageId];
-        (timestamp, editionId, amount) = EditionMessagePacking.unpackData(mintMsg.packedData);
-        return (mintMsg.sender, timestamp, editionId, amount, mintMsg.message);
-    }
-
-    /**
-     * @notice Get batch of messages
-     * @param start Start index
-     * @param end End index (inclusive)
-     * @return senders Array of senders
-     * @return timestamps Array of timestamps
-     * @return editionIds Array of edition IDs
-     * @return amounts Array of amounts
-     * @return messages Array of messages
-     */
-    function getMessagesBatch(uint256 start, uint256 end) external view returns (
-        address[] memory senders,
-        uint32[] memory timestamps,
-        uint32[] memory editionIds,
-        uint32[] memory amounts,
-        string[] memory messages
-    ) {
-        require(end >= start, "Invalid range");
-        require(end < totalMessages, "End out of bounds");
-        
-        uint256 size = end - start + 1;
-        senders = new address[](size);
-        timestamps = new uint32[](size);
-        editionIds = new uint32[](size);
-        amounts = new uint32[](size);
-        messages = new string[](size);
-        
-        for (uint256 i = 0; i < size; i++) {
-            MintMessage memory mintMsg = mintMessages[start + i];
-            senders[i] = mintMsg.sender;
-            (timestamps[i], editionIds[i], amounts[i]) = EditionMessagePacking.unpackData(mintMsg.packedData);
-            messages[i] = mintMsg.message;
-        }
     }
 
     // ┌─────────────────────────┐
@@ -640,6 +610,7 @@ contract ERC1155Instance is Ownable, ReentrancyGuard {
      * @return totalEditions Total number of editions
      * @return totalProceeds Total proceeds collected
      * @return contractBalance Current contract balance
+     * @return instanceStyleUri Style URI for customization
      */
     function getInstanceMetadata() external view returns (
         string memory instanceName,
@@ -648,7 +619,8 @@ contract ERC1155Instance is Ownable, ReentrancyGuard {
         address instanceVault,
         uint256 totalEditions,
         uint256 totalProceeds,
-        uint256 contractBalance
+        uint256 contractBalance,
+        string memory instanceStyleUri
     ) {
         return (
             name,
@@ -657,7 +629,8 @@ contract ERC1155Instance is Ownable, ReentrancyGuard {
             address(vault),
             nextEditionId - 1,
             totalProceeds,
-            address(this).balance
+            address(this).balance,
+            styleUri
         );
     }
 
@@ -724,14 +697,6 @@ contract ERC1155Instance is Ownable, ReentrancyGuard {
     }
 
     /**
-     * @notice Get message count
-     * @return count Total number of messages
-     */
-    function getMessageCount() external view returns (uint256 count) {
-        return totalMessages;
-    }
-
-    /**
      * @notice Check if edition exists
      * @param editionId Edition ID
      * @return exists Whether edition exists
@@ -769,6 +734,40 @@ contract ERC1155Instance is Ownable, ReentrancyGuard {
         Edition storage edition = editions[editionId];
         require(edition.id != 0, "Edition not found");
         return edition;
+    }
+
+    // ┌─────────────────────────┐
+    // │   Style Management      │
+    // └─────────────────────────┘
+
+    /**
+     * @notice Set project-level styling (creator only)
+     * @param uri Style URI (ipfs://, ar://, https://, or inline:css:... / inline:js:...)
+     */
+    function setStyle(string memory uri) external {
+        require(msg.sender == creator, "Not creator");
+        styleUri = uri;
+    }
+
+    /**
+     * @notice Set edition-level styling (creator only)
+     * @param editionId Edition ID
+     * @param uri Style URI (overrides project-level)
+     */
+    function setEditionStyle(uint256 editionId, string memory uri) external {
+        require(msg.sender == creator, "Not creator");
+        require(editions[editionId].id != 0, "Edition not found");
+        editionStyleUri[editionId] = uri;
+    }
+
+    /**
+     * @notice Get style URI for edition (returns edition style if set, else project style)
+     * @param editionId Edition ID
+     * @return uri Style URI
+     */
+    function getStyle(uint256 editionId) external view returns (string memory uri) {
+        string memory editionStyle = editionStyleUri[editionId];
+        return bytes(editionStyle).length > 0 ? editionStyle : styleUri;
     }
 }
 

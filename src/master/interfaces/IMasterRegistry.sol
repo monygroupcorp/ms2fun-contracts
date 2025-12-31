@@ -164,15 +164,6 @@ interface IMasterRegistry {
         bytes32[] memory features
     ) external payable;
 
-    function voteOnApplication(
-        address factoryAddress,
-        bool approve
-    ) external payable;
-
-    function finalizeApplication(
-        address factoryAddress
-    ) external;
-
     function registerInstance(
         address instance,
         address factory,
@@ -253,5 +244,8 @@ interface IMasterRegistry {
 
     // Fee Configuration
     function vaultRegistrationFee() external view returns (uint256);
+
+    // Global Messaging
+    function getGlobalMessageRegistry() external view returns (address);
 }
 

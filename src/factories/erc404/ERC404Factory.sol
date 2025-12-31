@@ -71,6 +71,7 @@ contract ERC404Factory is Ownable, ReentrancyGuard {
      * @param tierConfig Tier configuration (password-protected tiers)
      * @param creator Creator address (will be owner)
      * @param vault Optional vault address for hook (if address(0), no hook is created)
+     * @param styleUri Style URI (ipfs://, ar://, https://, or inline:css:/inline:js:)
      * @return instance Address of the created ERC404 instance
      * @return hook Address of the created hook (address(0) if no vault provided)
      */
@@ -83,7 +84,8 @@ contract ERC404Factory is Ownable, ReentrancyGuard {
         ERC404BondingInstance.BondingCurveParams memory curveParams,
         ERC404BondingInstance.TierConfig memory tierConfig,
         address creator,
-        address vault
+        address vault,
+        string memory styleUri
     ) external payable nonReentrant returns (address instance, address hook) {
         require(msg.value >= instanceCreationFee, "Insufficient fee");
         require(bytes(name).length > 0, "Invalid name");
@@ -105,7 +107,9 @@ contract ERC404Factory is Ownable, ReentrancyGuard {
             address(0), // Hook will be set after creation if vault provided
             weth,
             address(this),
-            creator
+            address(masterRegistry),
+            creator,
+            styleUri
         ));
 
         // Create hook after instance if vault provided
