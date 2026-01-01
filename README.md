@@ -7,6 +7,11 @@ Foundry-based Solidity contracts for the ms2.fun protocol — a multi-project la
 The ms2.fun protocol features:
 
 - **Master Registry**: Central indexing of factories, instances, and vaults with governance voting
+- **Global Messaging System**: Protocol-wide activity tracking enabling single-RPC discovery of trending projects
+  - Centralized on-chain message registry capturing all buys, mints, and user messages
+  - Optimized bit-packing (176/256 bits) for gas efficiency
+  - Auto-authorization of instances via MasterRegistry
+  - Query protocol-wide activity or filter by specific projects
 - **ERC404 Bonding Factory**: Creates ERC404 instances with V4 hook integration for swap tax collection
 - **ERC1155 Factory**: Creates open-edition instances with enforced vault tithe (20% on creator withdraw)
 - **UltraAlignmentVault**: Share-based fee hub receiving ETH from all projects, accumulating in dragnet, batch-converting to target token → V4 LP positions with O(1) fee claims
@@ -23,8 +28,11 @@ The ms2.fun protocol features:
 ms2fun-contracts/
 ├── src/
 │   ├── master/              # Master registry contracts
+│   ├── registry/            # Global message registry
+│   ├── libraries/           # Shared libraries (message packing, types)
 │   ├── factories/           # Factory contracts (ERC404, ERC1155)
 │   ├── governance/          # Governance contracts
+│   ├── vaults/              # Vault contracts
 │   └── shared/              # Shared interfaces and libraries
 ├── test/                    # Test files
 ├── script/                  # Deployment scripts
@@ -83,6 +91,22 @@ Central indexing and governance:
 - Factory application voting system
 - Instance and vault registration tracking
 - Multi-factory support
+- Auto-authorization of instances for global messaging
+
+### Global Messaging System (`src/registry/`)
+Protocol-wide activity tracking and discovery:
+- `GlobalMessageRegistry.sol` - Centralized on-chain message storage
+  - **Single-RPC Discovery**: Query all protocol activity in one call
+  - **Auto-Authorization**: Instances authorized on registration via MasterRegistry
+  - **Optimized Storage**: 176-bit packed metadata (timestamp, factory type, action, context, amount)
+  - **Flexible Queries**: Protocol-wide, instance-specific, or paginated results
+  - **Activity Types**: BUY, SELL, MINT, WITHDRAW, STAKE, UNSTAKE, CLAIM_REWARDS, DEPLOY_LIQUIDITY
+- `GlobalMessagePacking.sol` - Bit-packing library for efficient metadata storage
+- `GlobalMessageTypes.sol` - Constants for factory and action types
+- **Benefits**:
+  - Reduces frontend RPC calls from 200+ to 1 for activity discovery
+  - Enables trending project discovery without centralized server
+  - Captures user messages alongside transaction metadata
 
 ### Vault System (`src/vaults/`)
 - `UltraAlignmentVault.sol` - Share-based fee hub with V2/V3/V4 liquidity management
@@ -118,6 +142,22 @@ Central indexing and governance:
 - `ERC1155Instance.sol` - ERC1155 with enforced 20% vault tithe on creator withdraw
 
 ## Documentation
+
+### System Architecture
+- **[ARCHITECTURE.md](./docs/ARCHITECTURE.md)** - Complete system architecture documentation
+  - System overview and contract interaction flows
+  - Core components and integration patterns
+  - Global messaging system architecture
+  - Uniswap V4 integration, fee distribution, queue rental
+  - Deployment guide and security considerations
+
+### Global Messaging
+- **[GLOBAL_MESSAGING.md](./docs/GLOBAL_MESSAGING.md)** - Global messaging system deep-dive
+  - Protocol-wide activity tracking architecture
+  - Bit-packing optimization and data structures
+  - Frontend integration patterns and query examples
+  - Auto-authorization flow and security model
+  - Performance characteristics and scaling analysis
 
 ### Vault Architecture
 - **[ULTRA_ALIGNMENT.md](./docs/ULTRA_ALIGNMENT.md)** - High-level system overview of share-based fee distribution
