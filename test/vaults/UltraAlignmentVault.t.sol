@@ -59,9 +59,9 @@ contract UltraAlignmentVaultTest is Test {
             address(alignmentToken)
         );
 
-        // Set V4 pool key for conversion tests
+        // Set V4 pool key for conversion tests (using native ETH)
         PoolKey memory mockPoolKey = PoolKey({
-            currency0: Currency.wrap(mockWETH),
+            currency0: Currency.wrap(address(0)), // Native ETH
             currency1: Currency.wrap(address(alignmentToken)),
             fee: 3000,
             tickSpacing: 60,
@@ -93,7 +93,7 @@ contract UltraAlignmentVaultTest is Test {
         assertEq(vault.totalPendingETH(), 0, "Total pending ETH should be 0");
         assertEq(vault.accumulatedFees(), 0, "Accumulated fees should be 0");
         assertEq(vault.totalLPUnits(), 0, "Total LP units should be 0");
-        assertEq(vault.conversionRewardBps(), 5, "Conversion reward should be 5 bps");
+        assertEq(vault.standardConversionReward(), 0.0012 ether, "Standard conversion reward should be 0.0012 ETH");
     }
 
     function test_Constructor_RevertsOnInvalidWETH() public {
@@ -288,7 +288,7 @@ contract UltraAlignmentVaultTest is Test {
 
         // Conversion
         vm.prank(dave);
-        uint256 lpValue = vault.convertAndAddLiquidity(1, 0, 100);
+        uint256 lpValue = vault.convertAndAddLiquidity(0);
 
         assertTrue(lpValue > 0, "LP value should be positive");
     }
@@ -304,7 +304,7 @@ contract UltraAlignmentVaultTest is Test {
         assertTrue(s2);
 
         vm.prank(dave);
-        vault.convertAndAddLiquidity(1, 0, 100);
+        vault.convertAndAddLiquidity(0);
 
         uint256 aliceShares = vault.benefactorShares(alice);
         uint256 bobShares = vault.benefactorShares(bob);
@@ -323,7 +323,7 @@ contract UltraAlignmentVaultTest is Test {
         assertTrue(s1);
 
         vm.prank(dave);
-        vault.convertAndAddLiquidity(1, 0, 100);
+        vault.convertAndAddLiquidity(0);
 
         assertEq(vault.pendingETH(alice), 0, "Pending ETH should be cleared");
         assertEq(vault.totalPendingETH(), 0, "Total pending ETH should be cleared");
@@ -339,7 +339,7 @@ contract UltraAlignmentVaultTest is Test {
         assertTrue(s2);
 
         vm.prank(dave);
-        vault.convertAndAddLiquidity(1, 0, 100);
+        vault.convertAndAddLiquidity(0);
 
         // Array should be empty - trying to access should revert
         vm.expectRevert();
@@ -354,7 +354,7 @@ contract UltraAlignmentVaultTest is Test {
         uint256 daveBalanceBefore = dave.balance;
 
         vm.prank(dave);
-        vault.convertAndAddLiquidity(1, 0, 100);
+        vault.convertAndAddLiquidity(0);
 
         uint256 daveBalanceAfter = dave.balance;
         uint256 expectedReward = (10 ether * 5) / 10000; // 0.05%
@@ -370,7 +370,7 @@ contract UltraAlignmentVaultTest is Test {
         uint256 lpUnitsBefore = vault.totalLPUnits();
 
         vm.prank(dave);
-        vault.convertAndAddLiquidity(1, 0, 100);
+        vault.convertAndAddLiquidity(0);
 
         uint256 lpUnitsAfter = vault.totalLPUnits();
 
@@ -386,13 +386,13 @@ contract UltraAlignmentVaultTest is Test {
         emit LiquidityAdded(0, 0, 0, 0, 0);
 
         vm.prank(dave);
-        vault.convertAndAddLiquidity(1, 0, 100);
+        vault.convertAndAddLiquidity(0);
     }
 
     function test_ConvertAndAddLiquidity_RevertsWhenNoPendingETH() public {
         vm.prank(dave);
         vm.expectRevert("No pending ETH to convert");
-        vault.convertAndAddLiquidity(1, 0, 100);
+        vault.convertAndAddLiquidity(0);
     }
 
     function test_ConvertAndAddLiquidity_RevertsWhenNoAlignmentTokenSet() public {
@@ -425,7 +425,7 @@ contract UltraAlignmentVaultTest is Test {
 
         vm.prank(dave);
         vm.expectRevert("V4 pool key not set");
-        newVault.convertAndAddLiquidity(1, 0, 100);
+        newVault.convertAndAddLiquidity(0);
     }
 
     function test_ConvertAndAddLiquidity_MultipleRoundsAccumulateShares() public {
@@ -435,7 +435,7 @@ contract UltraAlignmentVaultTest is Test {
         assertTrue(s1);
 
         vm.prank(dave);
-        vault.convertAndAddLiquidity(1, 0, 100);
+        vault.convertAndAddLiquidity(0);
 
         uint256 aliceSharesRound1 = vault.benefactorShares(alice);
 
@@ -445,7 +445,7 @@ contract UltraAlignmentVaultTest is Test {
         assertTrue(s2);
 
         vm.prank(dave);
-        vault.convertAndAddLiquidity(1, 0, 100);
+        vault.convertAndAddLiquidity(0);
 
         uint256 aliceSharesRound2 = vault.benefactorShares(alice);
 
@@ -527,7 +527,7 @@ contract UltraAlignmentVaultTest is Test {
         assertTrue(s1);
 
         vm.prank(dave);
-        vault.convertAndAddLiquidity(1, 0, 100);
+        vault.convertAndAddLiquidity(0);
 
         // Owner deposits fees
         vm.prank(owner);
@@ -559,7 +559,7 @@ contract UltraAlignmentVaultTest is Test {
         assertTrue(s2);
 
         vm.prank(dave);
-        vault.convertAndAddLiquidity(1, 0, 100);
+        vault.convertAndAddLiquidity(0);
 
         // Owner deposits 30 ether in fees
         vm.prank(owner);
@@ -591,7 +591,7 @@ contract UltraAlignmentVaultTest is Test {
         assertTrue(s1);
 
         vm.prank(dave);
-        vault.convertAndAddLiquidity(1, 0, 100);
+        vault.convertAndAddLiquidity(0);
 
         // First fee deposit and claim
         vm.prank(owner);
@@ -616,7 +616,7 @@ contract UltraAlignmentVaultTest is Test {
         assertTrue(s1);
 
         vm.prank(dave);
-        vault.convertAndAddLiquidity(1, 0, 100);
+        vault.convertAndAddLiquidity(0);
 
         vm.prank(owner);
         vault.depositFees{value: 10 ether}();
@@ -642,7 +642,7 @@ contract UltraAlignmentVaultTest is Test {
         assertTrue(s1);
 
         vm.prank(dave);
-        vault.convertAndAddLiquidity(1, 0, 100);
+        vault.convertAndAddLiquidity(0);
 
         vm.prank(alice);
         vm.expectRevert("No fees to claim");
@@ -655,7 +655,7 @@ contract UltraAlignmentVaultTest is Test {
         assertTrue(s1);
 
         vm.prank(dave);
-        vault.convertAndAddLiquidity(1, 0, 100);
+        vault.convertAndAddLiquidity(0);
 
         vm.prank(owner);
         vault.depositFees{value: 10 ether}();
@@ -681,7 +681,7 @@ contract UltraAlignmentVaultTest is Test {
         assertTrue(s2);
 
         vm.prank(dave);
-        vault.convertAndAddLiquidity(1, 0, 100);
+        vault.convertAndAddLiquidity(0);
 
         // First fee deposit
         vm.prank(owner);
@@ -723,7 +723,7 @@ contract UltraAlignmentVaultTest is Test {
         assertTrue(s1);
 
         vm.prank(dave);
-        vault.convertAndAddLiquidity(1, 0, 100);
+        vault.convertAndAddLiquidity(0);
 
         uint256 shares = vault.getBenefactorShares(alice);
         assertTrue(shares > 0, "Alice should have shares");
@@ -735,7 +735,7 @@ contract UltraAlignmentVaultTest is Test {
         assertTrue(s1);
 
         vm.prank(dave);
-        vault.convertAndAddLiquidity(1, 0, 100);
+        vault.convertAndAddLiquidity(0);
 
         vm.prank(owner);
         vault.depositFees{value: 10 ether}();
@@ -750,7 +750,7 @@ contract UltraAlignmentVaultTest is Test {
         assertTrue(s1);
 
         vm.prank(dave);
-        vault.convertAndAddLiquidity(1, 0, 100);
+        vault.convertAndAddLiquidity(0);
 
         // First fee deposit and claim
         vm.prank(owner);
@@ -774,7 +774,7 @@ contract UltraAlignmentVaultTest is Test {
         assertTrue(s1);
 
         vm.prank(dave);
-        vault.convertAndAddLiquidity(1, 0, 100);
+        vault.convertAndAddLiquidity(0);
 
         vm.prank(owner);
         vault.depositFees{value: 10 ether}();
@@ -811,7 +811,7 @@ contract UltraAlignmentVaultTest is Test {
 
     function test_SetV4PoolKey_OwnerCanUpdate() public {
         PoolKey memory newPoolKey = PoolKey({
-            currency0: Currency.wrap(mockWETH),
+            currency0: Currency.wrap(address(0)), // Native ETH
             currency1: Currency.wrap(address(alignmentToken)),
             fee: 3000,
             tickSpacing: 60,
@@ -854,35 +854,35 @@ contract UltraAlignmentVaultTest is Test {
 
     function test_SetConversionRewardBps_OwnerCanUpdate() public {
         vm.prank(owner);
-        vault.setConversionRewardBps(10); // 0.1%
+        vault.setStandardConversionReward(0.01 ether);
 
-        assertEq(vault.conversionRewardBps(), 10, "Conversion reward should be updated");
+        assertEq(vault.standardConversionReward(), 0.01 ether, "Standard conversion reward should be updated");
     }
 
     function test_SetConversionRewardBps_RevertsOnTooHighValue() public {
         vm.prank(owner);
-        vm.expectRevert("Reward too high (max 1%)");
-        vault.setConversionRewardBps(101); // > 1%
+        vm.expectRevert("Reward too high (max 0.1 ETH)");
+        vault.setStandardConversionReward(0.2 ether);
     }
 
     function test_SetConversionRewardBps_RevertsWhenNotOwner() public {
         vm.prank(alice);
         vm.expectRevert();
-        vault.setConversionRewardBps(10);
+        vault.setStandardConversionReward(0.01 ether);
     }
 
     function test_SetConversionRewardBps_CanSetToZero() public {
         vm.prank(owner);
-        vault.setConversionRewardBps(0);
+        vault.setStandardConversionReward(0);
 
-        assertEq(vault.conversionRewardBps(), 0, "Conversion reward should be 0");
+        assertEq(vault.standardConversionReward(), 0, "Standard conversion reward should be 0");
     }
 
     function test_SetConversionRewardBps_CanSetToMax() public {
         vm.prank(owner);
-        vault.setConversionRewardBps(100); // 1%
+        vault.setStandardConversionReward(0.1 ether);
 
-        assertEq(vault.conversionRewardBps(), 100, "Conversion reward should be 100");
+        assertEq(vault.standardConversionReward(), 0.1 ether, "Standard conversion reward should be 0.1 ETH");
     }
 
     // ========== Reentrancy Protection Tests ==========
@@ -908,7 +908,7 @@ contract UltraAlignmentVaultTest is Test {
         assertTrue(s1);
 
         vm.prank(dave);
-        vault.convertAndAddLiquidity(1, 0, 100);
+        vault.convertAndAddLiquidity(0);
         // Should succeed without reentrancy issues
     }
 
@@ -918,7 +918,7 @@ contract UltraAlignmentVaultTest is Test {
         assertTrue(s1);
 
         vm.prank(dave);
-        vault.convertAndAddLiquidity(1, 0, 100);
+        vault.convertAndAddLiquidity(0);
 
         vm.prank(owner);
         vault.depositFees{value: 10 ether}();
@@ -938,7 +938,7 @@ contract UltraAlignmentVaultTest is Test {
 
         // 2. Conversion happens
         vm.prank(dave);
-        vault.convertAndAddLiquidity(1, 0, 100);
+        vault.convertAndAddLiquidity(0);
 
         // 3. Fees accumulate
         vm.prank(owner);
@@ -964,7 +964,7 @@ contract UltraAlignmentVaultTest is Test {
         assertTrue(s2);
 
         vm.prank(dave);
-        vault.convertAndAddLiquidity(1, 0, 100);
+        vault.convertAndAddLiquidity(0);
 
         // Track alice and bob shares after round 1
         uint256 aliceSharesR1 = vault.benefactorShares(alice);
@@ -986,7 +986,7 @@ contract UltraAlignmentVaultTest is Test {
         assertTrue(s3);
 
         vm.prank(dave);
-        vault.convertAndAddLiquidity(1, 0, 100);
+        vault.convertAndAddLiquidity(0);
 
         // Now Alice and Bob have shares from R1, Charlie has shares from R2
         uint256 aliceSharesR2 = vault.benefactorShares(alice);
@@ -1055,7 +1055,7 @@ contract UltraAlignmentVaultTest is Test {
 
         // Convert
         vm.prank(dave);
-        vault.convertAndAddLiquidity(1, 0, 100);
+        vault.convertAndAddLiquidity(0);
 
         // All should have shares
         for (uint160 i = 1; i <= 10; i++) {

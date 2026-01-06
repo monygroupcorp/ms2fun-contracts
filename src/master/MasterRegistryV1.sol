@@ -80,7 +80,12 @@ contract MasterRegistryV1 is UUPSUpgradeable, Ownable, ReentrancyGuard, IMasterR
     uint256 public maxRentalDuration = 365 days;
     uint256 public demandMultiplier = 120;              // 120% = 20% increase per action
     uint256 public renewalDiscount = 90;                // 90% = 10% discount for renewals
-    uint256 public cleanupReward = 0.0001 ether;        // Reward per cleanup action
+
+    // Gas-based reward system (M-04 security fix)
+    uint256 public constant CLEANUP_BASE_GAS = 50_000;  // Fixed overhead for cleanup
+    uint256 public constant GAS_PER_ACTION = 25_000;    // Per-action cleanup cost
+    uint256 public standardCleanupReward = 0.0012 ether; // Fixed incentive (~$3, post-Hasaka)
+
     uint256 public maxQueueSize = 100;
     uint256 public visibleThreshold = 20;               // Frontend shows top N
 
@@ -99,6 +104,10 @@ contract MasterRegistryV1 is UUPSUpgradeable, Ownable, ReentrancyGuard, IMasterR
     event CreatorInstanceAdded(address indexed creator, address indexed instance);
     event GovernanceModuleSet(address indexed newModule);
     event VaultRegistrySet(address indexed newRegistry);
+
+    // M-04 Security Fix: Cleanup reward events
+    event CleanupRewardRejected(address indexed caller, uint256 rewardAmount);
+    event InsufficientCleanupRewardBalance(address indexed caller, uint256 rewardAmount, uint256 contractBalance);
 
     // Note: All competitive queue events are defined in IMasterRegistry interface
 
@@ -159,7 +168,7 @@ contract MasterRegistryV1 is UUPSUpgradeable, Ownable, ReentrancyGuard, IMasterR
         maxRentalDuration = 365 days;
         demandMultiplier = 120;
         renewalDiscount = 90;
-        cleanupReward = 0.0001 ether;
+        standardCleanupReward = 0.0012 ether; // M-04: Gas-based reward system (~$3, post-Hasaka)
         maxQueueSize = 100;
         visibleThreshold = 20;
     }
@@ -710,14 +719,25 @@ contract MasterRegistryV1 is UUPSUpgradeable, Ownable, ReentrancyGuard, IMasterR
         // Compact the queue
         _compactQueue();
 
-        // Pay reward to caller
+        // Pay reward to caller (M-04 Security Fix: Gas-based + graceful degradation)
         uint256 totalActions = cleanedCount + renewedCount;
         if (totalActions > 0) {
-            uint256 reward = totalActions * cleanupReward;
-            (bool success, ) = payable(msg.sender).call{value: reward}("");
-            require(success, "Reward payment failed");
+            // Calculate reward: gas reimbursement + standard incentive
+            uint256 estimatedGas = CLEANUP_BASE_GAS + (totalActions * GAS_PER_ACTION);
+            uint256 gasCost = estimatedGas * tx.gasprice;
+            uint256 reward = gasCost + standardCleanupReward;
 
-            emit CleanupRewardPaid(msg.sender, cleanedCount, renewedCount, reward);
+            // Graceful degradation - no griefing possible (operation never fails due to reward)
+            if (address(this).balance >= reward) {
+                (bool success, ) = payable(msg.sender).call{value: reward}("");
+                if (success) {
+                    emit CleanupRewardPaid(msg.sender, cleanedCount, renewedCount, reward);
+                } else {
+                    emit CleanupRewardRejected(msg.sender, reward);
+                }
+            } else {
+                emit InsufficientCleanupRewardBalance(msg.sender, reward, address(this).balance);
+            }
         }
     }
 
@@ -936,6 +956,15 @@ contract MasterRegistryV1 is UUPSUpgradeable, Ownable, ReentrancyGuard, IMasterR
     function setGlobalMessageRegistry(address _globalMessageRegistry) external onlyOwner {
         require(_globalMessageRegistry != address(0), "Invalid registry address");
         globalMessageRegistry = _globalMessageRegistry;
+    }
+
+    /**
+     * @notice Update standard cleanup reward (M-04 Security Fix)
+     * @param newReward New fixed reward amount in wei
+     */
+    function setStandardCleanupReward(uint256 newReward) external onlyOwner {
+        require(newReward <= 0.05 ether, "Reward too high (max 0.05 ETH)");
+        standardCleanupReward = newReward;
     }
 
     /**

@@ -6,6 +6,7 @@ import {Ownable} from "solady/auth/Ownable.sol";
 import {Currency, CurrencyLibrary} from "v4-core/types/Currency.sol";
 import {IPoolManager} from "v4-core/interfaces/IPoolManager.sol";
 import {IUnlockCallback} from "v4-core/interfaces/callback/IUnlockCallback.sol";
+import {IHooks} from "v4-core/interfaces/IHooks.sol";
 import {PoolKey} from "v4-core/types/PoolKey.sol";
 import {PoolId, PoolIdLibrary} from "v4-core/types/PoolId.sol";
 import {BalanceDelta, BalanceDeltaLibrary} from "v4-core/types/BalanceDelta.sol";
@@ -111,6 +112,25 @@ contract UltraAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback {
         IPoolManager.ModifyLiquidityParams params;
     }
 
+    /// @notice Callback data for V4 swap operations
+    struct SwapCallbackData {
+        PoolKey key;
+        IPoolManager.SwapParams params;
+        address recipient;
+    }
+
+    /// @notice Operation type for unlock callback routing
+    enum CallbackOperation {
+        SWAP,
+        MODIFY_LIQUIDITY
+    }
+
+    /// @notice Wrapper struct for callback routing
+    struct CallbackData {
+        CallbackOperation operation;
+        bytes data;
+    }
+
     // Track total ETH contributed per benefactor (for bragging rights)
     mapping(address => uint256) public benefactorTotalETH;
 
@@ -129,6 +149,12 @@ contract UltraAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback {
     uint256 public totalPendingETH;
     uint256 public accumulatedFees;
     uint256 public totalLPUnits;
+    uint256 public lastVaultFeeCollectionTime;
+    uint256 public vaultFeeCollectionInterval = 1 days; // Collect vault fees once per day
+
+    // Dust accumulation (shares lost to rounding)
+    uint256 public accumulatedDustShares;
+    uint256 public dustDistributionThreshold = 1e18; // Distribute when dust reaches this amount
 
     // Conversion participants tracking (dragnet)
     address[] public conversionParticipants;
@@ -145,7 +171,11 @@ contract UltraAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback {
     PoolKey public v4PoolKey;
 
     // Configuration
-    uint256 public conversionRewardBps = 5; // 0.05% reward for caller
+    // Gas-based reward system (M-04 security fix)
+    uint256 public constant CONVERSION_BASE_GAS = 100_000;      // Fixed overhead for conversion
+    uint256 public constant GAS_PER_BENEFACTOR = 15_000;        // Per-benefactor processing cost
+    uint256 public standardConversionReward = 0.0012 ether;     // Fixed incentive (~$3, post-Hasaka)
+
     uint24 public v3PreferredFee = 3000; // 0.3% fee tier for V3 swaps
     uint256 public maxPriceDeviationBps = 500; // 5% max price deviation between DEXes
 
@@ -165,6 +195,12 @@ contract UltraAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback {
     );
     event FeesClaimed(address indexed benefactor, uint256 ethAmount);
     event FeesAccumulated(uint256 amount);
+    event DustDistributed(address indexed recipient, uint256 dustShares);
+
+    // M-04 Security Fix: Reward events
+    event ConversionRewardPaid(address indexed caller, uint256 totalReward, uint256 gasCost, uint256 standardReward);
+    event ConversionRewardRejected(address indexed caller, uint256 rewardAmount);
+    event InsufficientRewardBalance(address indexed caller, uint256 rewardAmount, uint256 contractBalance);
 
     // ========== Constructor ==========
 
@@ -200,15 +236,34 @@ contract UltraAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback {
     /**
      * @notice Receive ETH contributions from any source
      * @dev Tracks msg.sender as benefactor, adds to pending dragnet
-     *      Allows WETH unwrapping (from internal withdrawals) without reentrancy issues
+     *
+     *      PRODUCTION DEPLOYMENT:
+     *      - Only native ETH accepted. ERC20 tokens sent become owner property.
+     *      - Reentrancy protection on external contributions
+     *
+     *      TEST ENVIRONMENT:
+     *      - WETH unwrapping allowed (msg.sender == weth bypasses reentrancy guard)
+     *      - Tests use WETH for DEX routing simulation
+     *
+     *      SECURITY: The WETH check executes BEFORE the modifier when using a custom
+     *      implementation. We use a pattern that checks WETH first, then applies guard.
      */
     receive() external payable {
-        // If ETH is from WETH withdrawal (internal operation), just accept it
+        // Allow WETH unwrapping for test environments (production uses native ETH only)
+        // TEST STUB: Remove this check for production deployment
         if (msg.sender == weth) {
             return;
         }
 
-        // External ETH contribution - apply reentrancy guard and track
+        // External ETH contribution - apply reentrancy guard
+        _receiveExternalContribution();
+    }
+
+    /**
+     * @notice Internal handler for external ETH contributions with reentrancy protection
+     * @dev Separated from receive() to allow WETH unwrapping bypass while protecting external calls
+     */
+    function _receiveExternalContribution() private nonReentrant {
         require(msg.value > 0, "Amount must be positive");
         _trackBenefactorContribution(msg.sender, msg.value);
         emit ContributionReceived(msg.sender, msg.value);
@@ -245,33 +300,26 @@ contract UltraAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback {
      * @dev Public incentivized function - caller earns reward for execution
      *      - Identifies all benefactors with pending contributions
      *      - Converts total pending ETH to alignment token
-     *      - Mints LP position in V4 pool
+     *      - Mints FULL-RANGE LP position in V4 pool (tickLower = min, tickUpper = max)
      *      - Issues shares to each benefactor proportional to their contribution
      *      - Clears pending contributions for next dragnet round
+     *      ENFORCES FULL-RANGE LIQUIDITY: Automatically uses min/max usable ticks from pool's tickSpacing
      * @param minOutTarget Minimum alignment tokens to receive (slippage protection)
-     * @param tickLower Lower tick for V4 concentrated liquidity position
-     * @param tickUpper Upper tick for V4 concentrated liquidity position
      * @return lpPositionValue Total value of LP position added (amount0 + amount1)
      */
     function convertAndAddLiquidity(
-        uint256 minOutTarget,
-        int24 tickLower,
-        int24 tickUpper
+        uint256 minOutTarget
     ) external nonReentrant returns (uint256 lpPositionValue) {
         require(totalPendingETH > 0, "No pending ETH to convert");
         require(alignmentToken != address(0), "No alignment target set");
         require(Currency.unwrap(v4PoolKey.currency0) != address(0) || Currency.unwrap(v4PoolKey.currency1) != address(0), "V4 pool key not set");
 
-        // Step 1: Calculate and RESERVE caller reward upfront by wrapping it temporarily
-        // This ensures it doesn't get consumed by subsequent operations
-        uint256 callerReward = (totalPendingETH * conversionRewardBps) / 10000;
-        uint256 ethToAdd = totalPendingETH - callerReward;
+        // ENFORCE FULL-RANGE LIQUIDITY: Always use min/max usable ticks
+        int24 tickLower = TickMath.minUsableTick(v4PoolKey.tickSpacing);
+        int24 tickUpper = TickMath.maxUsableTick(v4PoolKey.tickSpacing);
 
-        // Wrap caller reward to WETH temporarily to reserve it (skip if WETH is mock)
-        // We'll unwrap it back to ETH before paying
-        if (callerReward > 0 && weth.code.length > 0) {
-            IWETH9(weth).deposit{value: callerReward}();
-        }
+        // Step 1: All pending ETH goes to liquidity (reward calculated after work is done)
+        uint256 ethToAdd = totalPendingETH;
 
         // Step 1.2: CHECK TARGET ASSET PRICE AND PURCHASE POWER (v2/v3/v4 source)
         _checkTargetAssetPriceAndPurchasePower();
@@ -289,19 +337,11 @@ contract UltraAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback {
         // Step 3: ADD TO LP POSITION
         uint128 newLiquidityUnits;
         {
-            // After swap, we have targetTokenReceived of alignment token and (ethToAdd - ethToSwap) ETH remaining
+            // After swap, we have targetTokenReceived of alignment token and (ethToAdd - ethToSwap) native ETH remaining
             uint256 ethRemaining = ethToAdd - ethToSwap;
 
-            // Wrap remaining ETH to WETH if pool uses WETH (skip if WETH is mock)
-            if (weth.code.length > 0) {
-                if (!v4PoolKey.currency0.isAddressZero() && Currency.unwrap(v4PoolKey.currency0) == weth) {
-                    IWETH9(weth).deposit{value: ethRemaining}();
-                } else if (!v4PoolKey.currency1.isAddressZero() && Currency.unwrap(v4PoolKey.currency1) == weth) {
-                    IWETH9(weth).deposit{value: ethRemaining}();
-                }
-            }
-
             // Determine amounts based on v4PoolKey ordering (currency0 < currency1)
+            // Native ETH is represented as address(0) in V4
             (uint256 amount0, uint256 amount1) = Currency.unwrap(v4PoolKey.currency0) == alignmentToken
                 ? (targetTokenReceived, ethRemaining)
                 : (ethRemaining, targetTokenReceived);
@@ -319,9 +359,19 @@ contract UltraAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback {
         // Step 5: Issue shares to all pending benefactors
         address[] memory activeBenefactors = _getActiveBenefactors();
 
+        uint256 totalSharesActuallyIssued = 0;
+        address largestContributor = activeBenefactors[0];
+        uint256 largestContribution = 0;
+
         for (uint256 i = 0; i < activeBenefactors.length; i++) {
             address benefactor = activeBenefactors[i];
             uint256 contribution = pendingETH[benefactor];
+
+            // Track largest contributor for dust distribution
+            if (contribution > largestContribution) {
+                largestContribution = contribution;
+                largestContributor = benefactor;
+            }
 
             // Calculate share proportion: (their contribution / total pending)
             // Share issuance: shares = (contribution / ethToAdd) * totalSharesIssued
@@ -330,9 +380,25 @@ contract UltraAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback {
 
             benefactorShares[benefactor] += sharesToIssue;
             totalShares += sharesToIssue;
+            totalSharesActuallyIssued += sharesToIssue;
 
             // Clear pending for next round
             pendingETH[benefactor] = 0;
+        }
+
+        // Calculate and accumulate dust (shares lost to rounding)
+        /// @dev Dust accumulation prevents share value dilution from rounding errors
+        /// When dust reaches threshold, it's distributed to the largest contributor
+        uint256 dust = totalSharesIssued - totalSharesActuallyIssued;
+        accumulatedDustShares += dust;
+
+        // Distribute accumulated dust if threshold reached
+        if (accumulatedDustShares >= dustDistributionThreshold) {
+            uint256 dustToDistribute = accumulatedDustShares;
+            benefactorShares[largestContributor] += dustToDistribute;
+            totalShares += dustToDistribute;
+            accumulatedDustShares = 0;
+            emit DustDistributed(largestContributor, dustToDistribute);
         }
 
         // Clear conversion participants for next dragnet
@@ -342,9 +408,9 @@ contract UltraAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback {
         // Step 6: Calculate final LP position value
         lpPositionValue = ethToSwap + targetTokenReceived;
 
-        // Step 7: Pay caller reward
-        // Unwrap ALL WETH to get native ETH for reward (skip if WETH is mock)
-        // This includes: caller reward WETH (reserved earlier) + any excess from LP
+        // Step 7: Pay caller reward (M-04 Security Fix: Gas-based + graceful degradation)
+        // TEST STUB: Unwrap any WETH from V3 swap excess to ensure we have native ETH
+        // PRODUCTION: Remove this block - production uses native ETH only
         if (weth.code.length > 0) {
             uint256 wethBalance = IWETH9(weth).balanceOf(address(this));
             if (wethBalance > 0) {
@@ -352,11 +418,22 @@ contract UltraAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback {
             }
         }
 
-        // Now pay the caller reward in native ETH
-        // We should have at least callerReward ETH from the unwrap above
-        require(address(this).balance >= callerReward, "Insufficient ETH for reward");
-        (bool success, ) = payable(msg.sender).call{value: callerReward}("");
-        require(success, "Caller reward transfer failed");
+        // Calculate reward: gas reimbursement + standard incentive
+        uint256 estimatedGas = CONVERSION_BASE_GAS + (activeBenefactors.length * GAS_PER_BENEFACTOR);
+        uint256 gasCost = estimatedGas * tx.gasprice;
+        uint256 callerReward = gasCost + standardConversionReward;
+
+        // Graceful degradation - no griefing possible (operation never fails due to reward)
+        if (address(this).balance >= callerReward && callerReward > 0) {
+            (bool success, ) = payable(msg.sender).call{value: callerReward}("");
+            if (success) {
+                emit ConversionRewardPaid(msg.sender, callerReward, gasCost, standardConversionReward);
+            } else {
+                emit ConversionRewardRejected(msg.sender, callerReward);
+            }
+        } else if (callerReward > 0) {
+            emit InsufficientRewardBalance(msg.sender, callerReward, address(this).balance);
+        }
 
         emit LiquidityAdded(
             ethToSwap,
@@ -372,6 +449,233 @@ contract UltraAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback {
     // ========== Fee Claims ==========
 
     /**
+     * @notice Claim fees from vault's V4 LP position
+     * @dev Collects fees by calling modifyLiquidity with liquidityDelta = 0
+     *      Returns BalanceDelta with accrued fees (positive = we receive)
+     * @return ethCollected Amount of ETH fees collected
+     * @return tokenCollected Amount of alignment token fees collected
+     */
+    function _claimVaultFees() internal returns (uint256 ethCollected, uint256 tokenCollected) {
+        // Skip if no LP position exists
+        if (totalLPUnits == 0) {
+            return (0, 0);
+        }
+
+        // Skip if poolManager is mock
+        if (poolManager.code.length == 0) {
+            return (0, 0);
+        }
+
+        // Prepare fee collection params (liquidityDelta = 0 = just collect fees)
+        IPoolManager.ModifyLiquidityParams memory params = IPoolManager.ModifyLiquidityParams({
+            tickLower: lastTickLower,
+            tickUpper: lastTickUpper,
+            liquidityDelta: 0, // Zero delta = collect fees only
+            salt: 0
+        });
+
+        ModifyLiquidityCallbackData memory lpData = ModifyLiquidityCallbackData({
+            params: params
+        });
+
+        // Wrap in callback data with operation type
+        CallbackData memory callbackData = CallbackData({
+            operation: CallbackOperation.MODIFY_LIQUIDITY,
+            data: abi.encode(lpData)
+        });
+
+        // Execute unlock → callback → modifyLiquidity → settle
+        bytes memory result = IPoolManager(poolManager).unlock(abi.encode(callbackData));
+        BalanceDelta delta = abi.decode(result, (BalanceDelta));
+
+        // Extract collected fees from positive deltas
+        int128 delta0 = delta.amount0();
+        int128 delta1 = delta.amount1();
+
+        // Determine which currency is ETH and which is alignment token
+        bool currency0IsETH = v4PoolKey.currency0.isAddressZero();
+
+        if (currency0IsETH) {
+            // currency0 = ETH, currency1 = alignment token
+            ethCollected = delta0 > 0 ? uint256(int256(delta0)) : 0;
+            tokenCollected = delta1 > 0 ? uint256(int256(delta1)) : 0;
+        } else {
+            // currency1 = ETH, currency0 = alignment token
+            ethCollected = delta1 > 0 ? uint256(int256(delta1)) : 0;
+            tokenCollected = delta0 > 0 ? uint256(int256(delta0)) : 0;
+        }
+
+        return (ethCollected, tokenCollected);
+    }
+
+    /**
+     * @notice Convert collected alignment token fees to ETH
+     * @dev Swaps alignment tokens via V4/V3 for ETH
+     * @param tokenAmount Amount of alignment tokens to convert
+     * @return ethReceived Amount of ETH received from swap
+     */
+    function _convertVaultFeesToEth(uint256 tokenAmount) internal returns (uint256 ethReceived) {
+        if (tokenAmount == 0) {
+            return 0;
+        }
+
+        // Skip if mock addresses
+        if (poolManager.code.length == 0) {
+            return 0;
+        }
+
+        // Approve alignment token for swap
+        IERC20(alignmentToken).approve(address(poolManager), tokenAmount);
+
+        // Use V4 to swap alignment token → ETH (reverse of purchase flow)
+        // Try fee tiers in order of preference
+        uint24[3] memory feeTiers = [uint24(3000), uint24(500), uint24(10000)];
+        int24[3] memory tickSpacings = [int24(60), int24(10), int24(200)];
+
+        for (uint256 i = 0; i < feeTiers.length; i++) {
+            // Try native ETH pool first (avoid WETH wrapping/unwrapping)
+            (bool hasNativePool, , ) = _queryV4PoolForTokenPair(
+                address(0), // Native ETH
+                alignmentToken,
+                feeTiers[i],
+                tickSpacings[i]
+            );
+
+            if (hasNativePool) {
+                return _swapTokenForETHViaV4(tokenAmount, address(0), feeTiers[i], tickSpacings[i]);
+            }
+
+            // Try WETH pool as fallback
+            (bool hasWETHPool, , ) = _queryV4PoolForTokenPair(
+                weth,
+                alignmentToken,
+                feeTiers[i],
+                tickSpacings[i]
+            );
+
+            if (hasWETHPool) {
+                uint256 wethReceived = _swapTokenForETHViaV4(tokenAmount, weth, feeTiers[i], tickSpacings[i]);
+                // TEST STUB: Unwrap WETH to ETH for test environment
+                // PRODUCTION: Remove this block - production uses native ETH only
+                if (wethReceived > 0 && weth.code.length > 0) {
+                    IWETH9(weth).withdraw(wethReceived);
+                }
+                return wethReceived;
+            }
+        }
+
+        // If no V4 pool found, try V3
+        return _swapTokenForETHViaV3(tokenAmount);
+    }
+
+    /**
+     * @notice Swap alignment token for ETH via V4
+     * @param tokenAmount Amount of alignment tokens to swap
+     * @param ethAddress Address of ETH currency (address(0) for native, weth for WETH)
+     * @param fee Fee tier
+     * @param tickSpacing Tick spacing
+     * @return ethReceived Amount of ETH/WETH received
+     */
+    function _swapTokenForETHViaV4(
+        uint256 tokenAmount,
+        address ethAddress,
+        uint24 fee,
+        int24 tickSpacing
+    ) internal returns (uint256 ethReceived) {
+        // Ensure correct currency ordering
+        (Currency currency0, Currency currency1, bool zeroForOne) = ethAddress < alignmentToken
+            ? (Currency.wrap(ethAddress), Currency.wrap(alignmentToken), false) // Swapping currency1 → currency0
+            : (Currency.wrap(alignmentToken), Currency.wrap(ethAddress), true);  // Swapping currency0 → currency1
+
+        // Construct pool key
+        PoolKey memory poolKey = PoolKey({
+            currency0: currency0,
+            currency1: currency1,
+            fee: fee,
+            tickSpacing: tickSpacing,
+            hooks: IHooks(address(0))
+        });
+
+        // Prepare swap params (exact input swap)
+        IPoolManager.SwapParams memory swapParams = IPoolManager.SwapParams({
+            zeroForOne: zeroForOne,
+            amountSpecified: -int256(tokenAmount), // Negative = exact input
+            sqrtPriceLimitX96: zeroForOne
+                ? TickMath.MIN_SQRT_PRICE + 1
+                : TickMath.MAX_SQRT_PRICE - 1
+        });
+
+        // Prepare swap callback data
+        SwapCallbackData memory swapData = SwapCallbackData({
+            key: poolKey,
+            params: swapParams,
+            recipient: address(this)
+        });
+
+        // Wrap in callback data
+        CallbackData memory callbackData = CallbackData({
+            operation: CallbackOperation.SWAP,
+            data: abi.encode(swapData)
+        });
+
+        // Execute swap
+        bytes memory result = IPoolManager(poolManager).unlock(abi.encode(callbackData));
+        BalanceDelta delta = abi.decode(result, (BalanceDelta));
+
+        // Extract ETH received
+        if (zeroForOne) {
+            // Swapping currency0 → currency1, expect positive delta1
+            ethReceived = delta.amount1() > 0 ? uint256(int256(delta.amount1())) : 0;
+        } else {
+            // Swapping currency1 → currency0, expect positive delta0
+            ethReceived = delta.amount0() > 0 ? uint256(int256(delta.amount0())) : 0;
+        }
+
+        return ethReceived;
+    }
+
+    /**
+     * @notice Swap alignment token for ETH via V3 (fallback)
+     * @param tokenAmount Amount of alignment tokens to swap
+     * @return ethReceived Amount of WETH received (needs unwrapping)
+     */
+    function _swapTokenForETHViaV3(uint256 tokenAmount) internal returns (uint256 ethReceived) {
+        // Skip if mock addresses
+        if (weth.code.length == 0 || v3Router.code.length == 0) {
+            return 0;
+        }
+
+        // Approve V3 router
+        IERC20(alignmentToken).approve(v3Router, tokenAmount);
+
+        // Execute V3 swap: alignmentToken → WETH
+        /// @dev amountOutMinimum set to 0 - no slippage protection. This is an accepted
+        /// risk to ensure fee conversions always complete without reverting. MEV extraction
+        /// is possible but deprioritized vs conversion reliability. Protocol prioritizes
+        /// liquidity accumulation over optimal conversion rates.
+        IV3SwapRouter.ExactInputSingleParams memory params = IV3SwapRouter.ExactInputSingleParams({
+            tokenIn: alignmentToken,
+            tokenOut: weth,
+            fee: v3PreferredFee,
+            recipient: address(this),
+            deadline: block.timestamp + 300,
+            amountIn: tokenAmount,
+            amountOutMinimum: 0, // No slippage protection for fee conversion
+            sqrtPriceLimitX96: 0
+        });
+
+        ethReceived = IV3SwapRouter(v3Router).exactInputSingle(params);
+
+        // TEST STUB: Unwrap WETH to ETH for test environment
+        // PRODUCTION: Remove this block - V3 returns WETH which becomes owner property
+        if (ethReceived > 0) {
+            IWETH9(weth).withdraw(ethReceived);
+        }
+
+        return ethReceived;
+    }
+
+    /**
      * @notice Claim benefactor's share of accumulated LP fees
      * @dev O(1) calculation using share ratio
      *      - share = (accumulatedFees × benefactorShares) / totalShares
@@ -380,12 +684,24 @@ contract UltraAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback {
      * @return ethClaimed Amount of ETH sent to benefactor
      */
     function claimFees() external nonReentrant returns (uint256 ethClaimed) {
+        // Check if we should collect vault fees (once per day or on first claim)
+        if (block.timestamp >= lastVaultFeeCollectionTime + vaultFeeCollectionInterval ||
+            lastVaultFeeCollectionTime == 0) {
 
+            // Claim fees from vault's LP position
+            (uint256 ethCollected, uint256 tokenCollected) = _claimVaultFees();
 
-        //check if we have claimed vault fees recently / if there is tokens accrued in the vault lp positoin
-        //if fees have not been claimed by the vault recently, or there is enough tokens accrued in the vault lp position, claim them and immediately swap to eth, then update global state of vault fees accrued (share value)
-        //_claimVaultFees();
-        //_convertVaultFeesToEth();
+            // Convert alignment tokens to ETH
+            uint256 ethFromTokens = _convertVaultFeesToEth(tokenCollected);
+
+            // Update accumulated fees
+            uint256 totalCollected = ethCollected + ethFromTokens;
+            if (totalCollected > 0) {
+                accumulatedFees += totalCollected;
+                lastVaultFeeCollectionTime = block.timestamp;
+                emit FeesAccumulated(totalCollected);
+            }
+        }
 
         address benefactor = msg.sender;
 
@@ -402,10 +718,13 @@ contract UltraAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback {
 
         require(ethClaimed > 0, "No new fees to claim");
 
-        // Unwrap any WETH to ensure we have native ETH for fees
-        uint256 wethBalance = IWETH9(weth).balanceOf(address(this));
-        if (wethBalance > 0) {
-            IWETH9(weth).withdraw(wethBalance);
+        // TEST STUB: Unwrap any WETH to ensure we have native ETH for fees
+        // PRODUCTION: Remove this block - production uses native ETH only
+        if (weth.code.length > 0) {
+            uint256 wethBalance = IWETH9(weth).balanceOf(address(this));
+            if (wethBalance > 0) {
+                IWETH9(weth).withdraw(wethBalance);
+            }
         }
 
         // Transfer ETH to benefactor
@@ -457,11 +776,12 @@ contract UltraAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback {
     }
 
     /**
-     * @notice Swap ETH for alignment target token via Uniswap V3
-     * @dev Primary routing through V3 for capital efficiency, with V2 fallback
-     *      - Wraps ETH to WETH
-     *      - Routes through V3 SwapRouter with configured fee tier
-     *      - Slippage protection via minOutTarget
+     * @notice Swap ETH for alignment target token via best available DEX route
+     * @dev Routing priority: V4 (best liquidity) → V3 → V2 (final fallback)
+     *      - V4: Checks WETH and native ETH pools, prefers higher liquidity
+     *      - V3: Uses configured fee tier (default 0.3%)
+     *      - V2: Final fallback using swapExactETHForTokens
+     *      - Slippage protection via minOutTarget on all routes
      * @param ethAmount ETH to swap
      * @param minOutTarget Minimum tokens to receive (slippage protection)
      * @return tokenReceived Amount of target token received from swap
@@ -474,7 +794,6 @@ contract UltraAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback {
         require(alignmentToken != address(0), "No alignment token set");
 
         // STUB: For unit tests with mock addresses, return fake swap amount
-        // In production with real addresses, this executes actual V3 swap
         if (weth.code.length == 0 || v3Router.code.length == 0) {
             // Simulate swap with 0.3% slippage
             tokenReceived = (ethAmount * 997) / 1000;
@@ -482,28 +801,236 @@ contract UltraAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback {
             return tokenReceived;
         }
 
-        // Wrap ETH to WETH for V3 swap
-        IWETH9(weth).deposit{value: ethAmount}();
+        // Query available pools for routing decision
+        (bool hasV2Pool, , uint112 reserveWETH, ) = _getV2PriceAndReserves();
+        (bool hasV3Pool, , uint128 liquidityV3) = _getV3PriceAndLiquidity();
+        (bool hasV4Pool, , uint128 liquidityV4) = _getV4PriceAndLiquidity();
 
-        // Approve V3 router to spend WETH
-        IWETH9(weth).approve(v3Router, ethAmount);
+        // Route through V4 if available and has better liquidity than V3
+        if (hasV4Pool && liquidityV4 > liquidityV3) {
+            return _swapViaV4(ethAmount, minOutTarget);
+        }
 
-        // Execute V3 swap: WETH → alignmentToken
-        IV3SwapRouter.ExactInputSingleParams memory params = IV3SwapRouter.ExactInputSingleParams({
-            tokenIn: weth,
-            tokenOut: alignmentToken,
-            fee: v3PreferredFee,
-            recipient: address(this),
-            deadline: block.timestamp + 300, // 5 minute deadline
-            amountIn: ethAmount,
-            amountOutMinimum: minOutTarget,
-            sqrtPriceLimitX96: 0 // No price limit (slippage handled by minOutTarget)
-        });
+        // Try V3 routing
+        if (hasV3Pool) {
+            // Wrap ETH to WETH for V3 swap
+            IWETH9(weth).deposit{value: ethAmount}();
 
-        tokenReceived = IV3SwapRouter(v3Router).exactInputSingle(params);
+            // Approve V3 router to spend WETH
+            IWETH9(weth).approve(v3Router, ethAmount);
 
+            // Execute V3 swap: WETH → alignmentToken
+            IV3SwapRouter.ExactInputSingleParams memory params = IV3SwapRouter.ExactInputSingleParams({
+                tokenIn: weth,
+                tokenOut: alignmentToken,
+                fee: v3PreferredFee,
+                recipient: address(this),
+                deadline: block.timestamp + 300, // 5 minute deadline
+                amountIn: ethAmount,
+                amountOutMinimum: minOutTarget,
+                sqrtPriceLimitX96: 0 // No price limit (slippage handled by minOutTarget)
+            });
+
+            tokenReceived = IV3SwapRouter(v3Router).exactInputSingle(params);
+
+            require(tokenReceived >= minOutTarget, "Slippage too high");
+            return tokenReceived;
+        }
+
+        // Final fallback to V2 if V4 and V3 unavailable
+        return _swapETHForTargetViaV2(ethAmount, minOutTarget);
+    }
+
+    /**
+     * @notice Swap ETH for alignment token via Uniswap V2 (final fallback)
+     * @dev Uses V2 Router swapExactETHForTokens with native ETH
+     * @param ethAmount ETH to swap
+     * @param minOutTarget Minimum tokens to receive (slippage protection)
+     * @return tokenReceived Amount of target token received from swap
+     */
+    function _swapETHForTargetViaV2(uint256 ethAmount, uint256 minOutTarget)
+        internal
+        returns (uint256 tokenReceived)
+    {
+        require(ethAmount > 0, "Amount must be positive");
+        require(alignmentToken != address(0), "No alignment token set");
+
+        // Skip if v2Router is mock
+        if (v2Router.code.length == 0) {
+            revert("No swap route available");
+        }
+
+        // Construct path: ETH → WETH → alignmentToken
+        address[] memory path = new address[](2);
+        path[0] = weth;
+        path[1] = alignmentToken;
+
+        // Execute V2 swap
+        uint256[] memory amounts = IUniswapV2Router02(v2Router).swapExactETHForTokens{value: ethAmount}(
+            minOutTarget,
+            path,
+            address(this),
+            block.timestamp + 300 // 5 minute deadline
+        );
+
+        tokenReceived = amounts[amounts.length - 1];
         require(tokenReceived >= minOutTarget, "Slippage too high");
         return tokenReceived;
+    }
+
+    /**
+     * @notice Execute swap via V4 pool (WETH or native ETH)
+     * @dev Uses PoolManager.unlock() pattern to execute swap
+     *      - Checks for WETH pool first (most common)
+     *      - Falls back to native ETH pool
+     *      - Wraps ETH to WETH if needed for WETH pool
+     * @param ethAmount Amount of ETH to swap
+     * @param minOutTarget Minimum alignment tokens to receive
+     * @return tokenReceived Amount of alignment tokens received
+     */
+    function _swapViaV4(uint256 ethAmount, uint256 minOutTarget)
+        internal
+        returns (uint256 tokenReceived)
+    {
+        // Try fee tiers in order of preference: 0.3%, 0.05%, 1%
+        uint24[3] memory feeTiers = [uint24(3000), uint24(500), uint24(10000)];
+        int24[3] memory tickSpacings = [int24(60), int24(10), int24(200)];
+
+        for (uint256 i = 0; i < feeTiers.length; i++) {
+            // Try WETH pool first
+            (bool hasWETHPool, , ) = _queryV4PoolForTokenPair(
+                weth,
+                alignmentToken,
+                feeTiers[i],
+                tickSpacings[i]
+            );
+
+            if (hasWETHPool) {
+                // Wrap ETH to WETH for V4 swap
+                IWETH9(weth).deposit{value: ethAmount}();
+
+                // Execute swap via WETH pool
+                tokenReceived = _executeV4Swap(
+                    weth,
+                    alignmentToken,
+                    feeTiers[i],
+                    tickSpacings[i],
+                    ethAmount,
+                    true // isWETH
+                );
+
+                if (tokenReceived >= minOutTarget) {
+                    return tokenReceived;
+                }
+            }
+
+            // Try native ETH pool as fallback
+            (bool hasNativePool, , ) = _queryV4PoolForTokenPair(
+                address(0),
+                alignmentToken,
+                feeTiers[i],
+                tickSpacings[i]
+            );
+
+            if (hasNativePool) {
+                // Execute swap via native ETH pool
+                tokenReceived = _executeV4Swap(
+                    address(0),
+                    alignmentToken,
+                    feeTiers[i],
+                    tickSpacings[i],
+                    ethAmount,
+                    false // not WETH
+                );
+
+                if (tokenReceived >= minOutTarget) {
+                    return tokenReceived;
+                }
+            }
+        }
+
+        // No V4 pool found or slippage too high, revert
+        revert("No suitable V4 pool found");
+    }
+
+    /**
+     * @notice Execute V4 swap for specific pool
+     * @dev Constructs pool key and executes swap via PoolManager
+     * @param token0Addr First token (WETH or address(0) for native ETH)
+     * @param token1Addr Second token (alignment token)
+     * @param fee Fee tier
+     * @param tickSpacing Tick spacing
+     * @param amountIn Amount to swap
+     * @param isWETH True if swapping WETH (false for native ETH)
+     * @return amountOut Amount of alignment tokens received
+     */
+    function _executeV4Swap(
+        address token0Addr,
+        address token1Addr,
+        uint24 fee,
+        int24 tickSpacing,
+        uint256 amountIn,
+        bool isWETH
+    )
+        internal
+        returns (uint256 amountOut)
+    {
+        // Ensure correct currency ordering (currency0 < currency1)
+        (Currency currency0, Currency currency1, bool zeroForOne) = token0Addr < token1Addr
+            ? (Currency.wrap(token0Addr), Currency.wrap(token1Addr), true)
+            : (Currency.wrap(token1Addr), Currency.wrap(token0Addr), false);
+
+        // Construct pool key
+        PoolKey memory poolKey = PoolKey({
+            currency0: currency0,
+            currency1: currency1,
+            fee: fee,
+            tickSpacing: tickSpacing,
+            hooks: IHooks(address(0))
+        });
+
+        // Approve tokens if swapping WETH (ERC20)
+        if (isWETH) {
+            IERC20(weth).approve(address(poolManager), amountIn);
+        }
+
+        // Prepare swap params (exact input swap)
+        IPoolManager.SwapParams memory swapParams = IPoolManager.SwapParams({
+            zeroForOne: zeroForOne,
+            amountSpecified: -int256(amountIn), // Negative = exact input
+            sqrtPriceLimitX96: zeroForOne
+                ? TickMath.MIN_SQRT_PRICE + 1
+                : TickMath.MAX_SQRT_PRICE - 1 // No price limit
+        });
+
+        // Prepare swap callback data
+        SwapCallbackData memory swapData = SwapCallbackData({
+            key: poolKey,
+            params: swapParams,
+            recipient: address(this)
+        });
+
+        // Wrap in callback data with operation type
+        CallbackData memory callbackData = CallbackData({
+            operation: CallbackOperation.SWAP,
+            data: abi.encode(swapData)
+        });
+
+        // Execute swap via unlock → callback → swap → settle
+        bytes memory result = IPoolManager(poolManager).unlock(abi.encode(callbackData));
+        BalanceDelta delta = abi.decode(result, (BalanceDelta));
+
+        // Calculate output amount
+        // For exact input swap: positive delta = pool owes us (we receive)
+        if (zeroForOne) {
+            // Swapping currency0 → currency1, expect positive delta1
+            amountOut = delta.amount1() > 0 ? uint256(int256(delta.amount1())) : 0;
+        } else {
+            // Swapping currency1 → currency0, expect positive delta0
+            amountOut = delta.amount0() > 0 ? uint256(int256(delta.amount0())) : 0;
+        }
+
+        return amountOut;
     }
 
     /**
@@ -561,8 +1088,14 @@ contract UltraAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback {
             salt: 0
         });
 
-        ModifyLiquidityCallbackData memory callbackData = ModifyLiquidityCallbackData({
+        ModifyLiquidityCallbackData memory lpData = ModifyLiquidityCallbackData({
             params: params
+        });
+
+        // Wrap in callback data with operation type
+        CallbackData memory callbackData = CallbackData({
+            operation: CallbackOperation.MODIFY_LIQUIDITY,
+            data: abi.encode(lpData)
         });
 
         // Execute unlock → callback → modifyLiquidity → settle
@@ -578,37 +1111,57 @@ contract UltraAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback {
     }
 
     /**
-     * @notice Unlock callback for V4 position operations
-     * @dev Called by PoolManager during unlock() - executes modifyLiquidity and settles deltas
-     * @param data Encoded ModifyLiquidityCallbackData
-     * @return Encoded BalanceDelta from modifyLiquidity operation
+     * @notice Unlock callback for V4 operations (swaps and LP)
+     * @dev Called by PoolManager during unlock() - routes to appropriate handler
+     * @param data Encoded CallbackData with operation type
+     * @return Encoded BalanceDelta from operation
      */
     function unlockCallback(bytes calldata data) external returns (bytes memory) {
         require(msg.sender == address(poolManager), "Only PoolManager");
 
-        ModifyLiquidityCallbackData memory params = abi.decode(data, (ModifyLiquidityCallbackData));
+        CallbackData memory callbackData = abi.decode(data, (CallbackData));
 
-        // Execute modifyLiquidity on the V4 pool
-        (BalanceDelta delta, ) = IPoolManager(poolManager).modifyLiquidity(
-            v4PoolKey,
-            params.params,
-            "" // hookData
-        );
+        if (callbackData.operation == CallbackOperation.SWAP) {
+            // Handle swap operation
+            SwapCallbackData memory swapData = abi.decode(callbackData.data, (SwapCallbackData));
 
-        // Settle the deltas (transfer tokens to/from pool)
-        _settleDelta(delta);
+            // Execute swap
+            BalanceDelta delta = IPoolManager(poolManager).swap(
+                swapData.key,
+                swapData.params,
+                "" // hookData
+            );
 
-        return abi.encode(delta);
+            // Settle swap deltas
+            _settleSwapDelta(swapData.key, delta, swapData.recipient);
+
+            return abi.encode(delta);
+        } else {
+            // Handle LP operation
+            ModifyLiquidityCallbackData memory lpData = abi.decode(callbackData.data, (ModifyLiquidityCallbackData));
+
+            // Execute modifyLiquidity on the V4 pool
+            (BalanceDelta delta, ) = IPoolManager(poolManager).modifyLiquidity(
+                v4PoolKey,
+                lpData.params,
+                "" // hookData
+            );
+
+            // Settle the deltas (transfer tokens to/from pool)
+            _settleLPDelta(delta);
+
+            return abi.encode(delta);
+        }
     }
 
     /**
-     * @notice Settle currency deltas from V4 operations
+     * @notice Settle currency deltas from V4 LP operations
      * @dev Uses CurrencySettler library pattern from V4 core tests
      *      - Negative delta = vault owes tokens to pool → currency.settle()
      *      - Positive delta = pool owes tokens to vault → currency.take()
      * @param delta Balance delta from modifyLiquidity operation
      */
-    function _settleDelta(BalanceDelta delta) internal {
+    function _settleLPDelta(BalanceDelta delta) internal {
         int128 delta0 = delta.amount0();
         int128 delta1 = delta.amount1();
 
@@ -621,12 +1174,6 @@ contract UltraAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback {
         } else if (delta0 > 0) {
             // Pool owes currency0 to vault (excess tokens returned)
             v4PoolKey.currency0.take(pm, address(this), uint128(delta0), false);
-            // If currency0 is WETH, unwrap back to ETH for caller reward
-            if (Currency.unwrap(v4PoolKey.currency0) == weth) {
-                uint256 wethBalance = IWETH9(weth).balanceOf(address(this));
-                require(wethBalance >= uint128(delta0), "Insufficient WETH balance after take");
-                IWETH9(weth).withdraw(uint128(delta0));
-            }
         }
 
         // Settle currency1
@@ -636,12 +1183,40 @@ contract UltraAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback {
         } else if (delta1 > 0) {
             // Pool owes currency1 to vault (excess tokens returned)
             v4PoolKey.currency1.take(pm, address(this), uint128(delta1), false);
-            // If currency1 is WETH, unwrap back to ETH for caller reward
-            if (Currency.unwrap(v4PoolKey.currency1) == weth) {
-                uint256 wethBalance = IWETH9(weth).balanceOf(address(this));
-                require(wethBalance >= uint128(delta1), "Insufficient WETH balance after take");
-                IWETH9(weth).withdraw(uint128(delta1));
-            }
+        }
+    }
+
+    /**
+     * @notice Settle currency deltas from V4 swap operations
+     * @dev Similar to LP settlement but uses swap pool key instead of vault pool key
+     *      - Negative delta = vault owes tokens to pool → currency.settle()
+     *      - Positive delta = pool owes tokens to vault → currency.take()
+     * @param key Pool key for the swap
+     * @param delta Balance delta from swap operation
+     * @param recipient Address to receive positive deltas (tokens received from swap)
+     */
+    function _settleSwapDelta(PoolKey memory key, BalanceDelta delta, address recipient) internal {
+        int128 delta0 = delta.amount0();
+        int128 delta1 = delta.amount1();
+
+        IPoolManager pm = IPoolManager(poolManager);
+
+        // Settle currency0
+        if (delta0 < 0) {
+            // Vault owes currency0 to pool (we're paying)
+            key.currency0.settle(pm, address(this), uint128(-delta0), false);
+        } else if (delta0 > 0) {
+            // Pool owes currency0 to vault (we're receiving)
+            key.currency0.take(pm, recipient, uint128(delta0), false);
+        }
+
+        // Settle currency1
+        if (delta1 < 0) {
+            // Vault owes currency1 to pool (we're paying)
+            key.currency1.settle(pm, address(this), uint128(-delta1), false);
+        } else if (delta1 > 0) {
+            // Pool owes currency1 to vault (we're receiving)
+            key.currency1.take(pm, recipient, uint128(delta1), false);
         }
     }
 
@@ -835,6 +1410,138 @@ contract UltraAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback {
     }
 
     /**
+     * @notice Query V4 pools for WETH/alignmentToken price and liquidity
+     * @dev Checks potential V4 pools (both WETH and native ETH) for swap source pricing
+     *      Note: This is separate from vault's LP pool - used for price validation
+     * @return hasV4Pool True if a valid V4 pool was found
+     * @return priceV4 WETH price per alignment token (scaled by 1e18)
+     * @return liquidity Pool liquidity
+     */
+    function _getV4PriceAndLiquidity()
+        internal
+        view
+        returns (
+            bool hasV4Pool,
+            uint256 priceV4,
+            uint128 liquidity
+        )
+    {
+        // Skip if poolManager is mock (no code deployed)
+        if (poolManager.code.length == 0) {
+            return (false, 0, 0);
+        }
+
+        // Try fee tiers in order of preference: 0.3%, 0.05%, 1%
+        uint24[3] memory feeTiers = [uint24(3000), uint24(500), uint24(10000)];
+        int24[3] memory tickSpacings = [int24(60), int24(10), int24(200)];
+
+        for (uint256 i = 0; i < feeTiers.length; i++) {
+            // Try WETH pool first (for swap source)
+            (bool success, uint256 price, uint128 liq) = _queryV4PoolForTokenPair(
+                weth,
+                alignmentToken,
+                feeTiers[i],
+                tickSpacings[i]
+            );
+
+            if (success) {
+                return (true, price, liq);
+            }
+
+            // Try native ETH pool as fallback
+            (success, price, liq) = _queryV4PoolForTokenPair(
+                address(0), // Native ETH
+                alignmentToken,
+                feeTiers[i],
+                tickSpacings[i]
+            );
+
+            if (success) {
+                return (true, price, liq);
+            }
+        }
+
+        // No valid V4 pool found
+        return (false, 0, 0);
+    }
+
+    /**
+     * @notice Query a specific V4 pool for token pair
+     * @param token0Addr First token address (address(0) for native ETH)
+     * @param token1Addr Second token address
+     * @param fee Fee tier
+     * @param tickSpacing Tick spacing for the fee tier
+     * @return success True if pool exists and has valid data
+     * @return price Price (scaled by 1e18)
+     * @return poolLiquidity Current pool liquidity
+     */
+    function _queryV4PoolForTokenPair(
+        address token0Addr,
+        address token1Addr,
+        uint24 fee,
+        int24 tickSpacing
+    )
+        internal
+        view
+        returns (
+            bool success,
+            uint256 price,
+            uint128 poolLiquidity
+        )
+    {
+        // Ensure correct currency ordering (currency0 < currency1)
+        (Currency currency0, Currency currency1) = token0Addr < token1Addr
+            ? (Currency.wrap(token0Addr), Currency.wrap(token1Addr))
+            : (Currency.wrap(token1Addr), Currency.wrap(token0Addr));
+
+        // Construct pool key
+        PoolKey memory poolKey = PoolKey({
+            currency0: currency0,
+            currency1: currency1,
+            fee: fee,
+            tickSpacing: tickSpacing,
+            hooks: IHooks(address(0)) // Assume no hooks for price query
+        });
+
+        PoolId poolId = poolKey.toId();
+
+        // Query pool state (StateLibrary functions are internal, can't use try/catch)
+        (uint160 sqrtPriceX96, , ,) = StateLibrary.getSlot0(IPoolManager(poolManager), poolId);
+
+        // Check if pool is initialized (sqrtPriceX96 != 0)
+        if (sqrtPriceX96 == 0) {
+            return (false, 0, 0);
+        }
+
+        // Query liquidity
+        uint128 liq = StateLibrary.getLiquidity(IPoolManager(poolManager), poolId);
+
+        // Check if pool has meaningful liquidity
+        if (liq == 0) {
+            return (false, 0, 0);
+        }
+
+        // Convert sqrtPriceX96 to price: (sqrtPriceX96 * sqrtPriceX96 * 1e18) >> 192
+        uint256 rawPrice = (uint256(sqrtPriceX96) * uint256(sqrtPriceX96) * 1e18) >> 192;
+
+        // Determine token ordering to get WETH/token price
+        address currency0Addr = Currency.unwrap(currency0);
+
+        if (currency0Addr == weth || currency0Addr == address(0)) {
+            // rawPrice is token1/token0, we want WETH/token = token0/token1
+            if (rawPrice == 0) {
+                return (false, 0, 0);
+            }
+            price = (1e18 * 1e18) / rawPrice;
+        } else {
+            // rawPrice is token1/token0, we want WETH/token = token1/token0
+            price = rawPrice;
+        }
+
+        return (true, price, liq);
+    }
+
+    /**
      * @notice Check if price deviation between sources is acceptable
      * @param price1 First price (scaled by 1e18)
      * @param price2 Second price (scaled by 1e18)
@@ -865,6 +1572,7 @@ contract UltraAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback {
      * @notice Check target asset price and purchase power from DEX
      * @dev Queries current price of alignment token from V2/V3/V4 pools
      *      - Target token often in majority position in V2/V3 pools (deep liquidity)
+     *      - V4 pools can use WETH or native ETH as swap source
      *      - Validates pricing and ensures purchase power is available
      *      - Compares against oracle price if available (for drift detection)
      *      - Returns early if price is reasonable, reverts if unusual movements detected
@@ -876,16 +1584,32 @@ contract UltraAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback {
         // Query V3 pool for price and liquidity
         (bool hasV3Pool, uint256 priceV3, uint128 liquidityV3) = _getV3PriceAndLiquidity();
 
+        // Query V4 pool for price and liquidity (may be WETH or native ETH pool)
+        (bool hasV4Pool, uint256 priceV4, uint128 liquidityV4) = _getV4PriceAndLiquidity();
+
         // If no pools are available, skip validation (expected in unit tests with mock addresses)
-        // In production with real factory addresses, at least one pool should exist
-        if (!hasV2Pool && !hasV3Pool) {
+        // In production with real addresses, at least one pool should exist
+        if (!hasV2Pool && !hasV3Pool && !hasV4Pool) {
             return;
         }
 
-        // If both pools exist, check price deviation
+        // Cross-check prices across all available pools for arbitrage/manipulation detection
+        // Check V2 vs V3
         if (hasV2Pool && hasV3Pool) {
             (bool isAcceptable, uint256 deviation) = _checkPriceDeviation(priceV2, priceV3);
             require(isAcceptable, "Price deviation too high between V2/V3");
+        }
+
+        // Check V2 vs V4
+        if (hasV2Pool && hasV4Pool) {
+            (bool isAcceptable, uint256 deviation) = _checkPriceDeviation(priceV2, priceV4);
+            require(isAcceptable, "Price deviation too high between V2/V4");
+        }
+
+        // Check V3 vs V4
+        if (hasV3Pool && hasV4Pool) {
+            (bool isAcceptable, uint256 deviation) = _checkPriceDeviation(priceV3, priceV4);
+            require(isAcceptable, "Price deviation too high between V3/V4");
         }
 
         // Verify sufficient liquidity for the pending swap
@@ -1019,11 +1743,11 @@ contract UltraAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback {
             return 5e17;
         }
 
-        // Determine which currency is WETH and calculate proportion
-        bool currency0IsWETH = (Currency.unwrap(v4PoolKey.currency0) == weth);
+        // Determine which currency is native ETH and calculate proportion
+        bool currency0IsNativeETH = v4PoolKey.currency0.isAddressZero();
 
-        if (currency0IsWETH) {
-            // WETH is currency0, we need to swap to get currency1 (alignmentToken)
+        if (currency0IsNativeETH) {
+            // Native ETH is currency0, we need to swap to get currency1 (alignmentToken)
             // Proportion to swap = amount1 / (amount0 + amount1)
             // This tells us what % of our ETH should become tokens
             if (amount0 + amount1 == 0) {
@@ -1031,7 +1755,7 @@ contract UltraAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback {
             }
             proportionToSwap = (amount1 * 1e18) / (amount0 + amount1);
         } else {
-            // WETH is currency1, we need to swap to get currency0 (alignmentToken)
+            // Native ETH is currency1, we need to swap to get currency0 (alignmentToken)
             // Proportion to swap = amount0 / (amount0 + amount1)
             if (amount0 + amount1 == 0) {
                 return 5e17; // Fallback to 50%
@@ -1085,13 +1809,12 @@ contract UltraAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback {
             "Alignment token not in pool"
         );
 
-        // Validate WETH is the other currency (or native ETH via address(0))
-        bool hasWETH = currency0Addr == weth || currency1Addr == weth;
+        // Validate native ETH is the other currency (WETH tokens not supported for V4 pools)
         bool hasNativeETH = currency0Addr == address(0) || currency1Addr == address(0);
 
         require(
-            hasWETH || hasNativeETH,
-            "Pool must contain WETH or native ETH"
+            hasNativeETH,
+            "Pool must contain native ETH (address(0))"
         );
 
         // Validate currency ordering (currency0 < currency1)
@@ -1103,6 +1826,53 @@ contract UltraAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback {
         // Note: Pool initialization check is deferred to actual usage in convertAndAddLiquidity()
         // This allows setting pool key before pool is initialized, then validating on first use
         // If pool doesn't exist when attempting LP operations, transaction will revert naturally
+        // Use validateCurrentPoolKey() to manually verify pool configuration before going live
+    }
+
+    /**
+     * @notice Validate that the currently set V4 pool key is properly configured
+     * @dev Can be called before going live to ensure pool configuration is correct
+     *      This provides early detection of misconfiguration before ETH accumulates
+     *      Note: This validates configuration but cannot verify pool initialization
+     *            until pool is actually created. Call after pool initialization to verify.
+     */
+    function validateCurrentPoolKey() external view {
+        // Validate at least one currency is set
+        require(
+            Currency.unwrap(v4PoolKey.currency0) != address(0) || Currency.unwrap(v4PoolKey.currency1) != address(0),
+            "V4 pool key not set"
+        );
+
+        // Validate fee tier is standard (0.05%, 0.3%, or 1%)
+        require(
+            v4PoolKey.fee == 500 || v4PoolKey.fee == 3000 || v4PoolKey.fee == 10000,
+            "Invalid fee tier (must be 500, 3000, or 10000)"
+        );
+
+        // Validate tick spacing matches fee tier
+        if (v4PoolKey.fee == 500) {
+            require(v4PoolKey.tickSpacing == 10, "Invalid tick spacing for 0.05% fee");
+        } else if (v4PoolKey.fee == 3000) {
+            require(v4PoolKey.tickSpacing == 60, "Invalid tick spacing for 0.3% fee");
+        } else if (v4PoolKey.fee == 10000) {
+            require(v4PoolKey.tickSpacing == 200, "Invalid tick spacing for 1% fee");
+        }
+
+        // Validate alignment token is one of the currencies
+        address currency0Addr = Currency.unwrap(v4PoolKey.currency0);
+        address currency1Addr = Currency.unwrap(v4PoolKey.currency1);
+
+        require(
+            currency0Addr == alignmentToken || currency1Addr == alignmentToken,
+            "Alignment token not in pool"
+        );
+
+        // Validate native ETH is the other currency
+        bool hasNativeETH = currency0Addr == address(0) || currency1Addr == address(0);
+        require(hasNativeETH, "Pool must contain native ETH (address(0))");
+
+        // Validate currency ordering
+        require(currency0Addr < currency1Addr, "Invalid currency ordering (currency0 must be < currency1)");
     }
 
     // ========== Query Functions ==========
@@ -1175,11 +1945,12 @@ contract UltraAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback {
     }
 
     /**
-     * @notice Update conversion reward basis points
+     * @notice Update standard conversion reward (M-04 Security Fix)
+     * @param newReward New fixed reward amount in wei
      */
-    function setConversionRewardBps(uint256 newBps) external onlyOwner {
-        require(newBps <= 100, "Reward too high (max 1%)");
-        conversionRewardBps = newBps;
+    function setStandardConversionReward(uint256 newReward) external onlyOwner {
+        require(newReward <= 0.1 ether, "Reward too high (max 0.1 ETH)");
+        standardConversionReward = newReward;
     }
 
     /**
@@ -1189,6 +1960,16 @@ contract UltraAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback {
     function setMaxPriceDeviationBps(uint256 newBps) external onlyOwner {
         require(newBps <= 2000, "Deviation too high (max 20%)");
         maxPriceDeviationBps = newBps;
+    }
+
+    /**
+     * @notice Update dust distribution threshold
+     * @param newThreshold New threshold in share wei (default: 1e18)
+     * @dev When accumulated dust reaches this threshold, it's distributed to the largest contributor
+     */
+    function setDustDistributionThreshold(uint256 newThreshold) external onlyOwner {
+        require(newThreshold > 0, "Threshold must be positive");
+        dustDistributionThreshold = newThreshold;
     }
 
     /**

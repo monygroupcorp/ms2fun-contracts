@@ -31,13 +31,15 @@ contract VaultUniswapIntegrationTest is ForkTestBase {
         charlie = makeAddr("charlie");
         alignmentToken = USDC; // Use real USDC for fork tests (has V3 pool with WETH)
 
-        // Deploy vault with router addresses
+        // Deploy vault with router and factory addresses
         vm.prank(owner);
         vault = new UltraAlignmentVault(
             WETH,
             UNISWAP_V4_POOL_MANAGER,
             UNISWAP_V3_ROUTER,
             UNISWAP_V2_ROUTER,
+            UNISWAP_V2_FACTORY,
+            UNISWAP_V3_FACTORY,
             alignmentToken
         );
 
@@ -109,6 +111,8 @@ contract VaultUniswapIntegrationTest is ForkTestBase {
             UNISWAP_V4_POOL_MANAGER,
             UNISWAP_V3_ROUTER,
             UNISWAP_V2_ROUTER,
+            UNISWAP_V2_FACTORY,
+            UNISWAP_V3_FACTORY,
             alignmentToken
         );
 
@@ -120,7 +124,7 @@ contract VaultUniswapIntegrationTest is ForkTestBase {
         assertEq(newVault.weth(), WETH, "WETH address mismatch");
         assertEq(newVault.poolManager(), UNISWAP_V4_POOL_MANAGER, "Pool manager mismatch");
         assertEq(newVault.alignmentToken(), alignmentToken, "Alignment token mismatch");
-        assertEq(newVault.conversionRewardBps(), 5, "Default reward should be 5 bps");
+        assertEq(newVault.standardConversionReward(), 0.0012 ether, "Default reward should be 0.0012 ETH");
 
         emit log_string("[PASS] Vault deploys with correct initial state");
     }
@@ -163,12 +167,12 @@ contract VaultUniswapIntegrationTest is ForkTestBase {
     }
 
     function test_setConversionRewardBps_success() public {
-        uint256 newReward = 10; // 0.1%
+        uint256 newReward = 0.01 ether;
 
         vm.prank(owner);
-        vault.setConversionRewardBps(newReward);
+        vault.setStandardConversionReward(newReward);
 
-        assertEq(vault.conversionRewardBps(), newReward, "Reward not updated");
+        assertEq(vault.standardConversionReward(), newReward, "Reward not updated");
         emit log_string("[PASS] Owner can update conversion reward");
     }
 
@@ -239,7 +243,7 @@ contract VaultUniswapIntegrationTest is ForkTestBase {
         // Execute conversion
         uint256 aliceBalanceBefore = alice.balance;
         vm.prank(alice);
-        vault.convertAndAddLiquidity(0, -120, 120);
+        vault.convertAndAddLiquidity(0);
 
         // Verify shares issued
         uint256 aliceShares = vault.benefactorShares(alice);
@@ -271,7 +275,7 @@ contract VaultUniswapIntegrationTest is ForkTestBase {
         _contribute(bob, 5 ether);
 
         // Execute conversion
-        vault.convertAndAddLiquidity(0, -120, 120);
+        vault.convertAndAddLiquidity(0);
 
         // Verify shares with AMM tolerance
         uint256 aliceShares = vault.benefactorShares(alice);
@@ -298,7 +302,7 @@ contract VaultUniswapIntegrationTest is ForkTestBase {
         _contribute(bob, 3 ether);
 
         // Execute conversion
-        vault.convertAndAddLiquidity(0, -120, 120);
+        vault.convertAndAddLiquidity(0);
 
         // Verify shares match contribution ratio
         // Alice: 5/8 = 62.5% → 6250 bps
@@ -345,7 +349,7 @@ contract VaultUniswapIntegrationTest is ForkTestBase {
         }
 
         // Execute conversion
-        vault.convertAndAddLiquidity(0, -120, 120);
+        vault.convertAndAddLiquidity(0);
 
         // Verify each contributor's share percentage
         for (uint256 i = 0; i < 10; i++) {
@@ -362,7 +366,7 @@ contract VaultUniswapIntegrationTest is ForkTestBase {
     function test_convertWithZeroPending_reverts() public {
         // Try to convert with no pending contributions
         vm.expectRevert("No pending ETH to convert");
-        vault.convertAndAddLiquidity(0, -120, 120);
+        vault.convertAndAddLiquidity(0);
 
         emit log_string("[PASS] Cannot convert with zero pending ETH");
     }
@@ -374,12 +378,12 @@ contract VaultUniswapIntegrationTest is ForkTestBase {
     function test_multipleConversions_sharesAccumulate() public {
         // Round 1: Alice contributes 5 ETH
         _contribute(alice, 5 ether);
-        vault.convertAndAddLiquidity(0, -120, 120);
+        vault.convertAndAddLiquidity(0);
         uint256 aliceSharesRound1 = vault.benefactorShares(alice);
 
         // Round 2: Bob contributes 5 ETH
         _contribute(bob, 5 ether);
-        vault.convertAndAddLiquidity(0, -120, 120);
+        vault.convertAndAddLiquidity(0);
 
         // Alice should still have her Round 1 shares
         assertEq(vault.benefactorShares(alice), aliceSharesRound1, "Alice shares should not decrease");
@@ -397,12 +401,12 @@ contract VaultUniswapIntegrationTest is ForkTestBase {
     function test_multipleConversions_newContributorDilution() public {
         // Round 1: Alice contributes 10 ETH
         _contribute(alice, 10 ether);
-        vault.convertAndAddLiquidity(0, -120, 120);
+        vault.convertAndAddLiquidity(0);
         uint256 aliceShares = vault.benefactorShares(alice);
 
         // Round 2: Bob contributes 10 ETH (same amount as Alice)
         _contribute(bob, 10 ether);
-        vault.convertAndAddLiquidity(0, -120, 120);
+        vault.convertAndAddLiquidity(0);
         uint256 bobShares = vault.benefactorShares(bob);
 
         // Note: With current stub implementation, shares are based on LP units issued
@@ -427,7 +431,7 @@ contract VaultUniswapIntegrationTest is ForkTestBase {
         // Bob executes the conversion (not Alice)
         uint256 bobBalanceBefore = bob.balance;
         vm.prank(bob);
-        vault.convertAndAddLiquidity(0, -120, 120);
+        vault.convertAndAddLiquidity(0);
 
         // Bob should receive caller reward
         uint256 expectedReward = (10 ether * 5) / 10000; // 5 bps
@@ -481,7 +485,7 @@ contract VaultUniswapIntegrationTest is ForkTestBase {
     function test_claimFees_singleContributor() public {
         // Setup: Alice gets shares
         _contribute(alice, 5 ether);
-        vault.convertAndAddLiquidity(0, -120, 120);
+        vault.convertAndAddLiquidity(0);
 
         // Simulate fees accumulating
         vm.deal(owner, 2 ether);
@@ -503,7 +507,7 @@ contract VaultUniswapIntegrationTest is ForkTestBase {
         // Setup: Alice 5 ETH, Bob 3 ETH → Alice gets 62.5%, Bob gets 37.5%
         _contribute(alice, 5 ether);
         _contribute(bob, 3 ether);
-        vault.convertAndAddLiquidity(0, -120, 120);
+        vault.convertAndAddLiquidity(0);
 
         // Accumulate 1 ETH in fees
         vm.deal(owner, 1 ether);
@@ -542,7 +546,7 @@ contract VaultUniswapIntegrationTest is ForkTestBase {
     function test_claimFees_multipleClaimsAcrossDeposits() public {
         // Setup shares
         _contribute(alice, 5 ether);
-        vault.convertAndAddLiquidity(0, -120, 120);
+        vault.convertAndAddLiquidity(0);
 
         // First fee deposit
         vm.deal(owner, 1 ether);
@@ -589,7 +593,7 @@ contract VaultUniswapIntegrationTest is ForkTestBase {
     function test_claimFees_noFeesReverts() public {
         // Give Alice shares but no fees
         _contribute(alice, 5 ether);
-        vault.convertAndAddLiquidity(0, -120, 120);
+        vault.convertAndAddLiquidity(0);
 
         // Try to claim with no accumulated fees
         vm.prank(alice);
@@ -606,7 +610,7 @@ contract VaultUniswapIntegrationTest is ForkTestBase {
     function test_contributionAfterConversion_startsNewDragnet() public {
         // Dragnet cycle 1 - use larger amount for stub compatibility
         _contribute(alice, 5 ether);
-        vault.convertAndAddLiquidity(0, -120, 120);
+        vault.convertAndAddLiquidity(0);
 
         // Verify dragnet cleared
         assertEq(vault.pendingETH(alice), 0, "Should clear after conversion");
@@ -638,7 +642,7 @@ contract VaultUniswapIntegrationTest is ForkTestBase {
 
         assertEq(vault.pendingETH(alice), 1000 ether, "Large contribution tracked");
 
-        vault.convertAndAddLiquidity(0, -120, 120);
+        vault.convertAndAddLiquidity(0);
         assertGt(vault.benefactorShares(alice), 0, "Alice should have shares");
 
         // Verify LP units created (stub uses simple formula)
@@ -662,7 +666,7 @@ contract VaultUniswapIntegrationTest is ForkTestBase {
 
         // Measure gas for conversion with 20 benefactors
         uint256 gasBefore = gasleft();
-        vault.convertAndAddLiquidity(0, -120, 120);
+        vault.convertAndAddLiquidity(0);
         uint256 gasUsed = gasBefore - gasleft();
 
         emit log_named_uint("Gas used for 20 benefactors", gasUsed);
@@ -686,7 +690,7 @@ contract VaultUniswapIntegrationTest is ForkTestBase {
 
     function test_getBenefactorShares() public {
         _contribute(alice, 5 ether);
-        vault.convertAndAddLiquidity(0, -120, 120);
+        vault.convertAndAddLiquidity(0);
 
         uint256 shares = vault.getBenefactorShares(alice);
         assertGt(shares, 0, "Alice should have shares");
@@ -698,7 +702,7 @@ contract VaultUniswapIntegrationTest is ForkTestBase {
     function test_calculateClaimableAmount() public {
         // Setup shares
         _contribute(alice, 10 ether);
-        vault.convertAndAddLiquidity(0, -120, 120);
+        vault.convertAndAddLiquidity(0);
 
         // Add fees
         vm.deal(owner, 5 ether);
@@ -737,7 +741,7 @@ contract VaultUniswapIntegrationTest is ForkTestBase {
     function test_getUnclaimedFees() public {
         // Setup and verify it matches calculateClaimableAmount
         _contribute(alice, 5 ether);
-        vault.convertAndAddLiquidity(0, -120, 120);
+        vault.convertAndAddLiquidity(0);
 
         vm.deal(owner, 2 ether);
         vm.prank(owner);
