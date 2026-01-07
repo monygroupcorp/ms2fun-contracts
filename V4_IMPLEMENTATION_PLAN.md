@@ -668,12 +668,11 @@ function test_deployLiquidity_E2E() public {
     // Buy some tokens
     instance.buyBonding(1000000 ether, 1 ether, true, bytes32(0), "");
 
-    // Deploy liquidity to V4
+    // Deploy liquidity to V4 (ENFORCES FULL-RANGE)
+    // Note: tickLower/tickUpper are automatically set to min/max usable ticks
     uint128 liquidity = instance.deployLiquidity(
         3000, // fee
-        60,   // tickSpacing
-        -887220, // tickLower (full range)
-        887220,  // tickUpper
+        60,   // tickSpacing (determines full range: -887220 to 887220)
         500000 ether, // amountToken
         5 ether,      // amountETH
         sqrtPriceX96  // initial price
@@ -683,11 +682,13 @@ function test_deployLiquidity_E2E() public {
     assertGt(liquidity, 0, "Should have created position");
     assertEq(instance.liquidityPool(), address(v4PoolManager), "Pool set");
 
-    // Verify position exists in V4
+    // Verify position exists in V4 (full-range ticks)
+    int24 tickLower = TickMath.minUsableTick(60);
+    int24 tickUpper = TickMath.maxUsableTick(60);
     bytes32 positionKey = _getPositionKey(
         address(instance),
-        -887220,
-        887220,
+        tickLower,
+        tickUpper,
         bytes32(0)
     );
 

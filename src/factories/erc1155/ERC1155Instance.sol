@@ -172,6 +172,10 @@ contract ERC1155Instance is Ownable, ReentrancyGuard {
             require(priceIncreaseRate > 0, "Dynamic pricing requires increase rate");
         }
 
+        /// @dev Edition ID bounds check for GlobalMessagePacking compatibility
+        /// GlobalMessagePacking requires editionId to fit in uint32 for efficient packing
+        require(nextEditionId <= type(uint32).max, "Edition limit reached (max 4.29 billion)");
+
         uint256 editionId = nextEditionId++;
         editions[editionId] = Edition({
             id: editionId,
@@ -399,6 +403,11 @@ contract ERC1155Instance is Ownable, ReentrancyGuard {
      * @dev Only callable by the project creator
      *      This instance was registered as the benefactor when tithes were sent to the vault
      *      The creator calls this to claim fees and keep the rewards
+     * @dev Fee claiming uses intentional "dragnet" pattern. Vault contributions
+     *      (via withdraw tithe) go to pendingETH and only convert to benefactorShares
+     *      when convertAndAddLiquidity() is called. Creators must wait for conversion
+     *      before claiming fees. Frontend handles dragnet activation to ensure
+     *      contributions are included in conversions.
      * @return totalClaimed Amount of ETH claimed from vault
      */
     function claimVaultFees() external onlyOwner nonReentrant returns (uint256 totalClaimed) {
@@ -422,7 +431,7 @@ contract ERC1155Instance is Ownable, ReentrancyGuard {
         address to,
         uint256 id,
         uint256 amount,
-        bytes memory /* data */
+        bytes memory data
     ) external {
         require(
             from == msg.sender || isApprovedForAll[from][msg.sender],
@@ -434,6 +443,9 @@ contract ERC1155Instance is Ownable, ReentrancyGuard {
         balanceOf[to][id] += amount;
 
         emit TransferSingle(msg.sender, from, to, id, amount);
+
+        /// @dev ERC1155 compliance: Check if recipient is a contract and call receiver hook
+        _doSafeTransferAcceptanceCheck(msg.sender, from, to, id, amount, data);
     }
 
     /**
@@ -444,7 +456,7 @@ contract ERC1155Instance is Ownable, ReentrancyGuard {
         address to,
         uint256[] memory ids,
         uint256[] memory amounts,
-        bytes memory /* data */
+        bytes memory data
     ) external {
         require(
             from == msg.sender || isApprovedForAll[from][msg.sender],
@@ -459,6 +471,9 @@ contract ERC1155Instance is Ownable, ReentrancyGuard {
         }
 
         emit TransferBatch(msg.sender, from, to, ids, amounts);
+
+        /// @dev ERC1155 compliance: Check if recipient is a contract and call receiver hook
+        _doSafeBatchTransferAcceptanceCheck(msg.sender, from, to, ids, amounts, data);
     }
 
     /**
@@ -769,5 +784,109 @@ contract ERC1155Instance is Ownable, ReentrancyGuard {
         string memory editionStyle = editionStyleUri[editionId];
         return bytes(editionStyle).length > 0 ? editionStyle : styleUri;
     }
+
+    // ┌─────────────────────────────────────┐
+    // │   ERC1155 Receiver Safety Checks    │
+    // └─────────────────────────────────────┘
+
+    /**
+     * @dev Internal function to invoke onERC1155Received on a target address
+     * @param operator The address which initiated the transfer
+     * @param from The address which previously owned the token
+     * @param to The address which will own the token
+     * @param id The token ID being transferred
+     * @param amount The amount of tokens being transferred
+     * @param data Additional data with no specified format
+     */
+    function _doSafeTransferAcceptanceCheck(
+        address operator,
+        address from,
+        address to,
+        uint256 id,
+        uint256 amount,
+        bytes memory data
+    ) private {
+        if (to.code.length > 0) {
+            try IERC1155Receiver(to).onERC1155Received(operator, from, id, amount, data) returns (bytes4 response) {
+                if (response != IERC1155Receiver.onERC1155Received.selector) {
+                    revert("ERC1155: rejected tokens");
+                }
+            } catch Error(string memory reason) {
+                revert(reason);
+            } catch {
+                revert("ERC1155: transfer to non-receiver");
+            }
+        }
+    }
+
+    /**
+     * @dev Internal function to invoke onERC1155BatchReceived on a target address
+     * @param operator The address which initiated the batch transfer
+     * @param from The address which previously owned the tokens
+     * @param to The address which will own the tokens
+     * @param ids Array of token IDs being transferred
+     * @param amounts Array of amounts being transferred
+     * @param data Additional data with no specified format
+     */
+    function _doSafeBatchTransferAcceptanceCheck(
+        address operator,
+        address from,
+        address to,
+        uint256[] memory ids,
+        uint256[] memory amounts,
+        bytes memory data
+    ) private {
+        if (to.code.length > 0) {
+            try IERC1155Receiver(to).onERC1155BatchReceived(operator, from, ids, amounts, data) returns (bytes4 response) {
+                if (response != IERC1155Receiver.onERC1155BatchReceived.selector) {
+                    revert("ERC1155: rejected tokens");
+                }
+            } catch Error(string memory reason) {
+                revert(reason);
+            } catch {
+                revert("ERC1155: transfer to non-receiver");
+            }
+        }
+    }
+}
+
+/**
+ * @title IERC1155Receiver
+ * @dev Interface for contracts that want to support safe transfers from ERC1155 token contracts
+ */
+interface IERC1155Receiver {
+    /**
+     * @notice Handle the receipt of a single ERC1155 token type
+     * @param operator The address which initiated the transfer
+     * @param from The address which previously owned the token
+     * @param id The ID of the token being transferred
+     * @param value The amount of tokens being transferred
+     * @param data Additional data with no specified format
+     * @return bytes4 `bytes4(keccak256("onERC1155Received(address,address,uint256,uint256,bytes)"))`
+     */
+    function onERC1155Received(
+        address operator,
+        address from,
+        uint256 id,
+        uint256 value,
+        bytes calldata data
+    ) external returns (bytes4);
+
+    /**
+     * @notice Handle the receipt of multiple ERC1155 token types
+     * @param operator The address which initiated the batch transfer
+     * @param from The address which previously owned the tokens
+     * @param ids An array containing ids of each token being transferred
+     * @param values An array containing amounts of each token being transferred
+     * @param data Additional data with no specified format
+     * @return bytes4 `bytes4(keccak256("onERC1155BatchReceived(address,address,uint256[],uint256[],bytes)"))`
+     */
+    function onERC1155BatchReceived(
+        address operator,
+        address from,
+        uint256[] calldata ids,
+        uint256[] calldata values,
+        bytes calldata data
+    ) external returns (bytes4);
 }
 

@@ -26,9 +26,9 @@ This report documents findings from a security-focused review of the ms2fun smar
 
 ## Remediation Progress
 
-**Status as of 2026-01-05:**
+**Status as of 2026-01-06:**
 
-### ✅ Completed Fixes (9 items)
+### ✅ Completed Fixes (10 items)
 
 **HIGH SEVERITY (3/3 - 100% complete):**
 - ✅ **H-01:** Removed `BaseTestHooks` inheritance, implemented `IHooks` interface directly
@@ -37,7 +37,7 @@ This report documents findings from a security-focused review of the ms2fun smar
 
 **MEDIUM SEVERITY (2/5 - 40% complete):**
 - ✅ **M-02:** Replaced `.transfer()` with `.call{value:}()` for contract recipient support
-- ✅ **M-04:** Implemented gas-based rewards with graceful degradation (prevents griefing)
+- ✅ **M-04:** Implemented gas-based rewards with graceful degradation (prevents griefing) - **COMPLETED 2026-01-06**
 
 **LOW SEVERITY (5/5 - 100% complete):**
 - ✅ **L-01:** Added ERC1155 receiver callbacks for spec compliance
@@ -54,7 +54,7 @@ This report documents findings from a security-focused review of the ms2fun smar
 
 **MEDIUM SEVERITY (3 items):**
 - **M-01:** Dragnet fee pattern intentional - frontend handles activation
-- **M-03:** Fee conversion slippage protection deprioritized for reliability
+- **M-03:** Fee conversion slippage protection deprioritized for reliability (accepted risk)
 - **M-05:** Bonding curve sell lock when full is intended behavior
 
 **INFORMATIONAL (4 items):**
@@ -355,7 +355,7 @@ Initial investigation revealed critical conflict between `nonReentrant` modifier
 - [x] **M-01**: By design - dragnet approach intentional, frontend handles activation (No action)
 - [x] **M-02**: Replace `.transfer()` with `.call{value:}()` in FactoryApprovalGovernance.sol (COMPLETED)
 - [x] **M-03**: Accepted risk - slippage protection deprioritized for fee conversions (No action)
-- [ ] **M-04**: Review all incentivized public functions for reward balance protection (broader effort needed)
+- [x] **M-04**: Implemented gas-based rewards with graceful degradation for all incentivized functions (COMPLETED)
 - [x] **M-05**: Intended behavior - sells locked when curve full (No action)
 
 ### High Severity Fixes (CRITICAL)
@@ -802,19 +802,18 @@ Several owner-only functions have significant impact:
 Before audit submission, verify:
 
 - [x] All HIGH severity issues addressed (3/3 complete)
-- [ ] All MEDIUM severity issues addressed or documented as accepted risks (1/5 + 3 by design, M-04 pending)
+- [x] All MEDIUM severity issues addressed or documented as accepted risks (2/5 fixed + 3 by design = 5/5 complete)
 - [ ] Full test suite passes with coverage report (**See TASK_TEST_FIXES.md - 133 failures to resolve**)
 - [ ] Fork tests pass against mainnet V4 deployment
-- [ ] No test imports in production contracts (H-01 fixed)
+- [x] No test imports in production contracts (H-01 fixed)
 - [x] Production deployment checklist created (see below)
-- [ ] M-04 incentivized function review complete (**See TASK_M04_INCENTIVIZED_FUNCTIONS.md**)
+- [x] M-04 incentivized function review complete (gas-based rewards with graceful degradation implemented)
 - [ ] NatSpec documentation complete
 - [ ] Access control matrix documented
 - [ ] Upgrade procedures documented (for UUPS contracts)
 
 **Active Task Documents:**
-- `TASK_TEST_FIXES.md` - Fix 133 failing tests (2-3 days)
-- `TASK_M04_INCENTIVIZED_FUNCTIONS.md` - Review reward mechanisms (5-6 days)
+- `TASK_TEST_FIXES.md` - Fix 133 failing tests - **NEXT PRIORITY**
 
 ---
 

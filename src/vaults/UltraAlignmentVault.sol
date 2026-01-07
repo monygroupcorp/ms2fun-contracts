@@ -15,6 +15,7 @@ import {CurrencySettler} from "../libraries/v4/CurrencySettler.sol";
 import {LiquidityAmounts} from "../libraries/v4/LiquidityAmounts.sol";
 import {TickMath} from "v4-core/libraries/TickMath.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {IAlignmentVault} from "../interfaces/IAlignmentVault.sol";
 
 // ========== External Protocol Interfaces ==========
 
@@ -69,6 +70,11 @@ interface IUniswapV2Pair {
     function token1() external view returns (address);
 }
 
+/// @notice ERC20 interface with decimals
+interface IERC20Metadata {
+    function decimals() external view returns (uint8);
+}
+
 /// @notice Uniswap V3 Factory interface
 interface IUniswapV3Factory {
     function getPool(address tokenA, address tokenB, uint24 fee) external view returns (address pool);
@@ -97,8 +103,9 @@ interface IUniswapV3Pool {
  * @title UltraAlignmentVault
  * @notice Share-based vault for collecting and distributing fees from ms2fun ecosystem
  * @dev Clean implementation using share accounting to eliminate complexity
+ *      Implements IAlignmentVault interface for governance compliance
  */
-contract UltraAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback {
+contract UltraAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback, IAlignmentVault {
     using CurrencyLibrary for Currency;
     using BalanceDeltaLibrary for BalanceDelta;
     using CurrencySettler for Currency;
@@ -168,6 +175,7 @@ contract UltraAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback {
     address public immutable v2Factory;
     address public immutable v3Factory;
     address public alignmentToken;
+    uint8 public alignmentTokenDecimals; // Cached decimals for price normalization
     PoolKey public v4PoolKey;
 
     // Configuration
@@ -184,8 +192,8 @@ contract UltraAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback {
     int24 public lastTickUpper; // Last tick upper bound used for LP position
 
     // ========== Events ==========
+    // Note: ContributionReceived, FeesClaimed, FeesAccumulated inherited from IAlignmentVault
 
-    event ContributionReceived(address indexed benefactor, uint256 amount);
     event LiquidityAdded(
         uint256 ethSwapped,
         uint256 tokenReceived,
@@ -193,8 +201,6 @@ contract UltraAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback {
         uint256 sharesIssued,
         uint256 callerReward
     );
-    event FeesClaimed(address indexed benefactor, uint256 ethAmount);
-    event FeesAccumulated(uint256 amount);
     event DustDistributed(address indexed recipient, uint256 dustShares);
 
     // M-04 Security Fix: Reward events
@@ -229,6 +235,14 @@ contract UltraAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback {
         v2Factory = _v2Factory;
         v3Factory = _v3Factory;
         alignmentToken = _alignmentToken;
+
+        // Query and cache alignment token decimals for price calculations
+        // Default to 18 decimals (standard) if query fails
+        try IERC20Metadata(_alignmentToken).decimals() returns (uint8 decimals) {
+            alignmentTokenDecimals = decimals;
+        } catch {
+            alignmentTokenDecimals = 18; // Standard default
+        }
     }
 
     // ========== Fee Reception ==========
@@ -277,7 +291,7 @@ contract UltraAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback {
         Currency currency,
         uint256 amount,
         address benefactor
-    ) external payable nonReentrant {
+    ) external payable override nonReentrant {
         require(amount > 0, "Amount must be positive");
         require(benefactor != address(0), "Invalid benefactor");
         _trackBenefactorContribution(benefactor, amount);
@@ -683,7 +697,7 @@ contract UltraAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback {
      *      - Benefactor only receives new fees since last claim
      * @return ethClaimed Amount of ETH sent to benefactor
      */
-    function claimFees() external nonReentrant returns (uint256 ethClaimed) {
+    function claimFees() external override nonReentrant returns (uint256 ethClaimed) {
         // Check if we should collect vault fees (once per day or on first claim)
         if (block.timestamp >= lastVaultFeeCollectionTime + vaultFeeCollectionInterval ||
             lastVaultFeeCollectionTime == 0) {
@@ -1280,16 +1294,22 @@ contract UltraAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback {
         address token0 = IUniswapV2Pair(pair).token0();
         bool wethIsToken0 = (token0 == weth);
 
+        // Use cached alignment token decimals for price normalization
+        // WETH always has 18 decimals, but alignment token may differ (e.g., USDC has 6)
+        // Calculate decimal adjustment factor (10^decimals)
+        uint256 decimalAdjustment = 10 ** alignmentTokenDecimals;
+
         if (wethIsToken0) {
             reserveWETH = reserve0;
             reserveToken = reserve1;
-            // Price = WETH reserve / Token reserve
-            priceV2 = (uint256(reserve0) * 1e18) / uint256(reserve1);
+            // Price = (WETH reserve * 10^tokenDecimals) / Token reserve
+            // This normalizes both tokens to 18 decimals for accurate price
+            priceV2 = (uint256(reserve0) * decimalAdjustment) / uint256(reserve1);
         } else {
             reserveWETH = reserve1;
             reserveToken = reserve0;
-            // Price = WETH reserve / Token reserve
-            priceV2 = (uint256(reserve1) * 1e18) / uint256(reserve0);
+            // Price = (WETH reserve * 10^tokenDecimals) / Token reserve
+            priceV2 = (uint256(reserve1) * decimalAdjustment) / uint256(reserve0);
         }
 
         hasV2Pool = true;
@@ -1626,7 +1646,9 @@ contract UltraAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback {
 
                 // Calculate expected slippage
                 uint256 amountInWithFee = totalPendingETH * 997;
-                uint256 expectedOut = (amountInWithFee * reserveToken) / ((reserveWETH * 1000) + amountInWithFee);
+                uint256 denominator = (uint256(reserveWETH) * 1000) + amountInWithFee;
+                require(denominator > 0, "Invalid denominator in slippage calculation");
+                uint256 expectedOut = (amountInWithFee * uint256(reserveToken)) / denominator;
 
                 // Require output is reasonable (non-zero)
                 require(expectedOut > 0, "Insufficient purchase power");
@@ -1883,6 +1905,7 @@ contract UltraAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback {
     function getBenefactorContribution(address benefactor)
         external
         view
+        override
         returns (uint256)
     {
         return benefactorTotalETH[benefactor];
@@ -1894,6 +1917,7 @@ contract UltraAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback {
     function getBenefactorShares(address benefactor)
         external
         view
+        override
         returns (uint256)
     {
         return benefactorShares[benefactor];
@@ -1905,6 +1929,7 @@ contract UltraAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback {
     function calculateClaimableAmount(address benefactor)
         external
         view
+        override
         returns (uint256)
     {
         if (totalShares == 0 || accumulatedFees == 0) return 0;
@@ -1923,6 +1948,26 @@ contract UltraAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback {
         return currentShareValue > shareValueAtLastClaim[benefactor]
             ? currentShareValue - shareValueAtLastClaim[benefactor]
             : 0;
+    }
+
+    // ========== Vault Info (IAlignmentVault Interface) ==========
+
+    /**
+     * @notice Get vault implementation type identifier
+     * @dev Required by IAlignmentVault interface for governance classification
+     * @return Vault type identifier
+     */
+    function vaultType() external pure override returns (string memory) {
+        return "UniswapV4LP";
+    }
+
+    /**
+     * @notice Get vault description for frontend display
+     * @dev Human-readable description of vault strategy
+     * @return Vault description
+     */
+    function description() external pure override returns (string memory) {
+        return "Full-range liquidity provision on Uniswap V4 with automated fee compounding and benefactor share distribution";
     }
 
     // ========== Configuration ==========

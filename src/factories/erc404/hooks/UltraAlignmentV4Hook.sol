@@ -8,17 +8,18 @@ import {SafeCast} from "v4-core/libraries/SafeCast.sol";
 import {IHooks} from "v4-core/interfaces/IHooks.sol";
 import {IPoolManager} from "v4-core/interfaces/IPoolManager.sol";
 import {BalanceDelta} from "v4-core/types/BalanceDelta.sol";
+import {BeforeSwapDelta} from "v4-core/types/BeforeSwapDelta.sol";
 import {Currency, CurrencyLibrary} from "v4-core/types/Currency.sol";
 import {PoolKey} from "v4-core/types/PoolKey.sol";
-import {BaseTestHooks} from "v4-core/test/BaseTestHooks.sol";
 import {UltraAlignmentVault} from "../../../vaults/UltraAlignmentVault.sol";
 
 /**
  * @title UltraAlignmentV4Hook
  * @notice Uniswap v4 hook that taxes swaps and sends taxes to alignment vault
  * @dev Taxes are sent directly to vault with project instance tracking for contribution metrics
+ * @dev Implements IHooks directly - only afterSwap is active, all other hooks return appropriate selectors
  */
-contract UltraAlignmentV4Hook is BaseTestHooks, ReentrancyGuard, Ownable {
+contract UltraAlignmentV4Hook is IHooks, ReentrancyGuard, Ownable {
     using Hooks for IHooks;
     using SafeCast for uint256;
     using SafeCast for int128;
@@ -100,7 +101,7 @@ contract UltraAlignmentV4Hook is BaseTestHooks, ReentrancyGuard, Ownable {
         IPoolManager.SwapParams calldata params,
         BalanceDelta delta,
         bytes calldata hookData
-    ) external override onlyPoolManager returns (bytes4, int128) {
+    ) external onlyPoolManager returns (bytes4, int128) {
         // Calculate tax and send to vault
         int128 taxDelta = _processTax(sender, key, params, delta);
         return (IHooks.afterSwap.selector, taxDelta);
@@ -138,11 +139,13 @@ contract UltraAlignmentV4Hook is BaseTestHooks, ReentrancyGuard, Ownable {
         uint256 taxAmount = (uint128(swapAmount) * taxRateBips) / 10000;
 
         if (taxAmount > 0) {
-            // ENFORCE: Only accept ETH/WETH taxes (pools must be ETH/WETH paired)
+            // ENFORCE: Only accept native ETH taxes (pools must be native ETH paired)
+            /// @dev Only native ETH (address(0)) is supported. WETH is not supported because
+            /// the tax forwarding mechanism uses {value: taxAmount} which only works with native ETH.
             address token = Currency.unwrap(taxCurrency);
             require(
-                token == weth || token == address(0),
-                "Hook only accepts ETH/WETH taxes - pool must be ETH/WETH paired"
+                token == address(0),
+                "Hook only accepts native ETH taxes - pool must be native ETH paired"
             );
 
             // Take tokens from the pool manager
@@ -170,6 +173,89 @@ contract UltraAlignmentV4Hook is BaseTestHooks, ReentrancyGuard, Ownable {
         require(_rate <= 10000, "Rate too high");
         taxRateBips = _rate;
         emit TaxRateUpdated(_rate);
+    }
+
+    // ============================================
+    // Unused Hook Implementations (Stub Methods)
+    // ============================================
+    // These hooks are not enabled but must be implemented for IHooks interface compliance
+
+    function beforeInitialize(address, PoolKey calldata, uint160)
+        external
+        pure
+        returns (bytes4)
+    {
+        return IHooks.beforeInitialize.selector;
+    }
+
+    function afterInitialize(address, PoolKey calldata, uint160, int24)
+        external
+        pure
+        returns (bytes4)
+    {
+        return IHooks.afterInitialize.selector;
+    }
+
+    function beforeAddLiquidity(address, PoolKey calldata, IPoolManager.ModifyLiquidityParams calldata, bytes calldata)
+        external
+        pure
+        returns (bytes4)
+    {
+        return IHooks.beforeAddLiquidity.selector;
+    }
+
+    function afterAddLiquidity(
+        address,
+        PoolKey calldata,
+        IPoolManager.ModifyLiquidityParams calldata,
+        BalanceDelta,
+        BalanceDelta,
+        bytes calldata
+    ) external pure returns (bytes4, BalanceDelta) {
+        return (IHooks.afterAddLiquidity.selector, BalanceDelta.wrap(0));
+    }
+
+    function beforeRemoveLiquidity(address, PoolKey calldata, IPoolManager.ModifyLiquidityParams calldata, bytes calldata)
+        external
+        pure
+        returns (bytes4)
+    {
+        return IHooks.beforeRemoveLiquidity.selector;
+    }
+
+    function afterRemoveLiquidity(
+        address,
+        PoolKey calldata,
+        IPoolManager.ModifyLiquidityParams calldata,
+        BalanceDelta,
+        BalanceDelta,
+        bytes calldata
+    ) external pure returns (bytes4, BalanceDelta) {
+        return (IHooks.afterRemoveLiquidity.selector, BalanceDelta.wrap(0));
+    }
+
+    function beforeSwap(address, PoolKey calldata, IPoolManager.SwapParams calldata, bytes calldata)
+        external
+        pure
+        returns (bytes4, BeforeSwapDelta, uint24)
+    {
+        return (IHooks.beforeSwap.selector, BeforeSwapDelta.wrap(0), 0);
+    }
+
+    function beforeDonate(address, PoolKey calldata, uint256, uint256, bytes calldata)
+        external
+        pure
+        returns (bytes4)
+    {
+        return IHooks.beforeDonate.selector;
+    }
+
+    function afterDonate(address, PoolKey calldata, uint256, uint256, bytes calldata)
+        external
+        pure
+        returns (bytes4)
+    {
+        return IHooks.afterDonate.selector;
     }
 }
 

@@ -5,9 +5,11 @@ import {UUPSUpgradeable} from "solady/utils/UUPSUpgradeable.sol";
 import {Ownable} from "solady/auth/Ownable.sol";
 import {ReentrancyGuard} from "solady/utils/ReentrancyGuard.sol";
 import {IMasterRegistry} from "./interfaces/IMasterRegistry.sol";
+import {IAlignmentVault} from "../interfaces/IAlignmentVault.sol";
 import {MetadataUtils} from "../shared/libraries/MetadataUtils.sol";
 import {VaultRegistry} from "../registry/VaultRegistry.sol";
 import {FactoryApprovalGovernance} from "../governance/FactoryApprovalGovernance.sol";
+import {VaultApprovalGovernance} from "../governance/VaultApprovalGovernance.sol";
 import {GlobalMessageRegistry} from "../registry/GlobalMessageRegistry.sol";
 
 /**
@@ -49,7 +51,8 @@ contract MasterRegistryV1 is UUPSUpgradeable, Ownable, ReentrancyGuard, IMasterR
 
     // Phase 2 Registry Contracts
     address public vaultRegistry;
-    address public governanceModule;
+    address public governanceModule;        // Factory approval governance
+    address public vaultGovernanceModule;   // Vault approval governance
     address public execToken; // EXEC token for governance voting
     address public globalMessageRegistry; // Global message registry for protocol-wide activity tracking
 
@@ -58,6 +61,9 @@ contract MasterRegistryV1 is UUPSUpgradeable, Ownable, ReentrancyGuard, IMasterR
     mapping(address => bool) public registeredVaults;
     address[] public vaultList;
     uint256 public vaultRegistrationFee = 0.05 ether;
+
+    // Vault-to-Instance tracking (for queries and analytics)
+    mapping(address => address[]) public vaultInstances; // vault => instances using it
 
     // ============ Competitive Rental Queue System ============
     // Note: RentalSlot and PositionDemand structs defined in IMasterRegistry
@@ -94,6 +100,7 @@ contract MasterRegistryV1 is UUPSUpgradeable, Ownable, ReentrancyGuard, IMasterR
         address instance;
         address factory;
         address creator;
+        address vault;          // Vault used by this instance
         string name;
         string metadataURI;
         bytes32 nameHash;
@@ -103,6 +110,7 @@ contract MasterRegistryV1 is UUPSUpgradeable, Ownable, ReentrancyGuard, IMasterR
     // Events (FactoryRegistered and InstanceRegistered defined in IMasterRegistry)
     event CreatorInstanceAdded(address indexed creator, address indexed instance);
     event GovernanceModuleSet(address indexed newModule);
+    event VaultGovernanceModuleSet(address indexed newModule);
     event VaultRegistrySet(address indexed newRegistry);
 
     // M-04 Security Fix: Cleanup reward events
@@ -160,6 +168,14 @@ contract MasterRegistryV1 is UUPSUpgradeable, Ownable, ReentrancyGuard, IMasterR
             // Initialize governance module with EXEC token and this registry
             gov.initialize(_execToken, address(this), _owner);
             governanceModule = address(gov);
+        }
+
+        // Create vault governance module if EXEC token is provided and not already set
+        if (vaultGovernanceModule == address(0) && _execToken != address(0)) {
+            VaultApprovalGovernance vaultGov = new VaultApprovalGovernance();
+            // Initialize vault governance module with EXEC token and this registry
+            vaultGov.initialize(_execToken, address(this), _owner);
+            vaultGovernanceModule = address(vaultGov);
         }
 
         // Initialize competitive queue system
@@ -286,6 +302,7 @@ contract MasterRegistryV1 is UUPSUpgradeable, Ownable, ReentrancyGuard, IMasterR
             instance: instance,
             factory: factory,
             creator: creator,
+            vault: vault,
             name: name,
             metadataURI: metadataURI,
             nameHash: nameHash,
@@ -297,6 +314,12 @@ contract MasterRegistryV1 is UUPSUpgradeable, Ownable, ReentrancyGuard, IMasterR
         // Track instance in enumeration array
         instanceIndex[instance] = allInstances.length;
         allInstances.push(instance);
+
+        // Track vault usage if vault is provided and registered
+        if (vault != address(0) && registeredVaults[vault]) {
+            vaultInstances[vault].push(instance);
+            vaultInfo[vault].instanceCount++;
+        }
 
         // Authorize instance in global message registry (if set)
         if (globalMessageRegistry != address(0)) {
@@ -898,12 +921,18 @@ contract MasterRegistryV1 is UUPSUpgradeable, Ownable, ReentrancyGuard, IMasterR
         string memory name,
         string memory metadataURI
     ) external payable override {
+        // Allow owner for direct registration OR vault governance module after approval
+        require(msg.sender == owner() || msg.sender == vaultGovernanceModule, "Only owner or vault governance");
         require(vault != address(0), "Invalid vault address");
         require(bytes(name).length > 0 && bytes(name).length <= 256, "Invalid name");
-        require(msg.value >= vaultRegistrationFee, "Insufficient registration fee");
         require(!registeredVaults[vault], "Vault already registered");
         require(MetadataUtils.isValidURI(metadataURI), "Invalid metadata URI");
         require(vault.code.length > 0, "Vault must be a contract");
+
+        // Fee only required for direct registration (governance handles fees separately)
+        if (msg.sender != vaultGovernanceModule) {
+            require(msg.value >= vaultRegistrationFee, "Insufficient registration fee");
+        }
 
         registeredVaults[vault] = true;
         vaultList.push(vault);
@@ -918,8 +947,8 @@ contract MasterRegistryV1 is UUPSUpgradeable, Ownable, ReentrancyGuard, IMasterR
             instanceCount: 0
         });
 
-        // Refund excess
-        if (msg.value > vaultRegistrationFee) {
+        // Refund excess (only for direct registration)
+        if (msg.sender != vaultGovernanceModule && msg.value > vaultRegistrationFee) {
             (bool success, ) = payable(msg.sender).call{value: msg.value - vaultRegistrationFee}("");
             require(success, "Refund failed");
         }
@@ -944,6 +973,270 @@ contract MasterRegistryV1 is UUPSUpgradeable, Ownable, ReentrancyGuard, IMasterR
         require(registeredVaults[vault], "Vault not registered");
         vaultInfo[vault].active = false;
         emit VaultDeactivated(vault);
+    }
+
+    // ============ Vault Query Functions ============
+
+    /**
+     * @notice Get total number of registered vaults
+     * @return Total vault count
+     */
+    function getTotalVaults() external view returns (uint256) {
+        return vaultList.length;
+    }
+
+    /**
+     * @notice Get all instances using a specific vault
+     * @param vault Vault address to query
+     * @return Array of instance addresses using this vault
+     */
+    function getInstancesByVault(address vault) external view returns (address[] memory) {
+        require(registeredVaults[vault], "Vault not registered");
+        return vaultInstances[vault];
+    }
+
+    /**
+     * @notice Get paginated vault list with full info
+     * @param startIndex Starting index (0-based)
+     * @param endIndex Ending index (exclusive)
+     * @return vaults Array of vault addresses
+     * @return infos Array of vault info structs
+     * @return total Total number of vaults
+     */
+    function getVaults(
+        uint256 startIndex,
+        uint256 endIndex
+    ) external view returns (
+        address[] memory vaults,
+        VaultInfo[] memory infos,
+        uint256 total
+    ) {
+        require(endIndex > startIndex, "Invalid range");
+        require(endIndex <= vaultList.length, "End index out of bounds");
+
+        uint256 resultSize = endIndex - startIndex;
+        vaults = new address[](resultSize);
+        infos = new VaultInfo[](resultSize);
+
+        for (uint256 i = startIndex; i < endIndex; i++) {
+            address vault = vaultList[i];
+            vaults[i - startIndex] = vault;
+            infos[i - startIndex] = vaultInfo[vault];
+        }
+
+        return (vaults, infos, vaultList.length);
+    }
+
+    /**
+     * @notice Get vaults sorted by popularity (most instances)
+     * @param limit Maximum number of vaults to return
+     * @return vaults Array of vault addresses (sorted by popularity)
+     * @return instanceCounts Array of instance counts for each vault
+     * @return names Array of vault names
+     */
+    function getVaultsByPopularity(
+        uint256 limit
+    ) external view returns (
+        address[] memory vaults,
+        uint256[] memory instanceCounts,
+        string[] memory names
+    ) {
+        uint256 totalVaults = vaultList.length;
+        uint256 resultSize = limit > totalVaults ? totalVaults : limit;
+
+        // Create arrays to sort
+        address[] memory allVaults = new address[](totalVaults);
+        uint256[] memory allCounts = new uint256[](totalVaults);
+
+        // Populate arrays
+        for (uint256 i = 0; i < totalVaults; i++) {
+            address vault = vaultList[i];
+            allVaults[i] = vault;
+            allCounts[i] = vaultInfo[vault].instanceCount;
+        }
+
+        // Simple bubble sort (descending by instance count)
+        for (uint256 i = 0; i < totalVaults; i++) {
+            for (uint256 j = i + 1; j < totalVaults; j++) {
+                if (allCounts[j] > allCounts[i]) {
+                    // Swap counts
+                    uint256 tempCount = allCounts[i];
+                    allCounts[i] = allCounts[j];
+                    allCounts[j] = tempCount;
+
+                    // Swap addresses
+                    address tempAddr = allVaults[i];
+                    allVaults[i] = allVaults[j];
+                    allVaults[j] = tempAddr;
+                }
+            }
+        }
+
+        // Extract top N
+        vaults = new address[](resultSize);
+        instanceCounts = new uint256[](resultSize);
+        names = new string[](resultSize);
+
+        for (uint256 i = 0; i < resultSize; i++) {
+            vaults[i] = allVaults[i];
+            instanceCounts[i] = allCounts[i];
+            names[i] = vaultInfo[allVaults[i]].name;
+        }
+
+        return (vaults, instanceCounts, names);
+    }
+
+    /**
+     * @notice Get vaults sorted by Total Value Locked (TVL)
+     * @dev Queries IAlignmentVault.accumulatedFees() for each vault
+     * @param limit Maximum number of vaults to return
+     * @return vaults Array of vault addresses (sorted by TVL)
+     * @return tvls Array of TVL values for each vault
+     * @return names Array of vault names
+     */
+    function getVaultsByTVL(
+        uint256 limit
+    ) external view returns (
+        address[] memory vaults,
+        uint256[] memory tvls,
+        string[] memory names
+    ) {
+        uint256 totalVaults = vaultList.length;
+        uint256 resultSize = limit > totalVaults ? totalVaults : limit;
+
+        // Create arrays to sort
+        address[] memory allVaults = new address[](totalVaults);
+        uint256[] memory allTVLs = new uint256[](totalVaults);
+
+        // Populate arrays by querying each vault's accumulated fees
+        for (uint256 i = 0; i < totalVaults; i++) {
+            address vault = vaultList[i];
+            allVaults[i] = vault;
+
+            // Query vault's TVL (accumulatedFees)
+            try IAlignmentVault(payable(vault)).accumulatedFees() returns (uint256 fees) {
+                allTVLs[i] = fees;
+            } catch {
+                // If query fails, TVL is 0
+                allTVLs[i] = 0;
+            }
+        }
+
+        // Simple bubble sort (descending by TVL)
+        for (uint256 i = 0; i < totalVaults; i++) {
+            for (uint256 j = i + 1; j < totalVaults; j++) {
+                if (allTVLs[j] > allTVLs[i]) {
+                    // Swap TVLs
+                    uint256 tempTVL = allTVLs[i];
+                    allTVLs[i] = allTVLs[j];
+                    allTVLs[j] = tempTVL;
+
+                    // Swap addresses
+                    address tempAddr = allVaults[i];
+                    allVaults[i] = allVaults[j];
+                    allVaults[j] = tempAddr;
+                }
+            }
+        }
+
+        // Extract top N
+        vaults = new address[](resultSize);
+        tvls = new uint256[](resultSize);
+        names = new string[](resultSize);
+
+        for (uint256 i = 0; i < resultSize; i++) {
+            vaults[i] = allVaults[i];
+            tvls[i] = allTVLs[i];
+            names[i] = vaultInfo[allVaults[i]].name;
+        }
+
+        return (vaults, tvls, names);
+    }
+
+    // ============ Vault Governance ============
+
+    /**
+     * @notice Set vault governance module address
+     * @dev Only owner can set the vault governance module
+     * @param _vaultGovernanceModule Address of the VaultApprovalGovernance contract
+     */
+    function setVaultGovernanceModule(address _vaultGovernanceModule) external onlyOwner {
+        require(_vaultGovernanceModule != address(0), "Invalid governance module");
+        vaultGovernanceModule = _vaultGovernanceModule;
+        emit VaultGovernanceModuleSet(_vaultGovernanceModule);
+    }
+
+    /**
+     * @notice Apply for vault approval via governance
+     * @dev Forwards application to VaultApprovalGovernance module
+     * @param vaultAddress Address of the vault contract
+     * @param vaultType Type of vault (e.g., "UniswapV4LP", "AaveYield")
+     * @param title Human-readable title
+     * @param displayTitle Display title for UI
+     * @param metadataURI URI for metadata
+     * @param features Array of feature identifiers
+     */
+    function applyForVault(
+        address vaultAddress,
+        string memory vaultType,
+        string memory title,
+        string memory displayTitle,
+        string memory metadataURI,
+        bytes32[] memory features
+    ) external payable {
+        require(vaultGovernanceModule != address(0), "Vault governance module not set");
+        IVaultApprovalGovernance(vaultGovernanceModule).submitApplicationWithApplicant{value: msg.value}(
+            vaultAddress,
+            vaultType,
+            title,
+            displayTitle,
+            metadataURI,
+            features,
+            msg.sender
+        );
+    }
+
+    /**
+     * @notice Register an approved vault (called by VaultApprovalGovernance after approval)
+     * @dev Only callable by vault governance module
+     * @param vaultAddress Address of the approved vault
+     * @param vaultType Type of vault
+     * @param title Vault title
+     * @param displayTitle Display title
+     * @param metadataURI Metadata URI
+     * @param features Feature identifiers
+     * @param creator Original applicant address
+     */
+    function registerApprovedVault(
+        address vaultAddress,
+        string memory vaultType,
+        string memory title,
+        string memory displayTitle,
+        string memory metadataURI,
+        bytes32[] memory features,
+        address creator
+    ) external {
+        require(msg.sender == vaultGovernanceModule, "Only vault governance module");
+        require(vaultAddress != address(0), "Invalid vault address");
+        require(!registeredVaults[vaultAddress], "Vault already registered");
+        require(MetadataUtils.isValidURI(metadataURI), "Invalid metadata URI");
+        require(vaultAddress.code.length > 0, "Vault must be a contract");
+
+        // Register the vault
+        registeredVaults[vaultAddress] = true;
+        vaultList.push(vaultAddress);
+
+        vaultInfo[vaultAddress] = IMasterRegistry.VaultInfo({
+            vault: vaultAddress,
+            creator: creator,
+            name: title,
+            metadataURI: metadataURI,
+            active: true,
+            registeredAt: block.timestamp,
+            instanceCount: 0
+        });
+
+        emit VaultRegistered(vaultAddress, creator, title, 0);
     }
 
     // ============ Global Message Registry ============
@@ -1067,6 +1360,28 @@ interface IFactoryApprovalGovernance {
     function getApplication(address factoryAddress) external view returns (
         address applicant,
         string memory contractType,
+        string memory title,
+        uint8 phase,
+        uint256 phaseDeadline,
+        uint256 cumulativeYayRequired,
+        uint256 roundCount
+    );
+}
+
+interface IVaultApprovalGovernance {
+    function submitApplicationWithApplicant(
+        address vaultAddress,
+        string memory vaultType,
+        string memory title,
+        string memory displayTitle,
+        string memory metadataURI,
+        bytes32[] memory features,
+        address applicant
+    ) external payable;
+
+    function getApplication(address vaultAddress) external view returns (
+        address applicant,
+        string memory vaultType,
         string memory title,
         uint8 phase,
         uint256 phaseDeadline,

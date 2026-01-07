@@ -463,6 +463,10 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IUnlockCallba
         require(address(v4Hook) != address(0), "Hook not configured");
 
         // Lock sells when bonding curve is full to preserve best case scenario for liquidity deployment
+        /// @dev Sells are intentionally blocked when bonding curve is full. This ensures
+        /// users hold their positions until liquidity deployment occurs. The lock prevents
+        /// supply from decreasing after curve completion, maintaining the bonding curve's
+        /// terminal state until migration to Uniswap V4 liquidity.
         uint256 maxBondingSupply = MAX_SUPPLY - LIQUIDITY_RESERVE;
         require(totalBondingSupply < maxBondingSupply, "Bonding curve full - sells locked");
 
@@ -1032,30 +1036,30 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IUnlockCallba
         require(stakedBalance[msg.sender] > 0, "No staked balance");
         require(totalStaked > 0, "No stakers");
 
-        // Step 1: Query vault for TOTAL cumulative fees (not delta)
-        uint256 vaultTotalFees = vault.calculateClaimableAmount(address(this));
-
-        // Step 2: Claim the delta from vault (transfers ETH to this contract)
+        // Step 1: Claim fees from vault (transfers ETH to this contract)
         uint256 deltaReceived = vault.claimFees();
 
-        // Step 3: Update our cumulative total with the vault's authoritative total
-        totalFeesAccumulatedFromVault = vaultTotalFees;
+        // Step 2: Update our cumulative total by adding the delta received
+        /// @dev Fixed: Changed from `= vaultTotalFees` to `+= deltaReceived` to properly
+        /// accumulate fees across multiple claims. Previously used calculateClaimableAmount()
+        /// which returns current claimable (goes to 0 after claim), not cumulative total.
+        totalFeesAccumulatedFromVault += deltaReceived;
 
-        // Step 4: Calculate this staker's total entitlement (cumulative, not delta)
+        // Step 3: Calculate this staker's total entitlement (cumulative, not delta)
         // Formula: (total accumulated fees × this staker's balance) / all staked tokens
         uint256 userTotalEntitlement = (totalFeesAccumulatedFromVault * stakedBalance[msg.sender]) / totalStaked;
 
-        // Step 5: Calculate pending reward (delta between total entitlement and what they've already claimed)
+        // Step 4: Calculate pending reward (delta between total entitlement and what they've already claimed)
         uint256 userAlreadyClaimed = stakerFeesAlreadyClaimed[msg.sender];
 
         require(userTotalEntitlement > userAlreadyClaimed, "No pending rewards");
 
         rewardAmount = userTotalEntitlement - userAlreadyClaimed;
 
-        // Step 6: Update staker's watermark to their new cumulative entitlement
+        // Step 5: Update staker's watermark to their new cumulative entitlement
         stakerFeesAlreadyClaimed[msg.sender] = userTotalEntitlement;
 
-        // Step 7: Transfer pending reward to staker
+        // Step 6: Transfer pending reward to staker
         SafeTransferLib.safeTransferETH(msg.sender, rewardAmount);
 
         emit StakerRewardsClaimed(msg.sender, rewardAmount, userTotalEntitlement);

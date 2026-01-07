@@ -99,10 +99,11 @@ library PricingMath {
             : 0;
 
         uint256 decayAmount = (currentPrice * PRICE_DECAY_RATE * timeElapsed) / 1e18;
-        
+
         // Don't decay below base price
         uint256 basePrice = BASE_PRICE;
-        if (currentPrice - decayAmount < basePrice) {
+        // Check if decay would go below base price (avoiding underflow)
+        if (decayAmount >= currentPrice || currentPrice - decayAmount < basePrice) {
             return basePrice;
         }
 

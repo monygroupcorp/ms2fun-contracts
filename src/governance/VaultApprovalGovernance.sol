@@ -6,9 +6,9 @@ import {Ownable} from "solady/auth/Ownable.sol";
 import {ReentrancyGuard} from "solady/utils/ReentrancyGuard.sol";
 
 /**
- * @title FactoryApprovalGovernance
- * @notice Deposit-based voting system with sequential challenge rounds for factory approvals
- * @dev High-volume governance system with:
+ * @title VaultApprovalGovernance
+ * @notice Deposit-based voting system with sequential challenge rounds for vault approvals
+ * @dev High-volume governance system mirroring FactoryApprovalGovernance mechanics:
  *      - Deposit-based voting (no balanceOf exploitation)
  *      - Sequential challenge rounds (unlimited)
  *      - Cumulative challenge deposits (escalating capital requirements)
@@ -22,8 +22,14 @@ import {ReentrancyGuard} from "solady/utils/ReentrancyGuard.sol";
  * 4. Repeat challenges sequentially until:
  *    - Nay wins → Rejected
  *    - Yay wins → 3-day lame duck → Registration
+ *
+ * Vault-Specific Considerations:
+ * - vaultType field for classification (e.g., "UniswapV4LP", "AaveYield")
+ * - Must implement IAlignmentVault interface
+ * - Risk profile assessment via governance
+ * - Audit requirements for production vaults
  */
-contract FactoryApprovalGovernance is UUPSUpgradeable, Ownable, ReentrancyGuard {
+contract VaultApprovalGovernance is UUPSUpgradeable, Ownable, ReentrancyGuard {
     // ============ Constants ============
 
     uint256 public constant APPLICATION_FEE = 0.1 ether;
@@ -78,14 +84,14 @@ contract FactoryApprovalGovernance is UUPSUpgradeable, Ownable, ReentrancyGuard 
         Challenge      // Challenge initiation
     }
 
-    struct FactoryApplication {
-        address factoryAddress;
+    struct VaultApplication {
+        address vaultAddress;
         address applicant;
-        string contractType;
+        string vaultType;        // Vault implementation type (e.g., "UniswapV4LP", "AaveYield")
         string title;
         string displayTitle;
         string metadataURI;
-        bytes32[] features;
+        bytes32[] features;      // Features (e.g., ["full-range-lp", "auto-compound"])
         ApplicationPhase phase;
         uint256 phaseDeadline;
         uint256 applicationFee;
@@ -102,9 +108,9 @@ contract FactoryApprovalGovernance is UUPSUpgradeable, Ownable, ReentrancyGuard 
     bool private _initialized;
 
     // Mappings
-    mapping(address => FactoryApplication) public applications;
+    mapping(address => VaultApplication) public applications;
 
-    // factory => voter => roundIndex => deposit
+    // vault => voter => roundIndex => deposit
     mapping(address => mapping(address => mapping(uint256 => VoteDeposit))) public deposits;
 
     // Message system
@@ -114,15 +120,15 @@ contract FactoryApprovalGovernance is UUPSUpgradeable, Ownable, ReentrancyGuard 
     // ============ Events ============
 
     event ApplicationSubmitted(
-        address indexed factory,
+        address indexed vault,
         address indexed applicant,
-        string contractType,
+        string vaultType,
         uint256 fee,
         uint256 votingDeadline
     );
 
     event VoteDeposited(
-        address indexed factory,
+        address indexed vault,
         uint256 indexed roundIndex,
         address indexed voter,
         bool approve,
@@ -130,7 +136,7 @@ contract FactoryApprovalGovernance is UUPSUpgradeable, Ownable, ReentrancyGuard 
     );
 
     event VoteDepositAdded(
-        address indexed factory,
+        address indexed vault,
         uint256 indexed roundIndex,
         address indexed voter,
         uint256 additionalAmount,
@@ -138,7 +144,7 @@ contract FactoryApprovalGovernance is UUPSUpgradeable, Ownable, ReentrancyGuard 
     );
 
     event ChallengeInitiated(
-        address indexed factory,
+        address indexed vault,
         uint256 indexed roundIndex,
         address indexed challenger,
         uint256 challengeDeposit,
@@ -147,7 +153,7 @@ contract FactoryApprovalGovernance is UUPSUpgradeable, Ownable, ReentrancyGuard 
     );
 
     event RoundFinalized(
-        address indexed factory,
+        address indexed vault,
         uint256 indexed roundIndex,
         bool yayWon,
         uint256 yayVotes,
@@ -155,24 +161,24 @@ contract FactoryApprovalGovernance is UUPSUpgradeable, Ownable, ReentrancyGuard 
     );
 
     event ApplicationApproved(
-        address indexed factory,
+        address indexed vault,
         uint256 totalRounds,
         uint256 lameDuckDeadline
     );
 
     event ApplicationRejected(
-        address indexed factory,
+        address indexed vault,
         uint256 indexed roundIndex,
         string reason
     );
 
     event ApplicationRegistered(
-        address indexed factory,
+        address indexed vault,
         address indexed registrant
     );
 
     event DepositWithdrawn(
-        address indexed factory,
+        address indexed vault,
         address indexed voter,
         uint256 totalAmount
     );
@@ -182,7 +188,7 @@ contract FactoryApprovalGovernance is UUPSUpgradeable, Ownable, ReentrancyGuard 
 
     event MessagePosted(
         uint256 indexed messageId,
-        address indexed factory,
+        address indexed vault,
         address indexed sender,
         MessageActionType actionType,
         uint256 roundIndex
@@ -214,8 +220,8 @@ contract FactoryApprovalGovernance is UUPSUpgradeable, Ownable, ReentrancyGuard 
     // ============ Application Submission ============
 
     function submitApplication(
-        address factoryAddress,
-        string memory contractType,
+        address vaultAddress,
+        string memory vaultType,
         string memory title,
         string memory displayTitle,
         string memory metadataURI,
@@ -223,8 +229,8 @@ contract FactoryApprovalGovernance is UUPSUpgradeable, Ownable, ReentrancyGuard 
         string calldata message
     ) external payable nonReentrant {
         _submitApplicationInternal(
-            factoryAddress,
-            contractType,
+            vaultAddress,
+            vaultType,
             title,
             displayTitle,
             metadataURI,
@@ -235,8 +241,8 @@ contract FactoryApprovalGovernance is UUPSUpgradeable, Ownable, ReentrancyGuard 
     }
 
     function submitApplicationWithApplicant(
-        address factoryAddress,
-        string memory contractType,
+        address vaultAddress,
+        string memory vaultType,
         string memory title,
         string memory displayTitle,
         string memory metadataURI,
@@ -245,8 +251,8 @@ contract FactoryApprovalGovernance is UUPSUpgradeable, Ownable, ReentrancyGuard 
     ) external payable nonReentrant {
         require(msg.sender == masterRegistry, "Only MasterRegistry");
         _submitApplicationInternal(
-            factoryAddress,
-            contractType,
+            vaultAddress,
+            vaultType,
             title,
             displayTitle,
             metadataURI,
@@ -257,8 +263,8 @@ contract FactoryApprovalGovernance is UUPSUpgradeable, Ownable, ReentrancyGuard 
     }
 
     function _submitApplicationInternal(
-        address factoryAddress,
-        string memory contractType,
+        address vaultAddress,
+        string memory vaultType,
         string memory title,
         string memory displayTitle,
         string memory metadataURI,
@@ -266,11 +272,11 @@ contract FactoryApprovalGovernance is UUPSUpgradeable, Ownable, ReentrancyGuard 
         address applicant,
         string memory message
     ) internal {
-        require(factoryAddress != address(0), "Invalid factory address");
-        require(bytes(contractType).length > 0, "Invalid contract type");
+        require(vaultAddress != address(0), "Invalid vault address");
+        require(bytes(vaultType).length > 0, "Invalid vault type");
         require(msg.value >= applicationFee, "Insufficient application fee");
 
-        FactoryApplication storage app = applications[factoryAddress];
+        VaultApplication storage app = applications[vaultAddress];
         require(
             app.applicant == address(0) ||
             app.phase == ApplicationPhase.Approved ||
@@ -280,13 +286,13 @@ contract FactoryApprovalGovernance is UUPSUpgradeable, Ownable, ReentrancyGuard 
 
         // Clear old application data if resubmitting
         if (app.applicant != address(0)) {
-            delete applications[factoryAddress];
+            delete applications[vaultAddress];
         }
 
         // Create new application
-        app.factoryAddress = factoryAddress;
+        app.vaultAddress = vaultAddress;
         app.applicant = applicant;
-        app.contractType = contractType;
+        app.vaultType = vaultType;
         app.title = title;
         app.displayTitle = displayTitle;
         app.metadataURI = metadataURI;
@@ -320,7 +326,7 @@ contract FactoryApprovalGovernance is UUPSUpgradeable, Ownable, ReentrancyGuard 
 
             emit MessagePosted(
                 totalMessages,
-                factoryAddress,
+                vaultAddress,
                 applicant,
                 MessageActionType.Application,
                 0
@@ -339,9 +345,9 @@ contract FactoryApprovalGovernance is UUPSUpgradeable, Ownable, ReentrancyGuard 
         }
 
         emit ApplicationSubmitted(
-            factoryAddress,
+            vaultAddress,
             applicant,
-            contractType,
+            vaultType,
             msg.value,
             app.phaseDeadline
         );
@@ -351,18 +357,18 @@ contract FactoryApprovalGovernance is UUPSUpgradeable, Ownable, ReentrancyGuard 
 
     /**
      * @notice Deposit EXEC tokens to vote on application
-     * @param factoryAddress Factory being voted on
+     * @param vaultAddress Vault being voted on
      * @param approve true = yay, false = nay
      * @param amount Amount of EXEC to deposit (must be >= MIN_DEPOSIT)
      * @param message Optional message (empty string for no message)
      */
     function voteWithDeposit(
-        address factoryAddress,
+        address vaultAddress,
         bool approve,
         uint256 amount,
         string calldata message
     ) external nonReentrant {
-        FactoryApplication storage app = applications[factoryAddress];
+        VaultApplication storage app = applications[vaultAddress];
         require(app.applicant != address(0), "Application not found");
         require(
             app.phase == ApplicationPhase.InitialVoting ||
@@ -373,7 +379,7 @@ contract FactoryApprovalGovernance is UUPSUpgradeable, Ownable, ReentrancyGuard 
         require(amount >= MIN_DEPOSIT, "Below minimum deposit");
 
         uint256 currentRound = app.rounds.length - 1;
-        VoteDeposit storage existingDeposit = deposits[factoryAddress][msg.sender][currentRound];
+        VoteDeposit storage existingDeposit = deposits[vaultAddress][msg.sender][currentRound];
 
         // If voter already has a deposit in this round, they can only add to same side
         if (existingDeposit.amount > 0) {
@@ -398,7 +404,7 @@ contract FactoryApprovalGovernance is UUPSUpgradeable, Ownable, ReentrancyGuard 
             }
 
             emit VoteDepositAdded(
-                factoryAddress,
+                vaultAddress,
                 currentRound,
                 msg.sender,
                 amount,
@@ -411,7 +417,7 @@ contract FactoryApprovalGovernance is UUPSUpgradeable, Ownable, ReentrancyGuard 
                 "Transfer failed"
             );
 
-            deposits[factoryAddress][msg.sender][currentRound] = VoteDeposit({
+            deposits[vaultAddress][msg.sender][currentRound] = VoteDeposit({
                 amount: amount,
                 supportsApproval: approve,
                 withdrawn: false
@@ -424,7 +430,7 @@ contract FactoryApprovalGovernance is UUPSUpgradeable, Ownable, ReentrancyGuard 
                 app.rounds[currentRound].nayDeposits += amount;
             }
 
-            emit VoteDeposited(factoryAddress, currentRound, msg.sender, approve, amount);
+            emit VoteDeposited(vaultAddress, currentRound, msg.sender, approve, amount);
         }
 
         // Store message if provided (only on new deposits or additions)
@@ -437,7 +443,7 @@ contract FactoryApprovalGovernance is UUPSUpgradeable, Ownable, ReentrancyGuard 
 
             emit MessagePosted(
                 totalMessages,
-                factoryAddress,
+                vaultAddress,
                 msg.sender,
                 MessageActionType.Vote,
                 currentRound
@@ -451,10 +457,10 @@ contract FactoryApprovalGovernance is UUPSUpgradeable, Ownable, ReentrancyGuard 
 
     /**
      * @notice Finalize a completed voting round
-     * @param factoryAddress Factory to finalize
+     * @param vaultAddress Vault to finalize
      */
-    function finalizeRound(address factoryAddress) external nonReentrant {
-        FactoryApplication storage app = applications[factoryAddress];
+    function finalizeRound(address vaultAddress) external nonReentrant {
+        VaultApplication storage app = applications[vaultAddress];
         require(app.applicant != address(0), "Application not found");
         require(
             app.phase == ApplicationPhase.InitialVoting ||
@@ -474,7 +480,7 @@ contract FactoryApprovalGovernance is UUPSUpgradeable, Ownable, ReentrancyGuard 
         round.resolved = true;
         round.yayWon = yayWon;
 
-        emit RoundFinalized(factoryAddress, currentRound, yayWon, round.yayDeposits, round.nayDeposits);
+        emit RoundFinalized(vaultAddress, currentRound, yayWon, round.yayDeposits, round.nayDeposits);
 
         if (yayWon) {
             // Yay won - add to cumulative requirement and enter challenge window
@@ -487,7 +493,7 @@ contract FactoryApprovalGovernance is UUPSUpgradeable, Ownable, ReentrancyGuard 
             app.phaseDeadline = 0;
 
             emit ApplicationRejected(
-                factoryAddress,
+                vaultAddress,
                 currentRound,
                 "Majority voted against approval"
             );
@@ -498,16 +504,16 @@ contract FactoryApprovalGovernance is UUPSUpgradeable, Ownable, ReentrancyGuard 
 
     /**
      * @notice Initiate a challenge against an approved vote
-     * @param factoryAddress Factory to challenge
+     * @param vaultAddress Vault to challenge
      * @param challengeDeposit EXEC tokens to deposit (must be >= cumulativeYayRequired)
      * @param message Optional message explaining the challenge (empty string for no message)
      */
     function initiateChallenge(
-        address factoryAddress,
+        address vaultAddress,
         uint256 challengeDeposit,
         string calldata message
     ) external nonReentrant {
-        FactoryApplication storage app = applications[factoryAddress];
+        VaultApplication storage app = applications[vaultAddress];
         require(app.applicant != address(0), "Application not found");
         require(
             app.phase == ApplicationPhase.ChallengeWindow ||
@@ -541,7 +547,7 @@ contract FactoryApprovalGovernance is UUPSUpgradeable, Ownable, ReentrancyGuard 
         }));
 
         // Challenger's deposit is stored separately so they can withdraw it
-        deposits[factoryAddress][msg.sender][newRoundIndex] = VoteDeposit({
+        deposits[vaultAddress][msg.sender][newRoundIndex] = VoteDeposit({
             amount: challengeDeposit,
             supportsApproval: false, // Challenger is betting on nay
             withdrawn: false
@@ -561,7 +567,7 @@ contract FactoryApprovalGovernance is UUPSUpgradeable, Ownable, ReentrancyGuard 
 
             emit MessagePosted(
                 totalMessages,
-                factoryAddress,
+                vaultAddress,
                 msg.sender,
                 MessageActionType.Challenge,
                 newRoundIndex
@@ -571,7 +577,7 @@ contract FactoryApprovalGovernance is UUPSUpgradeable, Ownable, ReentrancyGuard 
         }
 
         emit ChallengeInitiated(
-            factoryAddress,
+            vaultAddress,
             newRoundIndex,
             msg.sender,
             challengeDeposit,
@@ -583,11 +589,11 @@ contract FactoryApprovalGovernance is UUPSUpgradeable, Ownable, ReentrancyGuard 
     // ============ Registration ============
 
     /**
-     * @notice Complete lame duck period and register factory (permissionless)
-     * @param factoryAddress Factory to register
+     * @notice Complete lame duck period and register vault (permissionless)
+     * @param vaultAddress Vault to register
      */
-    function registerFactory(address factoryAddress) external nonReentrant {
-        FactoryApplication storage app = applications[factoryAddress];
+    function registerVault(address vaultAddress) external nonReentrant {
+        VaultApplication storage app = applications[vaultAddress];
         require(app.applicant != address(0), "Application not found");
         require(app.phase == ApplicationPhase.LameDuck, "Not in lame duck period");
         require(block.timestamp > app.phaseDeadline, "Lame duck period not ended");
@@ -597,25 +603,25 @@ contract FactoryApprovalGovernance is UUPSUpgradeable, Ownable, ReentrancyGuard 
         app.phaseDeadline = 0;
 
         // Register in MasterRegistry
-        IMasterRegistry(masterRegistry).registerFactoryWithFeaturesAndCreator(
-            app.factoryAddress,
-            app.contractType,
+        IMasterRegistry(masterRegistry).registerApprovedVault(
+            app.vaultAddress,
+            app.vaultType,
             app.title,
             app.displayTitle,
             app.metadataURI,
             app.features,
-            app.applicant
+            app.applicant  // Pass original applicant as creator
         );
 
-        emit ApplicationRegistered(factoryAddress, msg.sender);
+        emit ApplicationRegistered(vaultAddress, msg.sender);
     }
 
     /**
      * @notice Move from challenge window to lame duck if no challenges
-     * @param factoryAddress Factory to transition
+     * @param vaultAddress Vault to transition
      */
-    function enterLameDuck(address factoryAddress) external nonReentrant {
-        FactoryApplication storage app = applications[factoryAddress];
+    function enterLameDuck(address vaultAddress) external nonReentrant {
+        VaultApplication storage app = applications[vaultAddress];
         require(app.applicant != address(0), "Application not found");
         require(app.phase == ApplicationPhase.ChallengeWindow, "Not in challenge window");
         require(block.timestamp > app.phaseDeadline, "Challenge window not ended");
@@ -623,17 +629,17 @@ contract FactoryApprovalGovernance is UUPSUpgradeable, Ownable, ReentrancyGuard 
         app.phase = ApplicationPhase.LameDuck;
         app.phaseDeadline = block.timestamp + LAME_DUCK_PERIOD;
 
-        emit ApplicationApproved(factoryAddress, app.rounds.length, app.phaseDeadline);
+        emit ApplicationApproved(vaultAddress, app.rounds.length, app.phaseDeadline);
     }
 
     // ============ Withdrawal ============
 
     /**
      * @notice Withdraw all deposited EXEC tokens after application is resolved
-     * @param factoryAddress Factory to withdraw from
+     * @param vaultAddress Vault to withdraw from
      */
-    function withdrawDeposits(address factoryAddress) external nonReentrant {
-        FactoryApplication storage app = applications[factoryAddress];
+    function withdrawDeposits(address vaultAddress) external nonReentrant {
+        VaultApplication storage app = applications[vaultAddress];
         require(app.applicant != address(0), "Application not found");
         require(
             app.phase == ApplicationPhase.Approved ||
@@ -645,7 +651,7 @@ contract FactoryApprovalGovernance is UUPSUpgradeable, Ownable, ReentrancyGuard 
 
         // Iterate through all rounds and collect deposits
         for (uint256 i = 0; i < app.rounds.length; i++) {
-            VoteDeposit storage deposit = deposits[factoryAddress][msg.sender][i];
+            VoteDeposit storage deposit = deposits[vaultAddress][msg.sender][i];
 
             if (deposit.amount > 0 && !deposit.withdrawn) {
                 totalWithdrawal += deposit.amount;
@@ -661,17 +667,17 @@ contract FactoryApprovalGovernance is UUPSUpgradeable, Ownable, ReentrancyGuard 
             "Transfer failed"
         );
 
-        emit DepositWithdrawn(factoryAddress, msg.sender, totalWithdrawal);
+        emit DepositWithdrawn(vaultAddress, msg.sender, totalWithdrawal);
     }
 
     // ============ View Functions ============
 
-    function getApplication(address factoryAddress)
+    function getApplication(address vaultAddress)
         external
         view
         returns (
             address applicant,
-            string memory contractType,
+            string memory vaultType,
             string memory title,
             ApplicationPhase phase,
             uint256 phaseDeadline,
@@ -679,10 +685,10 @@ contract FactoryApprovalGovernance is UUPSUpgradeable, Ownable, ReentrancyGuard 
             uint256 roundCount
         )
     {
-        FactoryApplication storage app = applications[factoryAddress];
+        VaultApplication storage app = applications[vaultAddress];
         return (
             app.applicant,
-            app.contractType,
+            app.vaultType,
             app.title,
             app.phase,
             app.phaseDeadline,
@@ -691,24 +697,24 @@ contract FactoryApprovalGovernance is UUPSUpgradeable, Ownable, ReentrancyGuard 
         );
     }
 
-    function getRound(address factoryAddress, uint256 roundIndex)
+    function getRound(address vaultAddress, uint256 roundIndex)
         external
         view
         returns (VoteRound memory)
     {
-        return applications[factoryAddress].rounds[roundIndex];
+        return applications[vaultAddress].rounds[roundIndex];
     }
 
     function getVoterDeposit(
-        address factoryAddress,
+        address vaultAddress,
         address voter,
         uint256 roundIndex
     ) external view returns (VoteDeposit memory) {
-        return deposits[factoryAddress][voter][roundIndex];
+        return deposits[vaultAddress][voter][roundIndex];
     }
 
-    function getCurrentRound(address factoryAddress) external view returns (uint256) {
-        FactoryApplication storage app = applications[factoryAddress];
+    function getCurrentRound(address vaultAddress) external view returns (uint256) {
+        VaultApplication storage app = applications[vaultAddress];
         require(app.rounds.length > 0, "No rounds");
         return app.rounds.length - 1;
     }
@@ -819,9 +825,9 @@ interface IERC20 {
 }
 
 interface IMasterRegistry {
-    function registerFactoryWithFeaturesAndCreator(
-        address factoryAddress,
-        string memory contractType,
+    function registerApprovedVault(
+        address vaultAddress,
+        string memory vaultType,
         string memory title,
         string memory displayTitle,
         string memory metadataURI,
