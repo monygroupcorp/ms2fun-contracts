@@ -82,16 +82,27 @@ forge test
 ### Deploy
 
 ```bash
+# IMPORTANT: Store your private key securely using Forge's keystore
+# Create a keystore account (you'll be prompted for a password):
+cast wallet import deployer --interactive
+
 # Set environment variables
-export PRIVATE_KEY=your_private_key
 export EXEC_TOKEN=0x...
 
-# Deploy master registry
-forge script script/DeployMaster.s.sol:DeployMaster --rpc-url <rpc_url> --broadcast
+# Deploy master registry (using your keystore account)
+forge script script/DeployMaster.s.sol:DeployMaster \
+  --rpc-url <rpc_url> \
+  --account deployer \
+  --broadcast
 
-# Deploy factories
-forge script script/DeployERC404Factory.s.sol:DeployERC404Factory --rpc-url <rpc_url> --broadcast
+# Deploy factories (using your keystore account)
+forge script script/DeployERC404Factory.s.sol:DeployERC404Factory \
+  --rpc-url <rpc_url> \
+  --account deployer \
+  --broadcast
 ```
+
+**Security Note**: Never store private keys in environment variables or `.env` files. Always use Forge's encrypted keystore via `cast wallet import` and the `--account` flag.
 
 ## Core Contracts
 
