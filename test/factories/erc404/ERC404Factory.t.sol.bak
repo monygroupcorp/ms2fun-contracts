@@ -107,8 +107,7 @@ contract ERC404FactoryTest is Test {
             defaultCurveParams,
             defaultTierConfig,
             creator1,
-            address(0), // No vault for this test
-            "" // styleUri
+            address(0) // No vault for this test
         );
 
         assertTrue(instance != address(0), "Instance should be created");
@@ -133,8 +132,7 @@ contract ERC404FactoryTest is Test {
             defaultCurveParams,
             defaultTierConfig,
             creator1,
-            address(0),
-            "" // styleUri
+            address(0)
         );
 
         assertEq(hook, address(0), "Hook should be address(0) when vault is address(0)");
@@ -156,8 +154,7 @@ contract ERC404FactoryTest is Test {
             defaultCurveParams,
             defaultTierConfig,
             creator1,
-            address(0),
-            "" // styleUri
+            address(0)
         );
 
         vm.stopPrank();
@@ -177,8 +174,7 @@ contract ERC404FactoryTest is Test {
             defaultCurveParams,
             defaultTierConfig,
             creator1,
-            address(0),
-            "" // styleUri
+            address(0)
         );
 
         vm.stopPrank();
@@ -198,8 +194,7 @@ contract ERC404FactoryTest is Test {
             defaultCurveParams,
             defaultTierConfig,
             creator1,
-            address(0),
-            "" // styleUri
+            address(0)
         );
 
         vm.stopPrank();
@@ -219,8 +214,7 @@ contract ERC404FactoryTest is Test {
             defaultCurveParams,
             defaultTierConfig,
             creator1,
-            address(0),
-            "" // styleUri
+            address(0)
         );
 
         vm.stopPrank();
@@ -240,8 +234,7 @@ contract ERC404FactoryTest is Test {
             defaultCurveParams,
             defaultTierConfig,
             address(0),  // Invalid creator
-            address(0),
-            "" // styleUri
+            address(0)
         );
 
         vm.stopPrank();
@@ -274,8 +267,7 @@ contract ERC404FactoryTest is Test {
             defaultCurveParams,
             defaultTierConfig,
             creator1,
-            address(0),
-            "" // styleUri
+            address(0)
         );
 
         vm.stopPrank();
@@ -308,8 +300,7 @@ contract ERC404FactoryTest is Test {
             defaultCurveParams,
             defaultTierConfig,
             creator1,
-            address(0),
-            "" // styleUri
+            address(0)
         );
 
         vm.stopPrank();
@@ -429,8 +420,7 @@ contract ERC404FactoryTest is Test {
             customCurveParams,
             defaultTierConfig,
             creator1,
-            address(0),
-            "" // styleUri
+            address(0)
         );
 
         assertTrue(instance != address(0), "Instance with custom params should be created");
@@ -451,8 +441,7 @@ contract ERC404FactoryTest is Test {
             defaultCurveParams,
             defaultTierConfig,
             creator1,
-            address(0),
-            "" // styleUri
+            address(0)
         );
 
         assertTrue(instance != address(0), "Instance with minimal supply should be created");
@@ -473,8 +462,7 @@ contract ERC404FactoryTest is Test {
             defaultCurveParams,
             defaultTierConfig,
             creator1,
-            address(0),
-            "" // styleUri
+            address(0)
         );
 
         assertTrue(instance != address(0), "Instance with max reserve should be created");
@@ -504,8 +492,7 @@ contract ERC404FactoryTest is Test {
             defaultCurveParams,
             defaultTierConfig,
             creator1,
-            address(0),
-            "" // styleUri
+            address(0)
         );
 
         uint256 balanceAfter = creator1.balance;
@@ -535,8 +522,7 @@ contract ERC404FactoryTest is Test {
             defaultCurveParams,
             defaultTierConfig,
             creator1,
-            address(0),
-            "" // styleUri
+            address(0)
         );
 
         vm.stopPrank();
@@ -552,8 +538,7 @@ contract ERC404FactoryTest is Test {
             defaultCurveParams,
             defaultTierConfig,
             creator2,
-            address(0),
-            "" // styleUri
+            address(0)
         );
 
         vm.stopPrank();
@@ -579,8 +564,7 @@ contract ERC404FactoryTest is Test {
             defaultCurveParams,
             defaultTierConfig,
             creator1,
-            address(0),
-            "" // styleUri
+            address(0)
         );
 
         vm.stopPrank();
@@ -608,8 +592,7 @@ contract ERC404FactoryTest is Test {
             defaultCurveParams,
             defaultTierConfig,
             creator1,
-            address(0),
-            "" // styleUri
+            address(0)
         );
 
         assertTrue(instance1 != address(0), "First instance should be created");
@@ -624,8 +607,7 @@ contract ERC404FactoryTest is Test {
             defaultCurveParams,
             defaultTierConfig,
             creator1,
-            address(0),
-            "" // styleUri
+            address(0)
         );
 
         assertTrue(instance2 != address(0), "Second instance should also be created");
@@ -659,8 +641,7 @@ contract ERC404FactoryTest is Test {
             defaultCurveParams,
             defaultTierConfig,
             creator2,  // Different creator
-            address(0),
-            "" // styleUri
+            address(0)
         );
 
         assertTrue(instance != address(0), "Instance should be created with different creator");

@@ -56,37 +56,23 @@ contract FactoryInstanceIndexingTest is Test {
     }
 
     function test_FactoryIndexing_MultipleFactories() public {
-        // Register ERC404 factory
-        vm.deal(applicant1, APPLICATION_FEE);
-        vm.prank(applicant1);
-        IMasterRegistry(proxy).applyForFactory{value: APPLICATION_FEE}(
+        // Register ERC404 factory directly
+        MasterRegistryV1(proxy).registerFactory(
             address(erc404Factory),
             "ERC404",
             "erc404-factory",
             "ERC404 Factory",
-            "https://example.com/erc404.json",
-            new bytes32[](0)
+            "https://example.com/erc404.json"
         );
 
-        vm.prank(voter1);
-        IMasterRegistry(proxy).voteOnApplication(address(erc404Factory), true);
-        IMasterRegistry(proxy).finalizeApplication(address(erc404Factory));
-
-        // Register ERC1155 factory
-        vm.deal(applicant2, APPLICATION_FEE);
-        vm.prank(applicant2);
-        IMasterRegistry(proxy).applyForFactory{value: APPLICATION_FEE}(
+        // Register ERC1155 factory directly
+        MasterRegistryV1(proxy).registerFactory(
             address(erc1155Factory),
             "ERC1155",
             "erc1155-factory",
             "ERC1155 Factory",
-            "https://example.com/erc1155.json",
-            new bytes32[](0)
+            "https://example.com/erc1155.json"
         );
-
-        vm.prank(voter1);
-        IMasterRegistry(proxy).voteOnApplication(address(erc1155Factory), true);
-        IMasterRegistry(proxy).finalizeApplication(address(erc1155Factory));
 
         // Verify indexing
         assertEq(IMasterRegistry(proxy).getTotalFactories(), 2);
@@ -111,9 +97,7 @@ contract FactoryInstanceIndexingTest is Test {
         features[1] = keccak256("LIQUIDITY_POOL");
         features[2] = keccak256("CHAT");
 
-        vm.deal(applicant1, APPLICATION_FEE);
-        vm.prank(applicant1);
-        IMasterRegistry(proxy).applyForFactory{value: APPLICATION_FEE}(
+        MasterRegistryV1(proxy).registerFactoryWithFeatures(
             address(erc404Factory),
             "ERC404",
             "featured-factory",
@@ -121,10 +105,6 @@ contract FactoryInstanceIndexingTest is Test {
             "https://example.com/featured.json",
             features
         );
-
-        vm.prank(voter1);
-        IMasterRegistry(proxy).voteOnApplication(address(erc404Factory), true);
-        IMasterRegistry(proxy).finalizeApplication(address(erc404Factory));
 
         // Retrieve and verify metadata
         IMasterRegistry.FactoryInfo memory info = 
@@ -141,20 +121,13 @@ contract FactoryInstanceIndexingTest is Test {
 
     function test_InstanceRegistration_MultipleInstances() public {
         // Setup: Register factory
-        vm.deal(applicant1, APPLICATION_FEE);
-        vm.prank(applicant1);
-        IMasterRegistry(proxy).applyForFactory{value: APPLICATION_FEE}(
+        MasterRegistryV1(proxy).registerFactory(
             address(erc404Factory),
             "ERC404",
             "test-factory",
             "Test Factory",
-            "https://example.com/metadata.json",
-            new bytes32[](0)
+            "https://example.com/metadata.json"
         );
-
-        vm.prank(voter1);
-        IMasterRegistry(proxy).voteOnApplication(address(erc404Factory), true);
-        IMasterRegistry(proxy).finalizeApplication(address(erc404Factory));
 
         // Register multiple instances
         address[] memory instances = new address[](5);
@@ -190,20 +163,13 @@ contract FactoryInstanceIndexingTest is Test {
 
     function test_InstanceMetadata_Retrieval() public {
         // Setup: Register factory
-        vm.deal(applicant1, APPLICATION_FEE);
-        vm.prank(applicant1);
-        IMasterRegistry(proxy).applyForFactory{value: APPLICATION_FEE}(
+        MasterRegistryV1(proxy).registerFactory(
             address(erc404Factory),
             "ERC404",
             "test-factory",
             "Test Factory",
-            "https://example.com/metadata.json",
-            new bytes32[](0)
+            "https://example.com/metadata.json"
         );
-
-        vm.prank(voter1);
-        IMasterRegistry(proxy).voteOnApplication(address(erc404Factory), true);
-        IMasterRegistry(proxy).finalizeApplication(address(erc404Factory));
 
         // Register instance with metadata
         address instance = address(0xAAA);
@@ -236,36 +202,22 @@ contract FactoryInstanceIndexingTest is Test {
     }
 
     function test_FactoryInstance_Relationship() public {
-        // Setup: Register two factories
-        vm.deal(applicant1, APPLICATION_FEE);
-        vm.prank(applicant1);
-        IMasterRegistry(proxy).applyForFactory{value: APPLICATION_FEE}(
+        // Setup: Register two factories directly
+        MasterRegistryV1(proxy).registerFactory(
             address(erc404Factory),
             "ERC404",
             "erc404-factory",
             "ERC404 Factory",
-            "https://example.com/erc404.json",
-            new bytes32[](0)
+            "https://example.com/erc404.json"
         );
 
-        vm.deal(applicant2, APPLICATION_FEE);
-        vm.prank(applicant2);
-        IMasterRegistry(proxy).applyForFactory{value: APPLICATION_FEE}(
+        MasterRegistryV1(proxy).registerFactory(
             address(erc1155Factory),
             "ERC1155",
             "erc1155-factory",
             "ERC1155 Factory",
-            "https://example.com/erc1155.json",
-            new bytes32[](0)
+            "https://example.com/erc1155.json"
         );
-
-        vm.prank(voter1);
-        IMasterRegistry(proxy).voteOnApplication(address(erc404Factory), true);
-        IMasterRegistry(proxy).finalizeApplication(address(erc404Factory));
-
-        vm.prank(voter1);
-        IMasterRegistry(proxy).voteOnApplication(address(erc1155Factory), true);
-        IMasterRegistry(proxy).finalizeApplication(address(erc1155Factory));
 
         // Register instances from different factories
         address erc404Instance = address(0xAAA);
@@ -303,20 +255,13 @@ contract FactoryInstanceIndexingTest is Test {
 
     function test_InstanceName_CaseInsensitive() public {
         // Setup: Register factory
-        vm.deal(applicant1, APPLICATION_FEE);
-        vm.prank(applicant1);
-        IMasterRegistry(proxy).applyForFactory{value: APPLICATION_FEE}(
+        MasterRegistryV1(proxy).registerFactory(
             address(erc404Factory),
             "ERC404",
             "test-factory",
             "Test Factory",
-            "https://example.com/metadata.json",
-            new bytes32[](0)
+            "https://example.com/metadata.json"
         );
-
-        vm.prank(voter1);
-        IMasterRegistry(proxy).voteOnApplication(address(erc404Factory), true);
-        IMasterRegistry(proxy).finalizeApplication(address(erc404Factory));
 
         // Register instance with lowercase name
         address instance1 = address(0xAAA);
@@ -350,9 +295,7 @@ contract FactoryInstanceIndexingTest is Test {
         features[0] = keccak256("FEATURE_A");
         features[1] = keccak256("FEATURE_B");
 
-        vm.deal(applicant1, APPLICATION_FEE);
-        vm.prank(applicant1);
-        IMasterRegistry(proxy).applyForFactory{value: APPLICATION_FEE}(
+        MasterRegistryV1(proxy).registerFactoryWithFeatures(
             address(erc404Factory),
             "ERC404",
             "featured-factory",
@@ -360,10 +303,6 @@ contract FactoryInstanceIndexingTest is Test {
             "https://example.com/featured.json",
             features
         );
-
-        vm.prank(voter1);
-        IMasterRegistry(proxy).voteOnApplication(address(erc404Factory), true);
-        IMasterRegistry(proxy).finalizeApplication(address(erc404Factory));
 
         // Retrieve and verify features
         IMasterRegistry.FactoryInfo memory info = 

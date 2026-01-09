@@ -61,9 +61,8 @@ contract UltraAlignmentHookFactoryTest is Test {
         );
 
         // Set V4 pool key
-        // H-02: Hook requires native ETH (address(0)), not WETH
         PoolKey memory mockPoolKey = PoolKey({
-            currency0: Currency.wrap(address(0)),  // Native ETH
+            currency0: Currency.wrap(wethAddr),
             currency1: Currency.wrap(address(token)),
             fee: 3000,
             tickSpacing: 60,

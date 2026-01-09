@@ -357,7 +357,9 @@ contract UltraAlignmentVaultTest is Test {
         vault.convertAndAddLiquidity(0);
 
         uint256 daveBalanceAfter = dave.balance;
-        uint256 expectedReward = (10 ether * 5) / 10000; // 0.05%
+        // M-04 fix: Reward is now gas-based + standard reward (not percentage)
+        // In test environment with zero gas price: reward = gasCost + standardReward = 0 + 0.0012 ether
+        uint256 expectedReward = vault.standardConversionReward(); // 0.0012 ether
 
         assertEq(daveBalanceAfter - daveBalanceBefore, expectedReward, "Caller should receive reward");
     }

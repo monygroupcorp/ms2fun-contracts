@@ -76,15 +76,15 @@ contract V4HookTaxationTest is ForkTestBase, IUnlockCallback {
             vm.etch(HOOK_ADDRESS, address(implementation).code);
             hook = UltraAlignmentV4Hook(HOOK_ADDRESS);
 
-            // Re-initialize storage at correct address
-            vm.store(HOOK_ADDRESS, bytes32(uint256(0)), bytes32(uint256(uint160(address(poolManager)))));
-            vm.store(HOOK_ADDRESS, bytes32(uint256(1)), bytes32(uint256(uint160(address(mockVault)))));
-            vm.store(HOOK_ADDRESS, bytes32(uint256(2)), bytes32(uint256(uint160(WETH))));
-            vm.store(HOOK_ADDRESS, bytes32(uint256(3)), bytes32(uint256(100))); // taxRateBips = 100 (1%)
-            // Owner storage (Ownable.sol stores owner at slot computed via keccak256)
-            // For Solady Ownable, owner is stored differently - let me use a simpler approach
+            // Initialize owner using Solady's Ownable pattern
+            // Note: Immutable variables (poolManager, vault, weth) are embedded in bytecode, not storage
             vm.prank(HOOK_ADDRESS);
             MockTaxHook(payable(HOOK_ADDRESS)).initOwner(address(this));
+
+            // Set tax rate to 100 bips (1%) using the setter
+            // Storage layout changed after adding ReentrancyGuard, so use proper method
+            vm.prank(address(this));
+            hook.setTaxRate(100);
         }
     }
 

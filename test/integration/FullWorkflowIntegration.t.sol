@@ -56,47 +56,23 @@ contract FullWorkflowIntegrationTest is Test {
     }
 
     function test_FullWorkflow_ApplicationToFeaturedPromotion() public {
-        // Step 1: Apply for factory
-        vm.deal(applicant, APPLICATION_FEE);
-        vm.prank(applicant);
-        IMasterRegistry(proxy).applyForFactory{value: APPLICATION_FEE}(
+        // Step 1: Register factory directly (owner permission)
+        MasterRegistryV1(proxy).registerFactory(
             address(erc404Factory),
             "ERC404",
             "my-erc404-factory",
             "My ERC404 Factory",
-            "https://example.com/factory.json",
-            new bytes32[](0)
+            "https://example.com/factory.json"
         );
 
-        // Verify application submitted
-        IMasterRegistry.FactoryApplication memory app = 
-            IMasterRegistry(proxy).getFactoryApplication(address(erc404Factory));
-        assertEq(uint256(app.status), uint256(IMasterRegistry.ApplicationStatus.Pending));
-        assertEq(app.applicant, applicant);
-
-        // Step 2: Vote on application
-        vm.prank(voter1);
-        IMasterRegistry(proxy).voteOnApplication(address(erc404Factory), true);
-        
-        vm.prank(voter2);
-        IMasterRegistry(proxy).voteOnApplication(address(erc404Factory), true);
-
-        // Verify votes recorded
-        app = IMasterRegistry(proxy).getFactoryApplication(address(erc404Factory));
-        assertEq(app.approvalVotes, 3500e18); // 2000 + 1500
-        assertEq(app.totalVotes, 3500e18);
-
-        // Step 3: Finalize application
-        IMasterRegistry(proxy).finalizeApplication(address(erc404Factory));
-
         // Verify factory registered
-        IMasterRegistry.FactoryInfo memory factoryInfo = 
+        IMasterRegistry.FactoryInfo memory factoryInfo =
             IMasterRegistry(proxy).getFactoryInfoByAddress(address(erc404Factory));
         assertEq(factoryInfo.factoryId, 1);
         assertTrue(factoryInfo.active);
         assertEq(IMasterRegistry(proxy).getTotalFactories(), 1);
 
-        // Step 4: Register instance
+        // Step 2: Register instance
         address instance = address(0xAAA);
         vm.prank(address(erc404Factory));
         IMasterRegistry(proxy).registerInstance(
@@ -108,7 +84,7 @@ contract FullWorkflowIntegrationTest is Test {
             address(0) // vault
         );
 
-        // Step 5: Rent featured position (queue-based)
+        // Step 3: Rent featured position (queue-based)
         uint256 desiredPosition = 1; // Position 1 (front of queue)
         uint256 duration = 7 days;
         uint256 currentPrice = IMasterRegistry(proxy).calculateRentalCost(desiredPosition, duration);
@@ -137,39 +113,24 @@ contract FullWorkflowIntegrationTest is Test {
     }
 
     function test_FullWorkflow_MultipleFactoriesAndInstances() public {
-        // Register first factory
-        vm.deal(applicant, APPLICATION_FEE * 2);
-        vm.startPrank(applicant);
-        
-        IMasterRegistry(proxy).applyForFactory{value: APPLICATION_FEE}(
+        // Register first factory directly
+        MasterRegistryV1(proxy).registerFactory(
             address(erc404Factory),
             "ERC404",
             "factory-1",
             "Factory 1",
-            "https://example.com/factory1.json",
-            new bytes32[](0)
+            "https://example.com/factory1.json"
         );
-        vm.stopPrank();
-
-        vm.prank(voter1);
-        IMasterRegistry(proxy).voteOnApplication(address(erc404Factory), true);
-        IMasterRegistry(proxy).finalizeApplication(address(erc404Factory));
 
         // Register second factory
         MockFactory factory2 = new MockFactory(address(proxy));
-        vm.prank(applicant);
-        IMasterRegistry(proxy).applyForFactory{value: APPLICATION_FEE}(
+        MasterRegistryV1(proxy).registerFactory(
             address(factory2),
             "ERC1155",
             "factory-2",
             "Factory 2",
-            "https://example.com/factory2.json",
-            new bytes32[](0)
+            "https://example.com/factory2.json"
         );
-
-        vm.prank(voter1);
-        IMasterRegistry(proxy).voteOnApplication(address(factory2), true);
-        IMasterRegistry(proxy).finalizeApplication(address(factory2));
 
         // Verify both factories registered
         assertEq(IMasterRegistry(proxy).getTotalFactories(), 2);
@@ -212,50 +173,19 @@ contract FullWorkflowIntegrationTest is Test {
         );
     }
 
-    function test_FullWorkflow_RejectedApplication() public {
-        // Apply for factory
-        vm.deal(applicant, APPLICATION_FEE);
-        vm.prank(applicant);
-        IMasterRegistry(proxy).applyForFactory{value: APPLICATION_FEE}(
-            address(erc404Factory),
-            "ERC404",
-            "rejected-factory",
-            "Rejected Factory",
-            "https://example.com/rejected.json",
-            new bytes32[](0)
-        );
-
-        // Vote with rejection majority
-        vm.prank(voter1);
-        IMasterRegistry(proxy).voteOnApplication(address(erc404Factory), false);
-        
-        vm.prank(voter2);
-        IMasterRegistry(proxy).voteOnApplication(address(erc404Factory), false);
-
-        // Try to finalize - should fail
-        vm.expectRevert("Quorum not met or rejected");
-        IMasterRegistry(proxy).finalizeApplication(address(erc404Factory));
-
-        // Verify factory not registered
-        assertEq(IMasterRegistry(proxy).getTotalFactories(), 0);
-    }
+    // Note: Test removed - governance workflow (application/voting/rejection)
+    // has been moved to FactoryApprovalGovernance module.
+    // See test/governance/FactoryApprovalGovernance.t.sol for governance tests.
 
     function test_FullWorkflow_DynamicPricing() public {
-        // Setup: Register factory and instance
-        vm.deal(applicant, APPLICATION_FEE);
-        vm.prank(applicant);
-        IMasterRegistry(proxy).applyForFactory{value: APPLICATION_FEE}(
+        // Setup: Register factory directly
+        MasterRegistryV1(proxy).registerFactory(
             address(erc404Factory),
             "ERC404",
             "test-factory",
             "Test Factory",
-            "https://example.com/factory.json",
-            new bytes32[](0)
+            "https://example.com/factory.json"
         );
-
-        vm.prank(voter1);
-        IMasterRegistry(proxy).voteOnApplication(address(erc404Factory), true);
-        IMasterRegistry(proxy).finalizeApplication(address(erc404Factory));
 
         address instance = address(0xAAA);
         vm.prank(address(erc404Factory));
@@ -316,21 +246,14 @@ contract FullWorkflowIntegrationTest is Test {
 
         for (uint256 i = 0; i < validURIs.length; i++) {
             MockFactory newFactory = new MockFactory(address(proxy));
-            
-            vm.deal(applicant, APPLICATION_FEE);
-            vm.prank(applicant);
-            IMasterRegistry(proxy).applyForFactory{value: APPLICATION_FEE}(
+
+            MasterRegistryV1(proxy).registerFactory(
                 address(newFactory),
                 "ERC404",
                 string(abi.encodePacked("factory-", vm.toString(i))),
                 "Test Factory",
-                validURIs[i],
-                new bytes32[](0)
+                validURIs[i]
             );
-
-            vm.prank(voter1);
-            IMasterRegistry(proxy).voteOnApplication(address(newFactory), true);
-            IMasterRegistry(proxy).finalizeApplication(address(newFactory));
         }
 
         assertEq(IMasterRegistry(proxy).getTotalFactories(), 4);

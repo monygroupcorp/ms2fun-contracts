@@ -18,7 +18,9 @@ contract PricingMathTest is Test {
     uint256 constant MIN_PRICE_MULTIPLIER = 1; // 1x base price
 
     function setUp() public {
-        // No setup needed for pure library functions
+        // Set block.timestamp to a reasonable value (Jan 1, 2024)
+        // Foundry starts at timestamp=1, which causes underflow in tests using block.timestamp - X
+        vm.warp(1704067200); // Jan 1, 2024 00:00:00 UTC
     }
 
     // ============================================
@@ -303,14 +305,15 @@ contract PricingMathTest is Test {
 
         uint256 newPrice = PricingMath.calculatePriceDecay(currentPrice, lastUpdateTime);
 
-        // Decay amount: (1 ether * 1e15 * 3600) / 1e18 = 0.0036 ether = 3.6 * BASE_PRICE
-        // New price: 1 ether - 0.0036 ether = 0.9964 ether
+        // Decay amount: (1 ether * 1e15 * 3600) / 1e18 = 3.6 ether
+        // Note: Decay is larger than current price, so should floor at BASE_PRICE
         uint256 expectedDecay = (currentPrice * PRICE_DECAY_RATE * 3600) / 1e18;
-        uint256 expectedPrice = currentPrice - expectedDecay;
 
-        if (expectedPrice < BASE_PRICE) {
+        // Check if decay would underflow or go below base price
+        if (expectedDecay >= currentPrice || currentPrice - expectedDecay < BASE_PRICE) {
             assertEq(newPrice, BASE_PRICE, "Should floor at BASE_PRICE");
         } else {
+            uint256 expectedPrice = currentPrice - expectedDecay;
             assertEq(newPrice, expectedPrice, "Should decay by calculated amount");
         }
     }
