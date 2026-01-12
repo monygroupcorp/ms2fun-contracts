@@ -47,7 +47,7 @@ contract MasterRegistryV1 is UUPSUpgradeable, Ownable, ReentrancyGuard, IMasterR
     mapping(address => FactoryInfo) public factoryInfo;
     mapping(address => bool) public registeredFactories;
     mapping(bytes32 => bool) public nameHashes; // For name collision prevention
-    mapping(address => IMasterRegistry.InstanceInfo) public instanceInfo;
+    mapping(address => InstanceInfo) public instanceInfo;
     mapping(address => address[]) public creatorInstances; // creator => instances[]
 
     // Instance Enumeration (for listing all instances)
@@ -72,6 +72,18 @@ contract MasterRegistryV1 is UUPSUpgradeable, Ownable, ReentrancyGuard, IMasterR
     mapping(address => address[]) public vaultInstances; // vault => instances using it
 
     // Note: Competitive Rental Queue System has been extracted to FeaturedQueueManager
+
+    // Structs
+    struct InstanceInfo {
+        address instance;
+        address factory;
+        address creator;
+        address vault;          // Vault used by this instance
+        string name;
+        string metadataURI;
+        bytes32 nameHash;
+        uint256 registeredAt;
+    }
 
     // Events (FactoryRegistered and InstanceRegistered defined in IMasterRegistry)
     event CreatorInstanceAdded(address indexed creator, address indexed instance);
@@ -306,7 +318,7 @@ contract MasterRegistryV1 is UUPSUpgradeable, Ownable, ReentrancyGuard, IMasterR
 
         nameHashes[nameHash] = true;
 
-        instanceInfo[instance] = IMasterRegistry.InstanceInfo({
+        instanceInfo[instance] = InstanceInfo({
             instance: instance,
             factory: factory,
             creator: creator,
@@ -358,7 +370,7 @@ contract MasterRegistryV1 is UUPSUpgradeable, Ownable, ReentrancyGuard, IMasterR
     /**
      * @notice Get instance info
      */
-    function getInstanceInfo(address instance) external view returns (IMasterRegistry.InstanceInfo memory) {
+    function getInstanceInfo(address instance) external view returns (InstanceInfo memory) {
         require(instanceInfo[instance].instance != address(0), "Instance not found");
         return instanceInfo[instance];
     }
@@ -392,8 +404,535 @@ contract MasterRegistryV1 is UUPSUpgradeable, Ownable, ReentrancyGuard, IMasterR
     }
 
     // ============ Competitive Rental Queue System ============
-    // Note: Queue system extracted to FeaturedQueueManager contract
-    // Use featuredQueueManager address to interact with queue functions
+
+    /**
+     * @notice Get competitive rental price for a position
+     * @param position 1-indexed position (1 = front)
+     * @return price Current rental price for this position
+     */
+    function getPositionRentalPrice(uint256 position) public view returns (uint256) {
+        require(position > 0, "Invalid position");
+
+        // Calculate utilization-adjusted base price
+        // Formula: basePrice × (1 + utilization)
+        // 0% full = 1x, 50% full = 1.5x, 100% full = 2x
+        uint256 queueLength = featuredQueue.length;
+        uint256 utilizationBps = (queueLength * 10000) / maxQueueSize;  // Basis points
+        uint256 adjustedBase = baseRentalPrice + (baseRentalPrice * utilizationBps) / 10000;
+
+        // Check if position has active rental (competitive bidding)
+        if (position <= featuredQueue.length) {
+            RentalSlot memory slot = featuredQueue[position - 1];
+            if (slot.active && block.timestamp < slot.expiresAt) {
+                uint256 competitivePrice = (slot.rentPaid * demandMultiplier) / 100;
+                // Use higher of competitive price or adjusted base
+                return competitivePrice > adjustedBase ? competitivePrice : adjustedBase;
+            }
+        }
+
+        // Check demand tracking (past competitive activity)
+        PositionDemand memory demand = positionDemand[position];
+        if (demand.lastRentalTime > 0) {
+            uint256 demandPrice = (demand.lastRentalPrice * demandMultiplier) / 100;
+            // Use higher of demand price or adjusted base
+            return demandPrice > adjustedBase ? demandPrice : adjustedBase;
+        }
+
+        // Return utilization-adjusted base price
+        return adjustedBase;
+    }
+
+    /**
+     * @notice Get current queue utilization metrics
+     * @return currentUtilization Utilization in basis points (0-10000)
+     * @return adjustedBasePrice Current utilization-adjusted base price
+     * @return queueLength Current queue length
+     * @return maxSize Maximum queue size
+     */
+    function getQueueUtilization() external view returns (
+        uint256 currentUtilization,
+        uint256 adjustedBasePrice,
+        uint256 queueLength,
+        uint256 maxSize
+    ) {
+        queueLength = featuredQueue.length;
+        maxSize = maxQueueSize;
+        currentUtilization = (queueLength * 10000) / maxQueueSize;
+        adjustedBasePrice = baseRentalPrice + (baseRentalPrice * currentUtilization) / 10000;
+
+        return (currentUtilization, adjustedBasePrice, queueLength, maxSize);
+    }
+
+    /**
+     * @notice Calculate total rental cost with duration
+     * @param position 1-indexed position
+     * @param duration Rental duration in seconds
+     * @return totalCost Total cost for this rental
+     */
+    function calculateRentalCost(
+        uint256 position,
+        uint256 duration
+    ) public view returns (uint256 totalCost) {
+        require(duration >= minRentalDuration, "Duration too short");
+        require(duration <= maxRentalDuration, "Duration too long");
+
+        uint256 basePrice = getPositionRentalPrice(position);
+        uint256 durationMultiplier = duration / minRentalDuration;
+        totalCost = basePrice * durationMultiplier;
+
+        // Optional: bulk discount for longer durations
+        if (duration >= 30 days) {
+            totalCost = (totalCost * 9000) / 10000;  // 10% discount
+        } else if (duration >= 14 days) {
+            totalCost = (totalCost * 9500) / 10000;  // 5% discount
+        }
+
+        return totalCost;
+    }
+
+    /**
+     * @notice Rent a specific position in the featured queue
+     * @param instance Instance to promote
+     * @param desiredPosition 1-indexed position (1 = front, N+1 = append to back)
+     * @param duration Rental duration in seconds
+     */
+    function rentFeaturedPosition(
+        address instance,
+        uint256 desiredPosition,
+        uint256 duration
+    ) external payable nonReentrant {
+        require(instanceInfo[instance].instance != address(0), "Instance not registered");
+        require(instancePosition[instance] == 0, "Already in queue - use bumpPosition instead");
+        require(desiredPosition > 0, "Invalid position");
+
+        uint256 totalCost = calculateRentalCost(desiredPosition, duration);
+        require(msg.value >= totalCost, "Insufficient payment");
+
+        uint256 expiresAt = block.timestamp + duration;
+
+        // Insert and shift everyone down
+        _insertAtPositionWithShift(instance, desiredPosition, totalCost, expiresAt);
+
+        // Refund excess
+        if (msg.value > totalCost) {
+            (bool success, ) = payable(msg.sender).call{value: msg.value - totalCost}("");
+            require(success, "Refund failed");
+        }
+
+        emit PositionRented(instance, msg.sender, desiredPosition, totalCost, duration, expiresAt);
+    }
+
+    /**
+     * @notice Get featured instances in queue order
+     */
+    function getFeaturedInstances(
+        uint256 startIndex,
+        uint256 endIndex
+    ) external view returns (address[] memory instances, uint256 total) {
+        require(endIndex > startIndex, "Invalid range");
+        require(endIndex <= featuredQueue.length, "End index out of bounds");
+
+        uint256 resultSize = endIndex - startIndex;
+        address[] memory result = new address[](resultSize);
+
+        for (uint256 i = startIndex; i < endIndex; i++) {
+            result[i - startIndex] = featuredQueue[i].instance;
+        }
+
+        return (result, featuredQueue.length);
+    }
+
+    /**
+     * @notice Get rental info for an instance
+     */
+    function getRentalInfo(address instance) external view returns (
+        RentalSlot memory rental,
+        uint256 position,
+        uint256 renewalDeposit,
+        bool isExpired
+    ) {
+        uint256 pos = instancePosition[instance];
+        RentalSlot memory slot;
+
+        if (pos > 0) {
+            slot = featuredQueue[pos - 1];
+        }
+
+        return (
+            slot,
+            pos,
+            renewalDeposits[instance],
+            pos > 0 && slot.active && block.timestamp >= slot.expiresAt
+        );
+    }
+
+    /**
+     * @notice Deposit funds for auto-renewal
+     */
+    function depositForAutoRenewal(address instance) external payable nonReentrant {
+        uint256 position = instancePosition[instance];
+        require(position > 0, "Not in queue");
+        require(msg.value > 0, "Must deposit funds");
+
+        RentalSlot memory slot = featuredQueue[position - 1];
+        require(
+            slot.renter == msg.sender ||
+            instanceInfo[instance].creator == msg.sender,
+            "Not authorized"
+        );
+
+        renewalDeposits[instance] += msg.value;
+        emit AutoRenewalDeposited(instance, msg.sender, msg.value);
+    }
+
+    /**
+     * @notice Withdraw unused auto-renewal deposit
+     */
+    function withdrawRenewalDeposit(address instance) external nonReentrant {
+        uint256 position = instancePosition[instance];
+
+        if (position > 0) {
+            RentalSlot memory slot = featuredQueue[position - 1];
+            require(
+                slot.renter == msg.sender ||
+                instanceInfo[instance].creator == msg.sender,
+                "Not authorized"
+            );
+        } else {
+            require(instanceInfo[instance].creator == msg.sender, "Not authorized");
+        }
+
+        uint256 deposit = renewalDeposits[instance];
+        require(deposit > 0, "No deposit to withdraw");
+
+        renewalDeposits[instance] = 0;
+
+        (bool success, ) = payable(msg.sender).call{value: deposit}("");
+        require(success, "Transfer failed");
+
+        emit RenewalDepositWithdrawn(instance, msg.sender, deposit);
+    }
+
+    /**
+     * @notice Renew your current position before it expires
+     * @param instance Instance to renew
+     * @param additionalDuration Additional time to add (in seconds)
+     */
+    function renewPosition(
+        address instance,
+        uint256 additionalDuration
+    ) external payable nonReentrant {
+        uint256 position = instancePosition[instance];
+        require(position > 0, "Not in queue");
+
+        uint256 index = position - 1;
+        RentalSlot storage slot = featuredQueue[index];
+
+        require(slot.renter == msg.sender, "Not the renter");
+        require(slot.active, "Rental not active");
+        require(additionalDuration >= minRentalDuration, "Duration too short");
+
+        // Calculate renewal cost (with discount!)
+        uint256 basePrice = getPositionRentalPrice(position);
+        uint256 durationMultiplier = additionalDuration / minRentalDuration;
+        uint256 renewalCost = (basePrice * durationMultiplier * renewalDiscount) / 100;
+
+        require(msg.value >= renewalCost, "Insufficient payment");
+
+        // Extend expiration
+        uint256 newExpiration = slot.expiresAt + additionalDuration;
+        require(newExpiration <= block.timestamp + maxRentalDuration, "Total duration too long");
+
+        slot.expiresAt = newExpiration;
+        slot.rentPaid += renewalCost;
+
+        // Refund excess
+        if (msg.value > renewalCost) {
+            (bool success, ) = payable(msg.sender).call{value: msg.value - renewalCost}("");
+            require(success, "Refund failed");
+        }
+
+        emit PositionRenewed(instance, position, additionalDuration, renewalCost, newExpiration);
+    }
+
+    /**
+     * @notice Bump your position up in the queue
+     * @param instance Your instance that's currently in the queue
+     * @param targetPosition Position you want to move to (must be higher than current)
+     * @param additionalDuration Additional time to add to your rental (optional, can be 0)
+     */
+    function bumpPosition(
+        address instance,
+        uint256 targetPosition,
+        uint256 additionalDuration
+    ) external payable nonReentrant {
+        uint256 currentPosition = instancePosition[instance];
+        require(currentPosition > 0, "Not in queue");
+        require(targetPosition > 0 && targetPosition < currentPosition, "Invalid target position");
+
+        uint256 currentIndex = currentPosition - 1;
+        RentalSlot storage currentSlot = featuredQueue[currentIndex];
+
+        require(currentSlot.renter == msg.sender, "Not your rental");
+        require(currentSlot.active, "Rental not active");
+        require(block.timestamp < currentSlot.expiresAt, "Rental expired");
+
+        // Get the FULL competitive price (what next person would pay)
+        uint256 fullCompetitivePrice = getPositionRentalPrice(targetPosition);
+
+        // Calculate what THIS user pays (with their credit)
+        uint256 bumpCost = _calculateBumpCost(currentPosition, targetPosition, additionalDuration);
+        require(msg.value >= bumpCost, "Insufficient payment");
+
+        // Update rental details
+        currentSlot.rentPaid += bumpCost;
+        if (additionalDuration > 0) {
+            currentSlot.expiresAt += additionalDuration;
+        }
+
+        // Save the moving slot
+        RentalSlot memory movingSlot = currentSlot;
+
+        // Shift everyone between target and current position down by 1
+        for (uint256 i = currentIndex; i > targetPosition - 1; i--) {
+            featuredQueue[i] = featuredQueue[i - 1];
+
+            if (featuredQueue[i].active) {
+                instancePosition[featuredQueue[i].instance] = i + 1;
+                emit PositionShifted(featuredQueue[i].instance, i, i + 1);
+            }
+        }
+
+        // Place at target position
+        featuredQueue[targetPosition - 1] = movingSlot;
+        instancePosition[instance] = targetPosition;
+
+        // Update demand tracking with FULL competitive price
+        positionDemand[targetPosition] = PositionDemand({
+            lastRentalPrice: fullCompetitivePrice,
+            lastRentalTime: block.timestamp,
+            totalRentalsAllTime: positionDemand[targetPosition].totalRentalsAllTime + 1
+        });
+
+        // Refund excess
+        if (msg.value > bumpCost) {
+            (bool success, ) = payable(msg.sender).call{value: msg.value - bumpCost}("");
+            require(success, "Refund failed");
+        }
+
+        emit PositionBumped(instance, currentPosition, targetPosition, bumpCost, additionalDuration);
+    }
+
+    /**
+     * @notice Clean up expired rentals (incentivized public function)
+     * @param maxCleanup Maximum number of slots to process
+     */
+    function cleanupExpiredRentals(uint256 maxCleanup) external nonReentrant {
+        require(maxCleanup > 0 && maxCleanup <= 50, "Invalid cleanup limit");
+
+        uint256 cleanedCount = 0;
+        uint256 renewedCount = 0;
+
+        // Scan from back to front
+        uint256 i = featuredQueue.length;
+
+        while (i > 0 && (cleanedCount + renewedCount) < maxCleanup) {
+            i--;
+            RentalSlot storage slot = featuredQueue[i];
+
+            // Only process active slots
+            if (!slot.active) continue;
+
+            // Check if expired
+            if (block.timestamp >= slot.expiresAt) {
+                // Try auto-renewal first
+                if (_attemptAutoRenewal(slot.instance, i + 1)) {
+                    renewedCount++;
+                } else {
+                    // No renewal possible, mark as inactive
+                    slot.active = false;
+                    instancePosition[slot.instance] = 0;
+                    cleanedCount++;
+
+                    emit RentalExpired(slot.instance, i + 1, slot.expiresAt);
+                }
+            }
+        }
+
+        // Compact the queue
+        _compactQueue();
+
+        // Pay reward to caller (M-04 Security Fix: Gas-based + graceful degradation)
+        uint256 totalActions = cleanedCount + renewedCount;
+        if (totalActions > 0) {
+            // Calculate reward: gas reimbursement + standard incentive
+            uint256 estimatedGas = CLEANUP_BASE_GAS + (totalActions * GAS_PER_ACTION);
+            uint256 gasCost = estimatedGas * tx.gasprice;
+            uint256 reward = gasCost + standardCleanupReward;
+
+            // Graceful degradation - no griefing possible (operation never fails due to reward)
+            if (address(this).balance >= reward) {
+                (bool success, ) = payable(msg.sender).call{value: reward}("");
+                if (success) {
+                    emit CleanupRewardPaid(msg.sender, cleanedCount, renewedCount, reward);
+                } else {
+                    emit CleanupRewardRejected(msg.sender, reward);
+                }
+            } else {
+                emit InsufficientCleanupRewardBalance(msg.sender, reward, address(this).balance);
+            }
+        }
+    }
+
+    // ============ Internal Helper Functions ============
+
+    /**
+     * @notice Insert at position and shift everyone else down
+     */
+    function _insertAtPositionWithShift(
+        address instance,
+        uint256 position,
+        uint256 rentPaid,
+        uint256 expiresAt
+    ) internal {
+        uint256 index = position - 1;
+
+        RentalSlot memory newSlot = RentalSlot({
+            instance: instance,
+            renter: msg.sender,
+            rentPaid: rentPaid,
+            rentedAt: block.timestamp,
+            expiresAt: expiresAt,
+            originalPosition: position,
+            active: true
+        });
+
+        // Case 1: Appending to back (no shifting needed)
+        if (position > featuredQueue.length) {
+            // Fill any gaps with empty slots if needed
+            while (featuredQueue.length < position - 1) {
+                featuredQueue.push(RentalSlot({
+                    instance: address(0),
+                    renter: address(0),
+                    rentPaid: 0,
+                    rentedAt: 0,
+                    expiresAt: 0,
+                    originalPosition: 0,
+                    active: false
+                }));
+            }
+
+            featuredQueue.push(newSlot);
+            instancePosition[instance] = position;
+        }
+        // Case 2: Inserting in middle/front - shift everyone down
+        else {
+            // Add new slot at the end
+            featuredQueue.push(RentalSlot({
+                instance: address(0),
+                renter: address(0),
+                rentPaid: 0,
+                rentedAt: 0,
+                expiresAt: 0,
+                originalPosition: 0,
+                active: false
+            }));
+
+            // Shift everyone from position onwards down by 1
+            for (uint256 i = featuredQueue.length - 1; i > index; i--) {
+                featuredQueue[i] = featuredQueue[i - 1];
+
+                // Update their position mapping (they got pushed down)
+                if (featuredQueue[i].active) {
+                    instancePosition[featuredQueue[i].instance] = i + 1;
+                    emit PositionShifted(featuredQueue[i].instance, i, i + 1);
+                }
+            }
+
+            // Insert new renter at desired position
+            featuredQueue[index] = newSlot;
+            instancePosition[instance] = position;
+        }
+
+        // Update demand tracking for this position
+        positionDemand[position] = PositionDemand({
+            lastRentalPrice: rentPaid,
+            lastRentalTime: block.timestamp,
+            totalRentalsAllTime: positionDemand[position].totalRentalsAllTime + 1
+        });
+    }
+
+    /**
+     * @notice Calculate cost to bump from current position to target position
+     */
+    function _calculateBumpCost(
+        uint256 currentPosition,
+        uint256 targetPosition,
+        uint256 additionalDuration
+    ) internal view returns (uint256) {
+        require(targetPosition < currentPosition, "Target must be higher than current");
+
+        // Base cost is the competitive price for the target position
+        uint256 baseCost = getPositionRentalPrice(targetPosition);
+
+        // Get what you already paid
+        uint256 currentIndex = currentPosition - 1;
+        RentalSlot memory currentSlot = featuredQueue[currentIndex];
+
+        // Calculate value already paid (proportional to time remaining)
+        uint256 timeRemaining = currentSlot.expiresAt > block.timestamp
+            ? currentSlot.expiresAt - block.timestamp
+            : 0;
+        uint256 totalDuration = currentSlot.expiresAt - currentSlot.rentedAt;
+        uint256 remainingValue = (currentSlot.rentPaid * timeRemaining) / totalDuration;
+
+        // Cost to bump = competitive price for target - credit from current position
+        uint256 bumpCost = baseCost > remainingValue ? baseCost - remainingValue : 0;
+
+        // Add cost for additional duration if requested
+        if (additionalDuration > 0) {
+            uint256 durationMultiplier = additionalDuration / minRentalDuration;
+            bumpCost += (getPositionRentalPrice(targetPosition) * durationMultiplier);
+        }
+
+        return bumpCost;
+    }
+
+    /**
+     * @notice Attempt to auto-renew a position using deposited funds
+     */
+    function _attemptAutoRenewal(address instance, uint256 position) internal returns (bool) {
+        uint256 deposit = renewalDeposits[instance];
+        if (deposit == 0) return false;
+
+        // Calculate renewal cost for minimum duration
+        uint256 renewalCost = calculateRentalCost(position, minRentalDuration);
+        renewalCost = (renewalCost * renewalDiscount) / 100;  // Apply discount
+
+        if (deposit < renewalCost) return false;
+
+        // Deduct from deposit
+        renewalDeposits[instance] -= renewalCost;
+
+        // Extend the rental
+        uint256 index = position - 1;
+        RentalSlot storage slot = featuredQueue[index];
+        slot.expiresAt = block.timestamp + minRentalDuration;
+        slot.rentPaid += renewalCost;
+
+        emit PositionAutoRenewed(instance, position, renewalCost, slot.expiresAt);
+        return true;
+    }
+
+    /**
+     * @notice Remove trailing inactive slots from queue
+     */
+    function _compactQueue() internal {
+        while (featuredQueue.length > 0 && !featuredQueue[featuredQueue.length - 1].active) {
+            featuredQueue.pop();
+        }
+    }
+
 
     // Phase 2 Features - Vault Registry
 
@@ -752,6 +1291,15 @@ contract MasterRegistryV1 is UUPSUpgradeable, Ownable, ReentrancyGuard, IMasterR
         require(_featuredQueueManager != address(0), "Invalid manager address");
         featuredQueueManager = _featuredQueueManager;
         emit FeaturedQueueManagerSet(_featuredQueueManager);
+    }
+
+    /**
+     * @notice Update standard cleanup reward (M-04 Security Fix)
+     * @param newReward New fixed reward amount in wei
+     */
+    function setStandardCleanupReward(uint256 newReward) external onlyOwner {
+        require(newReward <= 0.05 ether, "Reward too high (max 0.05 ETH)");
+        standardCleanupReward = newReward;
     }
 
     /**

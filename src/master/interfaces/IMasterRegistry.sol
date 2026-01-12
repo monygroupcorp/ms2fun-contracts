@@ -72,6 +72,17 @@ interface IMasterRegistry {
         uint256 instanceCount; // Number of instances using this vault
     }
 
+    struct InstanceInfo {
+        address instance;
+        address factory;
+        address creator;
+        address vault;
+        string name;
+        string metadataURI;
+        bytes32 nameHash;
+        uint256 registeredAt;
+    }
+
     // HookInfo removed - vaults now manage their own canonical hooks
 
     // Events
@@ -187,45 +198,9 @@ interface IMasterRegistry {
 
     function getTotalFactories() external view returns (uint256);
 
-    // Competitive Rental Queue Functions
-    function getPositionRentalPrice(uint256 position) external view returns (uint256);
+    function getInstanceInfo(address instance) external view returns (InstanceInfo memory);
 
-    function calculateRentalCost(uint256 position, uint256 duration) external view returns (uint256);
-
-    function rentFeaturedPosition(
-        address instance,
-        uint256 desiredPosition,
-        uint256 duration
-    ) external payable;
-
-    function renewPosition(
-        address instance,
-        uint256 additionalDuration
-    ) external payable;
-
-    function bumpPosition(
-        address instance,
-        uint256 targetPosition,
-        uint256 additionalDuration
-    ) external payable;
-
-    function getFeaturedInstances(
-        uint256 startIndex,
-        uint256 endIndex
-    ) external view returns (address[] memory instances, uint256 total);
-
-    function getRentalInfo(address instance) external view returns (
-        RentalSlot memory rental,
-        uint256 position,
-        uint256 renewalDeposit,
-        bool isExpired
-    );
-
-    function depositForAutoRenewal(address instance) external payable;
-
-    function withdrawRenewalDeposit(address instance) external;
-
-    function cleanupExpiredRentals(uint256 maxCleanup) external;
+    // Note: Competitive Rental Queue Functions moved to FeaturedQueueManager
 
     // Vault Registry Functions
     function registerVault(
