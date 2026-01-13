@@ -99,62 +99,18 @@ contract MockMasterRegistry is IMasterRegistry {
         return 0;
     }
 
-    // Competitive rental queue functions
-    function getPositionRentalPrice(uint256) external view override returns (uint256) {
-        return 0.001 ether;
+    function getInstanceInfo(address) external view override returns (InstanceInfo memory) {
+        return InstanceInfo({
+            instance: address(0),
+            factory: address(0),
+            creator: address(0),
+            vault: address(0),
+            name: "",
+            metadataURI: "",
+            nameHash: bytes32(0),
+            registeredAt: 0
+        });
     }
-
-    function calculateRentalCost(uint256, uint256) external view override returns (uint256) {
-        return 0.001 ether;
-    }
-
-    function rentFeaturedPosition(address, uint256, uint256) external payable override {}
-
-    function renewPosition(address, uint256) external payable override {}
-
-    function bumpPosition(address, uint256, uint256) external payable override {}
-
-    function getFeaturedInstances(uint256, uint256)
-        external
-        view
-        override
-        returns (address[] memory instances, uint256 total)
-    {
-        return (new address[](0), 0);
-    }
-
-    function getRentalInfo(address)
-        external
-        view
-        override
-        returns (
-            RentalSlot memory rental,
-            uint256 position,
-            uint256 renewalDeposit,
-            bool isExpired
-        )
-    {
-        return (
-            RentalSlot({
-                instance: address(0),
-                renter: address(0),
-                rentPaid: 0,
-                rentedAt: 0,
-                expiresAt: 0,
-                originalPosition: 0,
-                active: false
-            }),
-            0,
-            0,
-            false
-        );
-    }
-
-    function depositForAutoRenewal(address) external payable override {}
-
-    function withdrawRenewalDeposit(address) external override {}
-
-    function cleanupExpiredRentals(uint256) external override {}
 
     function registerVault(
         address,

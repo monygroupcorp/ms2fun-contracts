@@ -4,6 +4,7 @@ pragma solidity ^0.8.20;
 import {Test, console} from "forge-std/Test.sol";
 import {MasterRegistryV1} from "../../src/master/MasterRegistryV1.sol";
 import {MasterRegistry} from "../../src/master/MasterRegistry.sol";
+import {FeaturedQueueManager} from "../../src/master/FeaturedQueueManager.sol";
 import {MockEXECToken} from "../mocks/MockEXECToken.sol";
 import {MockFactory} from "../mocks/MockFactory.sol";
 import {IMasterRegistry} from "../../src/master/interfaces/IMasterRegistry.sol";
@@ -18,6 +19,7 @@ contract FullWorkflowIntegrationTest is Test {
     MasterRegistryV1 public implementation;
     MasterRegistry public proxyWrapper;
     address public proxy;
+    FeaturedQueueManager public queueManager;
     MockEXECToken public execToken;
     MockFactory public erc404Factory;
 
@@ -51,6 +53,11 @@ contract FullWorkflowIntegrationTest is Test {
         );
         proxyWrapper = new MasterRegistry(address(implementation), initData);
         proxy = TestHelpers.getProxyAddress(proxyWrapper);
+
+        // Deploy and setup FeaturedQueueManager
+        queueManager = new FeaturedQueueManager();
+        queueManager.initialize(proxy, owner);
+        MasterRegistryV1(proxy).setFeaturedQueueManager(address(queueManager));
 
         erc404Factory = new MockFactory(proxy);
     }
@@ -87,11 +94,11 @@ contract FullWorkflowIntegrationTest is Test {
         // Step 3: Rent featured position (queue-based)
         uint256 desiredPosition = 1; // Position 1 (front of queue)
         uint256 duration = 7 days;
-        uint256 currentPrice = IMasterRegistry(proxy).calculateRentalCost(desiredPosition, duration);
+        uint256 currentPrice = queueManager.calculateRentalCost(desiredPosition, duration);
 
         vm.deal(purchaser, currentPrice);
         vm.prank(purchaser);
-        IMasterRegistry(proxy).rentFeaturedPosition{value: currentPrice}(
+        queueManager.rentFeaturedPosition{value: currentPrice}(
             instance,
             desiredPosition,
             duration
@@ -103,7 +110,7 @@ contract FullWorkflowIntegrationTest is Test {
             uint256 position,
             ,
             bool isExpired
-        ) = IMasterRegistry(proxy).getRentalInfo(instance);
+        ) = queueManager.getRentalInfo(instance);
 
         assertEq(promo.instance, instance);
         assertEq(promo.renter, purchaser);
@@ -205,7 +212,7 @@ contract FullWorkflowIntegrationTest is Test {
         for (uint256 i = 0; i < 3; i++) {
             // Each subsequent rental will be for the next position (1, 2, 3)
             uint256 position = i + 1;
-            prices[i] = IMasterRegistry(proxy).calculateRentalCost(position, duration);
+            prices[i] = queueManager.calculateRentalCost(position, duration);
 
             address instanceAddr = address(uint160(0xAAA + i));
             if (i > 0) {
@@ -223,7 +230,7 @@ contract FullWorkflowIntegrationTest is Test {
 
             vm.deal(purchaser, prices[i] * 2);
             vm.prank(purchaser);
-            IMasterRegistry(proxy).rentFeaturedPosition{value: prices[i]}(
+            queueManager.rentFeaturedPosition{value: prices[i]}(
                 instanceAddr,
                 position,
                 duration

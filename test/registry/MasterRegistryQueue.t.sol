@@ -3,7 +3,9 @@ pragma solidity ^0.8.20;
 
 import {Test, console2} from "forge-std/Test.sol";
 import {MasterRegistryV1} from "../../src/master/MasterRegistryV1.sol";
+import {FeaturedQueueManager} from "../../src/master/FeaturedQueueManager.sol";
 import {IMasterRegistry} from "../../src/master/interfaces/IMasterRegistry.sol";
+import {MockEXECToken} from "../mocks/MockEXECToken.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 
 /**
@@ -15,6 +17,8 @@ contract MasterRegistryQueueTest is Test {
     MasterRegistryV1 public implementation;
     MasterRegistryV1 public registry;
     ERC1967Proxy public proxy;
+    FeaturedQueueManager public queueManager;
+    MockEXECToken public execToken;
 
     address public owner = address(0x1);
     address public factory = address(0x2);
@@ -81,17 +85,25 @@ contract MasterRegistryQueueTest is Test {
     function setUp() public {
         vm.startPrank(owner);
 
+        // Deploy EXEC token
+        execToken = new MockEXECToken(100000e18);
+
         // Deploy implementation
         implementation = new MasterRegistryV1();
 
         // Deploy proxy
         bytes memory initData = abi.encodeWithSelector(
             MasterRegistryV1.initialize.selector,
-            address(0), // No EXEC token
+            address(execToken),
             owner
         );
         proxy = new ERC1967Proxy(address(implementation), initData);
         registry = MasterRegistryV1(address(proxy));
+
+        // Deploy and setup FeaturedQueueManager
+        queueManager = new FeaturedQueueManager();
+        queueManager.initialize(address(proxy), owner);
+        registry.setFeaturedQueueManager(address(queueManager));
 
         // Register factory (name must be alphanumeric, hyphens, underscores only)
         registry.registerFactory(
@@ -126,7 +138,7 @@ contract MasterRegistryQueueTest is Test {
     // ========== Rental Price Tests ==========
 
     function test_getPositionRentalPrice_basePriceEmptyQueue() public view {
-        uint256 price = registry.getPositionRentalPrice(1);
+        uint256 price = queueManager.getPositionRentalPrice(1);
         assertEq(price, 0.001 ether, "Base price should be 0.001 ether for empty queue");
     }
 
@@ -141,12 +153,12 @@ contract MasterRegistryQueueTest is Test {
 
             // Rent position
             vm.prank(alice);
-            uint256 cost = registry.calculateRentalCost(i, 7 days);
-            registry.rentFeaturedPosition{value: cost}(testInstance, i, 7 days);
+            uint256 cost = queueManager.calculateRentalCost(i, 7 days);
+            queueManager.rentFeaturedPosition{value: cost}(testInstance, i, 7 days);
         }
 
         // Price should be higher for position 51 due to 50% utilization
-        uint256 price51 = registry.getPositionRentalPrice(51);
+        uint256 price51 = queueManager.getPositionRentalPrice(51);
         assertTrue(price51 > 0.001 ether, "Price should increase with utilization");
     }
 
@@ -178,9 +190,9 @@ contract MasterRegistryQueueTest is Test {
     }
 
     function test_calculateRentalCost_validDuration() public view {
-        uint256 cost7days = registry.calculateRentalCost(1, 7 days);
-        uint256 cost14days = registry.calculateRentalCost(1, 14 days);
-        uint256 cost30days = registry.calculateRentalCost(1, 30 days);
+        uint256 cost7days = queueManager.calculateRentalCost(1, 7 days);
+        uint256 cost14days = queueManager.calculateRentalCost(1, 14 days);
+        uint256 cost30days = queueManager.calculateRentalCost(1, 30 days);
 
         // 14 days should be ~2x 7 days (with discount)
         assertTrue(cost14days < cost7days * 2, "14 days should have 5% discount");
@@ -192,24 +204,24 @@ contract MasterRegistryQueueTest is Test {
 
     function test_calculateRentalCost_revertsOnTooShort() public {
         vm.expectRevert("Duration too short");
-        registry.calculateRentalCost(1, 6 days);
+        queueManager.calculateRentalCost(1, 6 days);
     }
 
     function test_calculateRentalCost_revertsOnTooLong() public {
         vm.expectRevert("Duration too long");
-        registry.calculateRentalCost(1, 366 days);
+        queueManager.calculateRentalCost(1, 366 days);
     }
 
     // ========== Rent Featured Position Tests ==========
 
     function test_rentFeaturedPosition_emptyQueue_success() public {
-        uint256 cost = registry.calculateRentalCost(1, 7 days);
+        uint256 cost = queueManager.calculateRentalCost(1, 7 days);
 
         vm.prank(alice);
-        registry.rentFeaturedPosition{value: cost}(instance1, 1, 7 days);
+        queueManager.rentFeaturedPosition{value: cost}(instance1, 1, 7 days);
 
         // Verify position
-        (IMasterRegistry.RentalSlot memory slot, uint256 position,,) = registry.getRentalInfo(instance1);
+        (IMasterRegistry.RentalSlot memory slot, uint256 position,,) = queueManager.getRentalInfo(instance1);
         assertEq(position, 1, "Should be at position 1");
         assertEq(slot.instance, instance1, "Instance should match");
         assertEq(slot.renter, alice, "Renter should be alice");
@@ -220,17 +232,17 @@ contract MasterRegistryQueueTest is Test {
     function test_rentFeaturedPosition_appendToBack() public {
         // Rent position 1
         vm.prank(alice);
-        uint256 cost1 = registry.calculateRentalCost(1, 7 days);
-        registry.rentFeaturedPosition{value: cost1}(instance1, 1, 7 days);
+        uint256 cost1 = queueManager.calculateRentalCost(1, 7 days);
+        queueManager.rentFeaturedPosition{value: cost1}(instance1, 1, 7 days);
 
         // Rent position 2
         vm.prank(bob);
-        uint256 cost2 = registry.calculateRentalCost(2, 7 days);
-        registry.rentFeaturedPosition{value: cost2}(instance2, 2, 7 days);
+        uint256 cost2 = queueManager.calculateRentalCost(2, 7 days);
+        queueManager.rentFeaturedPosition{value: cost2}(instance2, 2, 7 days);
 
         // Verify positions
-        (,uint256 pos1,,) = registry.getRentalInfo(instance1);
-        (,uint256 pos2,,) = registry.getRentalInfo(instance2);
+        (,uint256 pos1,,) = queueManager.getRentalInfo(instance1);
+        (,uint256 pos2,,) = queueManager.getRentalInfo(instance2);
 
         assertEq(pos1, 1, "Instance1 should be at position 1");
         assertEq(pos2, 2, "Instance2 should be at position 2");
@@ -239,20 +251,20 @@ contract MasterRegistryQueueTest is Test {
     function test_rentFeaturedPosition_insertInMiddle_shiftsDown() public {
         // Rent positions 1 and 2
         vm.prank(alice);
-        registry.rentFeaturedPosition{value: registry.calculateRentalCost(1, 7 days)}(instance1, 1, 7 days);
+        queueManager.rentFeaturedPosition{value: queueManager.calculateRentalCost(1, 7 days)}(instance1, 1, 7 days);
 
         vm.prank(bob);
-        registry.rentFeaturedPosition{value: registry.calculateRentalCost(2, 7 days)}(instance2, 2, 7 days);
+        queueManager.rentFeaturedPosition{value: queueManager.calculateRentalCost(2, 7 days)}(instance2, 2, 7 days);
 
         // Insert at position 1 - should shift both down
         vm.prank(charlie);
-        uint256 cost = registry.calculateRentalCost(1, 7 days);
-        registry.rentFeaturedPosition{value: cost}(instance3, 1, 7 days);
+        uint256 cost = queueManager.calculateRentalCost(1, 7 days);
+        queueManager.rentFeaturedPosition{value: cost}(instance3, 1, 7 days);
 
         // Verify positions after shift
-        (,uint256 pos1,,) = registry.getRentalInfo(instance1);
-        (,uint256 pos2,,) = registry.getRentalInfo(instance2);
-        (,uint256 pos3,,) = registry.getRentalInfo(instance3);
+        (,uint256 pos1,,) = queueManager.getRentalInfo(instance1);
+        (,uint256 pos2,,) = queueManager.getRentalInfo(instance2);
+        (,uint256 pos3,,) = queueManager.getRentalInfo(instance3);
 
         assertEq(pos3, 1, "Instance3 should be at position 1");
         assertEq(pos1, 2, "Instance1 shifted to position 2");
@@ -261,31 +273,31 @@ contract MasterRegistryQueueTest is Test {
 
     function test_rentFeaturedPosition_revertsOnAlreadyInQueue() public {
         vm.startPrank(alice);
-        uint256 cost = registry.calculateRentalCost(1, 7 days);
-        registry.rentFeaturedPosition{value: cost}(instance1, 1, 7 days);
+        uint256 cost = queueManager.calculateRentalCost(1, 7 days);
+        queueManager.rentFeaturedPosition{value: cost}(instance1, 1, 7 days);
 
         // Try to rent again
         vm.expectRevert("Already in queue - use bumpPosition instead");
-        registry.rentFeaturedPosition{value: cost}(instance1, 2, 7 days);
+        queueManager.rentFeaturedPosition{value: cost}(instance1, 2, 7 days);
         vm.stopPrank();
     }
 
     function test_rentFeaturedPosition_revertsOnInsufficientPayment() public {
-        uint256 cost = registry.calculateRentalCost(1, 7 days);
+        uint256 cost = queueManager.calculateRentalCost(1, 7 days);
 
         vm.prank(alice);
         vm.expectRevert("Insufficient payment");
-        registry.rentFeaturedPosition{value: cost - 1}(instance1, 1, 7 days);
+        queueManager.rentFeaturedPosition{value: cost - 1}(instance1, 1, 7 days);
     }
 
     function test_rentFeaturedPosition_refundsExcess() public {
-        uint256 cost = registry.calculateRentalCost(1, 7 days);
+        uint256 cost = queueManager.calculateRentalCost(1, 7 days);
         uint256 excess = 1 ether;
 
         uint256 balanceBefore = alice.balance;
 
         vm.prank(alice);
-        registry.rentFeaturedPosition{value: cost + excess}(instance1, 1, 7 days);
+        queueManager.rentFeaturedPosition{value: cost + excess}(instance1, 1, 7 days);
 
         uint256 balanceAfter = alice.balance;
         assertEq(balanceBefore - balanceAfter, cost, "Should refund excess");
@@ -295,27 +307,27 @@ contract MasterRegistryQueueTest is Test {
 
     function test_bumpPosition_shiftsQueueCorrectly() public {
         // Setup: Rent 3 positions
-        uint256 cost1 = registry.calculateRentalCost(1, 7 days);
+        uint256 cost1 = queueManager.calculateRentalCost(1, 7 days);
         vm.prank(alice);
-        registry.rentFeaturedPosition{value: cost1}(instance1, 1, 7 days);
+        queueManager.rentFeaturedPosition{value: cost1}(instance1, 1, 7 days);
 
-        uint256 cost2 = registry.calculateRentalCost(2, 7 days);
+        uint256 cost2 = queueManager.calculateRentalCost(2, 7 days);
         vm.prank(bob);
-        registry.rentFeaturedPosition{value: cost2}(instance2, 2, 7 days);
+        queueManager.rentFeaturedPosition{value: cost2}(instance2, 2, 7 days);
 
-        uint256 cost3 = registry.calculateRentalCost(3, 7 days);
+        uint256 cost3 = queueManager.calculateRentalCost(3, 7 days);
         vm.prank(charlie);
-        registry.rentFeaturedPosition{value: cost3}(instance3, 3, 7 days);
+        queueManager.rentFeaturedPosition{value: cost3}(instance3, 3, 7 days);
 
         // Charlie bumps from position 3 to position 1
         uint256 bumpCost = 0.01 ether; // Sufficient for bump
         vm.prank(charlie);
-        registry.bumpPosition{value: bumpCost}(instance3, 1, 0);
+        queueManager.bumpPosition{value: bumpCost}(instance3, 1, 0);
 
         // Verify new positions
-        (,uint256 pos1,,) = registry.getRentalInfo(instance1);
-        (,uint256 pos2,,) = registry.getRentalInfo(instance2);
-        (,uint256 pos3,,) = registry.getRentalInfo(instance3);
+        (,uint256 pos1,,) = queueManager.getRentalInfo(instance1);
+        (,uint256 pos2,,) = queueManager.getRentalInfo(instance2);
+        (,uint256 pos3,,) = queueManager.getRentalInfo(instance3);
 
         assertEq(pos3, 1, "Instance3 bumped to position 1");
         assertEq(pos1, 2, "Instance1 shifted to position 2");
@@ -325,28 +337,28 @@ contract MasterRegistryQueueTest is Test {
     function test_bumpPosition_firstPosition_noShift() public {
         // Rent position 1
         vm.prank(alice);
-        registry.rentFeaturedPosition{value: registry.calculateRentalCost(1, 7 days)}(instance1, 1, 7 days);
+        queueManager.rentFeaturedPosition{value: queueManager.calculateRentalCost(1, 7 days)}(instance1, 1, 7 days);
 
         // Try to bump to position 1 (already there)
         vm.prank(alice);
         vm.expectRevert("Invalid target position");
-        registry.bumpPosition{value: 0.01 ether}(instance1, 1, 0);
+        queueManager.bumpPosition{value: 0.01 ether}(instance1, 1, 0);
     }
 
     function test_bumpPosition_withAdditionalDuration() public {
         // Setup
-        uint256 cost2 = registry.calculateRentalCost(2, 7 days);
+        uint256 cost2 = queueManager.calculateRentalCost(2, 7 days);
         vm.prank(alice);
-        registry.rentFeaturedPosition{value: cost2}(instance1, 2, 7 days);
+        queueManager.rentFeaturedPosition{value: cost2}(instance1, 2, 7 days);
 
         // Bump with additional 7 days
-        (IMasterRegistry.RentalSlot memory slotBefore,,,) = registry.getRentalInfo(instance1);
+        (IMasterRegistry.RentalSlot memory slotBefore,,,) = queueManager.getRentalInfo(instance1);
 
         uint256 bumpCost = 0.05 ether;
         vm.prank(alice);
-        registry.bumpPosition{value: bumpCost}(instance1, 1, 7 days);
+        queueManager.bumpPosition{value: bumpCost}(instance1, 1, 7 days);
 
-        (IMasterRegistry.RentalSlot memory slotAfter,,,) = registry.getRentalInfo(instance1);
+        (IMasterRegistry.RentalSlot memory slotAfter,,,) = queueManager.getRentalInfo(instance1);
 
         assertGt(slotAfter.expiresAt, slotBefore.expiresAt, "Expiration should be extended");
     }
@@ -354,89 +366,89 @@ contract MasterRegistryQueueTest is Test {
     function test_bumpPosition_revertsOnNotInQueue() public {
         vm.prank(alice);
         vm.expectRevert("Not in queue");
-        registry.bumpPosition{value: 0.01 ether}(instance1, 1, 0);
+        queueManager.bumpPosition{value: 0.01 ether}(instance1, 1, 0);
     }
 
     function test_bumpPosition_revertsOnNotYourRental() public {
         // Alice rents position 2
         vm.prank(alice);
-        registry.rentFeaturedPosition{value: registry.calculateRentalCost(2, 7 days)}(instance1, 2, 7 days);
+        queueManager.rentFeaturedPosition{value: queueManager.calculateRentalCost(2, 7 days)}(instance1, 2, 7 days);
 
         // Bob tries to bump Alice's rental
         vm.prank(bob);
         vm.expectRevert("Not your rental");
-        registry.bumpPosition{value: 0.01 ether}(instance1, 1, 0);
+        queueManager.bumpPosition{value: 0.01 ether}(instance1, 1, 0);
     }
 
     function test_bumpPosition_revertsOnExpiredRental() public {
         // Rent and wait for expiration
-        uint256 cost = registry.calculateRentalCost(2, 7 days);
+        uint256 cost = queueManager.calculateRentalCost(2, 7 days);
         vm.prank(alice);
-        registry.rentFeaturedPosition{value: cost}(instance1, 2, 7 days);
+        queueManager.rentFeaturedPosition{value: cost}(instance1, 2, 7 days);
 
         vm.warp(block.timestamp + 8 days);
 
         vm.prank(alice);
         vm.expectRevert("Rental expired");
-        registry.bumpPosition{value: 0.01 ether}(instance1, 1, 0);
+        queueManager.bumpPosition{value: 0.01 ether}(instance1, 1, 0);
     }
 
     // ========== Renew Position Tests ==========
 
     function test_renewPosition_extendsExpiration() public {
         // Rent position
-        uint256 cost = registry.calculateRentalCost(1, 7 days);
+        uint256 cost = queueManager.calculateRentalCost(1, 7 days);
         vm.prank(alice);
-        registry.rentFeaturedPosition{value: cost}(instance1, 1, 7 days);
+        queueManager.rentFeaturedPosition{value: cost}(instance1, 1, 7 days);
 
-        (IMasterRegistry.RentalSlot memory slotBefore,,,) = registry.getRentalInfo(instance1);
+        (IMasterRegistry.RentalSlot memory slotBefore,,,) = queueManager.getRentalInfo(instance1);
 
         // Renew for additional 7 days
         uint256 renewalCost = 0.01 ether;
         vm.prank(alice);
-        registry.renewPosition{value: renewalCost}(instance1, 7 days);
+        queueManager.renewPosition{value: renewalCost}(instance1, 7 days);
 
-        (IMasterRegistry.RentalSlot memory slotAfter,,,) = registry.getRentalInfo(instance1);
+        (IMasterRegistry.RentalSlot memory slotAfter,,,) = queueManager.getRentalInfo(instance1);
 
         assertEq(slotAfter.expiresAt, slotBefore.expiresAt + 7 days, "Should extend by 7 days");
     }
 
     function test_renewPosition_appliesDiscount() public {
         // Rent position
-        uint256 initialCost = registry.calculateRentalCost(1, 7 days);
+        uint256 initialCost = queueManager.calculateRentalCost(1, 7 days);
         vm.prank(alice);
-        registry.rentFeaturedPosition{value: initialCost}(instance1, 1, 7 days);
+        queueManager.rentFeaturedPosition{value: initialCost}(instance1, 1, 7 days);
 
         // Calculate expected renewal cost (90% of base = 10% discount)
-        uint256 basePrice = registry.getPositionRentalPrice(1);
+        uint256 basePrice = queueManager.getPositionRentalPrice(1);
         uint256 expectedRenewalCost = (basePrice * 90) / 100;
 
         // Renew (should cost less than initial)
         vm.prank(alice);
-        registry.renewPosition{value: expectedRenewalCost}(instance1, 7 days);
+        queueManager.renewPosition{value: expectedRenewalCost}(instance1, 7 days);
 
         // Verify renewal was accepted (no revert)
-        (IMasterRegistry.RentalSlot memory slot,,,) = registry.getRentalInfo(instance1);
+        (IMasterRegistry.RentalSlot memory slot,,,) = queueManager.getRentalInfo(instance1);
         assertTrue(slot.active, "Rental should still be active");
     }
 
     function test_renewPosition_revertsOnNotRenter() public {
         vm.prank(alice);
-        registry.rentFeaturedPosition{value: registry.calculateRentalCost(1, 7 days)}(instance1, 1, 7 days);
+        queueManager.rentFeaturedPosition{value: queueManager.calculateRentalCost(1, 7 days)}(instance1, 1, 7 days);
 
         vm.prank(bob);
         vm.expectRevert("Not the renter");
-        registry.renewPosition{value: 0.01 ether}(instance1, 7 days);
+        queueManager.renewPosition{value: 0.01 ether}(instance1, 7 days);
     }
 
     function test_renewPosition_revertsOnTooShortDuration() public {
-        uint256 cost = registry.calculateRentalCost(1, 7 days);
+        uint256 cost = queueManager.calculateRentalCost(1, 7 days);
         vm.prank(alice);
-        registry.rentFeaturedPosition{value: cost}(instance1, 1, 7 days);
+        queueManager.rentFeaturedPosition{value: cost}(instance1, 1, 7 days);
 
         vm.prank(alice);
         vm.expectRevert("Duration too short");
-        registry.renewPosition{value: 0.01 ether}(instance1, 1 days);
+        queueManager.renewPosition{value: 0.01 ether}(instance1, 1 days);
     }
 
     // ========== Cleanup Tests ==========
@@ -444,20 +456,20 @@ contract MasterRegistryQueueTest is Test {
     function test_cleanupExpiredRentals_marksInactive() public {
         // Rent positions
         vm.prank(alice);
-        registry.rentFeaturedPosition{value: registry.calculateRentalCost(1, 7 days)}(instance1, 1, 7 days);
+        queueManager.rentFeaturedPosition{value: queueManager.calculateRentalCost(1, 7 days)}(instance1, 1, 7 days);
 
         vm.prank(bob);
-        registry.rentFeaturedPosition{value: registry.calculateRentalCost(2, 7 days)}(instance2, 2, 7 days);
+        queueManager.rentFeaturedPosition{value: queueManager.calculateRentalCost(2, 7 days)}(instance2, 2, 7 days);
 
         // Wait for expiration
         vm.warp(block.timestamp + 8 days);
 
         // Cleanup
-        registry.cleanupExpiredRentals(10);
+        queueManager.cleanupExpiredRentals(10);
 
         // Verify instances removed from queue
-        (,uint256 pos1,,) = registry.getRentalInfo(instance1);
-        (,uint256 pos2,,) = registry.getRentalInfo(instance2);
+        (,uint256 pos1,,) = queueManager.getRentalInfo(instance1);
+        (,uint256 pos2,,) = queueManager.getRentalInfo(instance2);
 
         assertEq(pos1, 0, "Instance1 should be removed");
         assertEq(pos2, 0, "Instance2 should be removed");
@@ -466,14 +478,14 @@ contract MasterRegistryQueueTest is Test {
     function test_cleanupExpiredRentals_paysReward() public {
         // Rent and expire
         vm.prank(alice);
-        registry.rentFeaturedPosition{value: registry.calculateRentalCost(1, 7 days)}(instance1, 1, 7 days);
+        queueManager.rentFeaturedPosition{value: queueManager.calculateRentalCost(1, 7 days)}(instance1, 1, 7 days);
 
         vm.warp(block.timestamp + 8 days);
 
         uint256 balanceBefore = bob.balance;
 
         vm.prank(bob);
-        registry.cleanupExpiredRentals(10);
+        queueManager.cleanupExpiredRentals(10);
 
         uint256 balanceAfter = bob.balance;
         assertGt(balanceAfter, balanceBefore, "Should receive cleanup reward");
@@ -482,23 +494,23 @@ contract MasterRegistryQueueTest is Test {
     function test_cleanupExpiredRentals_compactsQueue() public {
         // Rent 3 positions
         vm.prank(alice);
-        registry.rentFeaturedPosition{value: registry.calculateRentalCost(1, 7 days)}(instance1, 1, 7 days);
+        queueManager.rentFeaturedPosition{value: queueManager.calculateRentalCost(1, 7 days)}(instance1, 1, 7 days);
 
         vm.prank(bob);
-        registry.rentFeaturedPosition{value: registry.calculateRentalCost(2, 7 days)}(instance2, 2, 7 days);
+        queueManager.rentFeaturedPosition{value: queueManager.calculateRentalCost(2, 7 days)}(instance2, 2, 7 days);
 
         vm.prank(charlie);
-        registry.rentFeaturedPosition{value: registry.calculateRentalCost(3, 7 days)}(instance3, 3, 7 days);
+        queueManager.rentFeaturedPosition{value: queueManager.calculateRentalCost(3, 7 days)}(instance3, 3, 7 days);
 
         // Expire all
         vm.warp(block.timestamp + 8 days);
 
-        registry.cleanupExpiredRentals(10);
+        queueManager.cleanupExpiredRentals(10);
 
         // Verify queue is empty by checking all instances are removed
-        (,uint256 pos1,,) = registry.getRentalInfo(instance1);
-        (,uint256 pos2,,) = registry.getRentalInfo(instance2);
-        (,uint256 pos3,,) = registry.getRentalInfo(instance3);
+        (,uint256 pos1,,) = queueManager.getRentalInfo(instance1);
+        (,uint256 pos2,,) = queueManager.getRentalInfo(instance2);
+        (,uint256 pos3,,) = queueManager.getRentalInfo(instance3);
 
         assertEq(pos1, 0, "Instance1 should be removed");
         assertEq(pos2, 0, "Instance2 should be removed");
@@ -509,30 +521,30 @@ contract MasterRegistryQueueTest is Test {
 
     function test_depositForAutoRenewal_success() public {
         vm.prank(alice);
-        registry.rentFeaturedPosition{value: registry.calculateRentalCost(1, 7 days)}(instance1, 1, 7 days);
+        queueManager.rentFeaturedPosition{value: queueManager.calculateRentalCost(1, 7 days)}(instance1, 1, 7 days);
 
         vm.prank(alice);
-        registry.depositForAutoRenewal{value: 1 ether}(instance1);
+        queueManager.depositForAutoRenewal{value: 1 ether}(instance1);
 
-        (,,uint256 deposit,) = registry.getRentalInfo(instance1);
+        (,,uint256 deposit,) = queueManager.getRentalInfo(instance1);
         assertEq(deposit, 1 ether, "Deposit should be stored");
     }
 
     function test_autoRenewal_renewsOnExpiration() public {
         // Rent and deposit for auto-renewal
         vm.startPrank(alice);
-        registry.rentFeaturedPosition{value: registry.calculateRentalCost(1, 7 days)}(instance1, 1, 7 days);
-        registry.depositForAutoRenewal{value: 1 ether}(instance1);
+        queueManager.rentFeaturedPosition{value: queueManager.calculateRentalCost(1, 7 days)}(instance1, 1, 7 days);
+        queueManager.depositForAutoRenewal{value: 1 ether}(instance1);
         vm.stopPrank();
 
-        (IMasterRegistry.RentalSlot memory slotBefore,,,) = registry.getRentalInfo(instance1);
+        (IMasterRegistry.RentalSlot memory slotBefore,,,) = queueManager.getRentalInfo(instance1);
 
         // Wait for expiration and cleanup (triggers auto-renewal)
         vm.warp(block.timestamp + 8 days);
-        registry.cleanupExpiredRentals(10);
+        queueManager.cleanupExpiredRentals(10);
 
         // Should still be active due to auto-renewal
-        (IMasterRegistry.RentalSlot memory slotAfter, uint256 position, uint256 depositAfter,) = registry.getRentalInfo(instance1);
+        (IMasterRegistry.RentalSlot memory slotAfter, uint256 position, uint256 depositAfter,) = queueManager.getRentalInfo(instance1);
 
         assertEq(position, 1, "Should still be in position 1");
         assertTrue(slotAfter.active, "Should still be active");
@@ -542,11 +554,11 @@ contract MasterRegistryQueueTest is Test {
 
     function test_withdrawRenewalDeposit_success() public {
         vm.startPrank(alice);
-        registry.rentFeaturedPosition{value: registry.calculateRentalCost(1, 7 days)}(instance1, 1, 7 days);
-        registry.depositForAutoRenewal{value: 1 ether}(instance1);
+        queueManager.rentFeaturedPosition{value: queueManager.calculateRentalCost(1, 7 days)}(instance1, 1, 7 days);
+        queueManager.depositForAutoRenewal{value: 1 ether}(instance1);
 
         uint256 balanceBefore = alice.balance;
-        registry.withdrawRenewalDeposit(instance1);
+        queueManager.withdrawRenewalDeposit(instance1);
         uint256 balanceAfter = alice.balance;
 
         assertEq(balanceAfter - balanceBefore, 1 ether, "Should withdraw full deposit");
@@ -566,11 +578,11 @@ contract MasterRegistryQueueTest is Test {
 
             vm.deal(renter, 10 ether);
             vm.prank(renter);
-            uint256 cost = registry.calculateRentalCost(i + 1, 7 days);
-            registry.rentFeaturedPosition{value: cost}(testInstance, i + 1, 7 days);
+            uint256 cost = queueManager.calculateRentalCost(i + 1, 7 days);
+            queueManager.rentFeaturedPosition{value: cost}(testInstance, i + 1, 7 days);
         }
 
-        (,uint256 total) = registry.getFeaturedInstances(0, 10);
+        (,uint256 total) = queueManager.getFeaturedInstances(0, 10);
         assertEq(total, 10, "Queue should have 10 rentals");
     }
 
@@ -581,12 +593,12 @@ contract MasterRegistryQueueTest is Test {
 
         for (uint256 i = 0; i < 5; i++) {
             vm.prank(renters[i]);
-            uint256 cost = registry.calculateRentalCost(i + 1, 7 days);
-            registry.rentFeaturedPosition{value: cost}(instances[i], i + 1, 7 days);
+            uint256 cost = queueManager.calculateRentalCost(i + 1, 7 days);
+            queueManager.rentFeaturedPosition{value: cost}(instances[i], i + 1, 7 days);
         }
 
         // Get first 3
-        (address[] memory first3, uint256 total) = registry.getFeaturedInstances(0, 3);
+        (address[] memory first3, uint256 total) = queueManager.getFeaturedInstances(0, 3);
         assertEq(first3.length, 3, "Should return 3 instances");
         assertEq(total, 5, "Total should be 5");
         assertEq(first3[0], instance1, "First should be instance1");
@@ -596,7 +608,7 @@ contract MasterRegistryQueueTest is Test {
 
     function test_queueUtilization_metrics() public {
         // Empty queue
-        (uint256 util0, uint256 price0, uint256 len0,) = registry.getQueueUtilization();
+        (uint256 util0, uint256 price0, uint256 len0,) = queueManager.getQueueUtilization();
         assertEq(util0, 0, "Utilization should be 0");
         assertEq(len0, 0, "Length should be 0");
 
@@ -610,11 +622,11 @@ contract MasterRegistryQueueTest is Test {
 
             vm.deal(renter, 10 ether);
             vm.prank(renter);
-            uint256 cost = registry.calculateRentalCost(i + 1, 7 days);
-            registry.rentFeaturedPosition{value: cost}(testInstance, i + 1, 7 days);
+            uint256 cost = queueManager.calculateRentalCost(i + 1, 7 days);
+            queueManager.rentFeaturedPosition{value: cost}(testInstance, i + 1, 7 days);
         }
 
-        (uint256 util25, uint256 price25, uint256 len25, uint256 max25) = registry.getQueueUtilization();
+        (uint256 util25, uint256 price25, uint256 len25, uint256 max25) = queueManager.getQueueUtilization();
         assertEq(len25, 25, "Length should be 25");
         assertEq(max25, 100, "Max should be 100");
         assertEq(util25, 2500, "Utilization should be 2500 bps (25%)");
