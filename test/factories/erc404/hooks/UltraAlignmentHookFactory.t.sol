@@ -93,7 +93,8 @@ contract UltraAlignmentHookFactoryTest is Test {
             address(vault),
             wethAddr,
             hookCreator,
-            true
+            true,
+            bytes32(0)
         );
     }
 
@@ -106,7 +107,8 @@ contract UltraAlignmentHookFactoryTest is Test {
             address(0),
             wethAddr,
             hookCreator,
-            true
+            true,
+            bytes32(0)
         );
     }
 
@@ -119,7 +121,8 @@ contract UltraAlignmentHookFactoryTest is Test {
             address(vault),
             address(0),
             hookCreator,
-            true
+            true,
+            bytes32(0)
         );
     }
 
@@ -132,7 +135,8 @@ contract UltraAlignmentHookFactoryTest is Test {
             address(vault),
             wethAddr,
             address(0),
-            true
+            true,
+            bytes32(0)
         );
     }
 
@@ -148,7 +152,8 @@ contract UltraAlignmentHookFactoryTest is Test {
             address(vault),
             wethAddr,
             hookCreator,
-            true
+            true,
+            bytes32(0)
         );
     }
 
@@ -161,7 +166,8 @@ contract UltraAlignmentHookFactoryTest is Test {
             address(vault),
             wethAddr,
             hookCreator,
-            true
+            true,
+            bytes32(0)
         );
     }
 

@@ -108,7 +108,8 @@ contract ERC404FactoryTest is Test {
             defaultTierConfig,
             creator1,
             address(0), // No vault for this test
-            "" // styleUri
+            "", // styleUri
+            bytes32(0) // hookSalt
         );
 
         assertTrue(instance != address(0), "Instance should be created");
@@ -134,7 +135,8 @@ contract ERC404FactoryTest is Test {
             defaultTierConfig,
             creator1,
             address(0),
-            "" // styleUri
+            "", // styleUri
+            bytes32(0) // hookSalt
         );
 
         assertEq(hook, address(0), "Hook should be address(0) when vault is address(0)");
@@ -157,7 +159,8 @@ contract ERC404FactoryTest is Test {
             defaultTierConfig,
             creator1,
             address(0),
-            "" // styleUri
+            "", // styleUri
+            bytes32(0) // hookSalt
         );
 
         vm.stopPrank();
@@ -178,7 +181,8 @@ contract ERC404FactoryTest is Test {
             defaultTierConfig,
             creator1,
             address(0),
-            "" // styleUri
+            "", // styleUri
+            bytes32(0) // hookSalt
         );
 
         vm.stopPrank();
@@ -199,7 +203,8 @@ contract ERC404FactoryTest is Test {
             defaultTierConfig,
             creator1,
             address(0),
-            "" // styleUri
+            "", // styleUri
+            bytes32(0) // hookSalt
         );
 
         vm.stopPrank();
@@ -220,7 +225,8 @@ contract ERC404FactoryTest is Test {
             defaultTierConfig,
             creator1,
             address(0),
-            "" // styleUri
+            "", // styleUri
+            bytes32(0) // hookSalt
         );
 
         vm.stopPrank();
@@ -241,7 +247,8 @@ contract ERC404FactoryTest is Test {
             defaultTierConfig,
             address(0),  // Invalid creator
             address(0),
-            "" // styleUri
+            "", // styleUri
+            bytes32(0) // hookSalt
         );
 
         vm.stopPrank();
@@ -275,7 +282,8 @@ contract ERC404FactoryTest is Test {
             defaultTierConfig,
             creator1,
             address(0),
-            "" // styleUri
+            "", // styleUri
+            bytes32(0) // hookSalt
         );
 
         vm.stopPrank();
@@ -309,7 +317,8 @@ contract ERC404FactoryTest is Test {
             defaultTierConfig,
             creator1,
             address(0),
-            "" // styleUri
+            "", // styleUri
+            bytes32(0) // hookSalt
         );
 
         vm.stopPrank();
@@ -430,7 +439,8 @@ contract ERC404FactoryTest is Test {
             defaultTierConfig,
             creator1,
             address(0),
-            "" // styleUri
+            "", // styleUri
+            bytes32(0) // hookSalt
         );
 
         assertTrue(instance != address(0), "Instance with custom params should be created");
@@ -452,7 +462,8 @@ contract ERC404FactoryTest is Test {
             defaultTierConfig,
             creator1,
             address(0),
-            "" // styleUri
+            "", // styleUri
+            bytes32(0) // hookSalt
         );
 
         assertTrue(instance != address(0), "Instance with minimal supply should be created");
@@ -474,7 +485,8 @@ contract ERC404FactoryTest is Test {
             defaultTierConfig,
             creator1,
             address(0),
-            "" // styleUri
+            "", // styleUri
+            bytes32(0) // hookSalt
         );
 
         assertTrue(instance != address(0), "Instance with max reserve should be created");
@@ -505,7 +517,8 @@ contract ERC404FactoryTest is Test {
             defaultTierConfig,
             creator1,
             address(0),
-            "" // styleUri
+            "", // styleUri
+            bytes32(0) // hookSalt
         );
 
         uint256 balanceAfter = creator1.balance;
@@ -536,7 +549,8 @@ contract ERC404FactoryTest is Test {
             defaultTierConfig,
             creator1,
             address(0),
-            "" // styleUri
+            "", // styleUri
+            bytes32(0) // hookSalt
         );
 
         vm.stopPrank();
@@ -553,7 +567,8 @@ contract ERC404FactoryTest is Test {
             defaultTierConfig,
             creator2,
             address(0),
-            "" // styleUri
+            "", // styleUri
+            bytes32(0) // hookSalt
         );
 
         vm.stopPrank();
@@ -580,7 +595,8 @@ contract ERC404FactoryTest is Test {
             defaultTierConfig,
             creator1,
             address(0),
-            "" // styleUri
+            "", // styleUri
+            bytes32(0) // hookSalt
         );
 
         vm.stopPrank();
@@ -609,7 +625,8 @@ contract ERC404FactoryTest is Test {
             defaultTierConfig,
             creator1,
             address(0),
-            "" // styleUri
+            "", // styleUri
+            bytes32(0) // hookSalt
         );
 
         assertTrue(instance1 != address(0), "First instance should be created");
@@ -625,7 +642,8 @@ contract ERC404FactoryTest is Test {
             defaultTierConfig,
             creator1,
             address(0),
-            "" // styleUri
+            "", // styleUri
+            bytes32(0) // hookSalt
         );
 
         assertTrue(instance2 != address(0), "Second instance should also be created");
@@ -660,7 +678,8 @@ contract ERC404FactoryTest is Test {
             defaultTierConfig,
             creator2,  // Different creator
             address(0),
-            "" // styleUri
+            "", // styleUri
+            bytes32(0) // hookSalt
         );
 
         assertTrue(instance != address(0), "Instance should be created with different creator");

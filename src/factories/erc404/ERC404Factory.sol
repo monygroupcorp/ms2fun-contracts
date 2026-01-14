@@ -72,6 +72,7 @@ contract ERC404Factory is Ownable, ReentrancyGuard {
      * @param creator Creator address (will be owner)
      * @param vault Optional vault address for hook (if address(0), no hook is created)
      * @param styleUri Style URI (ipfs://, ar://, https://, or inline:css:/inline:js:)
+     * @param hookSalt Salt for CREATE2 hook deployment (frontend computes valid salt for hook permissions)
      * @return instance Address of the created ERC404 instance
      * @return hook Address of the created hook (address(0) if no vault provided)
      */
@@ -85,7 +86,8 @@ contract ERC404Factory is Ownable, ReentrancyGuard {
         ERC404BondingInstance.TierConfig memory tierConfig,
         address creator,
         address vault,
-        string memory styleUri
+        string memory styleUri,
+        bytes32 hookSalt
     ) external payable nonReentrant returns (address instance, address hook) {
         require(msg.value >= instanceCreationFee, "Insufficient fee");
         require(bytes(name).length > 0, "Invalid name");
@@ -121,7 +123,7 @@ contract ERC404Factory is Ownable, ReentrancyGuard {
             require(msg.value >= instanceCreationFee + hookFee, "Insufficient fee for hook");
             
             // Create hook with project instance tracking for contribution metrics
-            hook = hookFactory.createHook{value: hookFee}(v4PoolManager, vault, weth, creator, true);
+            hook = hookFactory.createHook{value: hookFee}(v4PoolManager, vault, weth, creator, true, hookSalt);
             instanceToHook[instance] = hook;
             
             // Set hook in instance

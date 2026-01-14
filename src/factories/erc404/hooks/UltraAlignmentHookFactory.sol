@@ -44,6 +44,7 @@ contract UltraAlignmentHookFactory is Ownable, ReentrancyGuard {
      * @param wethAddr Address of WETH for validation
      * @param creator Address of the hook creator/owner
      * @param isCanonical Whether this is a canonical vault hook (true) or independent hook (false)
+     * @param salt Salt for CREATE2 deployment (frontend computes valid salt for hook permissions)
      * @return hook Address of the created hook instance
      */
     function createHook(
@@ -51,7 +52,8 @@ contract UltraAlignmentHookFactory is Ownable, ReentrancyGuard {
         address vault,
         address wethAddr,
         address creator,
-        bool isCanonical
+        bool isCanonical,
+        bytes32 salt
     ) external payable nonReentrant returns (address hook) {
         require(msg.value >= hookCreationFee, "Insufficient fee");
         require(poolManager != address(0), "Invalid pool manager");
@@ -59,8 +61,8 @@ contract UltraAlignmentHookFactory is Ownable, ReentrancyGuard {
         require(wethAddr != address(0), "Invalid WETH");
         require(creator != address(0), "Invalid creator");
 
-        // Deploy new hook instance
-        hook = address(new UltraAlignmentV4Hook(
+        // Deploy new hook instance using CREATE2 for deterministic address
+        hook = address(new UltraAlignmentV4Hook{salt: salt}(
             IPoolManager(poolManager),
             UltraAlignmentVault(payable(vault)),
             wethAddr,
