@@ -19,8 +19,8 @@ abstract contract GlobalMessagingTestBase is Test {
      * @dev Call this in setUp() after deploying MasterRegistry
      */
     function _setUpGlobalMessaging(address masterRegistry) internal {
-        // Deploy global registry
-        globalRegistry = new GlobalMessageRegistry(address(this));
+        // Deploy global registry with owner and master registry
+        globalRegistry = new GlobalMessageRegistry(address(this), masterRegistry);
 
         // Set in master registry
         (bool success,) = masterRegistry.call(

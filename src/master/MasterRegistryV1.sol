@@ -329,11 +329,6 @@ contract MasterRegistryV1 is UUPSUpgradeable, Ownable, ReentrancyGuard, IMasterR
             vaultInfo[vault].instanceCount++;
         }
 
-        // Authorize instance in global message registry (if set)
-        if (globalMessageRegistry != address(0)) {
-            GlobalMessageRegistry(globalMessageRegistry).authorizeInstance(instance);
-        }
-
         emit InstanceRegistered(instance, factory, creator, name);
         emit CreatorInstanceAdded(creator, instance);
     }
@@ -382,6 +377,18 @@ contract MasterRegistryV1 is UUPSUpgradeable, Ownable, ReentrancyGuard, IMasterR
      */
     function isFactoryRegistered(address factory) external view returns (bool) {
         return registeredFactories[factory];
+    }
+
+    /**
+     * @notice Check if an instance was created by an approved factory
+     * @dev Used by GlobalMessageRegistry to auto-authorize instances
+     * @param instance Instance address to check
+     * @return True if instance was created by a registered factory
+     */
+    function isInstanceFromApprovedFactory(address instance) external view override returns (bool) {
+        IMasterRegistry.InstanceInfo storage info = instanceInfo[instance];
+        // Instance must exist and its factory must be registered
+        return info.instance != address(0) && registeredFactories[info.factory];
     }
 
     /**

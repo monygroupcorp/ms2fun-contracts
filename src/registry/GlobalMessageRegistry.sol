@@ -3,11 +3,13 @@ pragma solidity ^0.8.24;
 
 import { Ownable } from "solady/auth/Ownable.sol";
 import { GlobalMessagePacking } from "../libraries/GlobalMessagePacking.sol";
+import { IMasterRegistry } from "../master/interfaces/IMasterRegistry.sol";
 
 /**
  * @title GlobalMessageRegistry
  * @notice Centralized registry for all protocol messages across instances
  * @dev Enables protocol-wide activity tracking and discovery in a single RPC call
+ *      Authorization is automatic: any instance created by an approved factory can post messages
  */
 contract GlobalMessageRegistry is Ownable {
     using GlobalMessagePacking for uint256;
@@ -33,8 +35,8 @@ contract GlobalMessageRegistry is Ownable {
     /// @notice Index mapping instance => array of message IDs
     mapping(address => uint256[]) private instanceMessageIds;
 
-    /// @notice Authorization mapping - only authorized instances can write
-    mapping(address => bool) public authorizedInstances;
+    /// @notice MasterRegistry for factory parentage verification
+    IMasterRegistry public masterRegistry;
 
     // ┌─────────────────────────┐
     // │         Events          │
@@ -50,16 +52,17 @@ contract GlobalMessageRegistry is Ownable {
         uint256 timestamp
     );
 
-    event InstanceAuthorized(address indexed instance);
-    event InstanceRevoked(address indexed instance);
+    event MasterRegistrySet(address indexed masterRegistry);
 
     // ┌─────────────────────────┐
     // │      Constructor        │
     // └─────────────────────────┘
 
-    constructor(address _owner) {
+    constructor(address _owner, address _masterRegistry) {
         require(_owner != address(0), "Invalid owner");
+        require(_masterRegistry != address(0), "Invalid master registry");
         _initializeOwner(_owner);
+        masterRegistry = IMasterRegistry(_masterRegistry);
     }
 
     // ┌─────────────────────────┐
@@ -68,7 +71,7 @@ contract GlobalMessageRegistry is Ownable {
 
     /**
      * @notice Add a message to the global registry
-     * @dev Only callable by authorized instances
+     * @dev Only callable by instances from approved factories (auto-authorized)
      * @param instance Instance address emitting the message
      * @param sender User who performed the action
      * @param packedData Packed metadata (use GlobalMessagePacking.pack())
@@ -81,7 +84,11 @@ contract GlobalMessageRegistry is Ownable {
         uint256 packedData,
         string calldata message
     ) external returns (uint256 messageId) {
-        require(authorizedInstances[msg.sender], "Not authorized");
+        // Auto-authorize: check if caller is from an approved factory
+        require(
+            masterRegistry.isInstanceFromApprovedFactory(msg.sender),
+            "Not from approved factory"
+        );
         require(instance != address(0), "Invalid instance");
         require(sender != address(0), "Invalid sender");
 
@@ -113,41 +120,28 @@ contract GlobalMessageRegistry is Ownable {
     }
 
     // ┌─────────────────────────┐
-    // │   Authorization         │
+    // │   Configuration         │
     // └─────────────────────────┘
 
     /**
-     * @notice Authorize an instance to write messages
-     * @dev Only owner can authorize instances
-     * @param instance Instance address to authorize
+     * @notice Set master registry address
+     * @dev Only owner can set the master registry
+     * @param _masterRegistry New master registry address
      */
-    function authorizeInstance(address instance) external onlyOwner {
-        require(instance != address(0), "Invalid instance");
-        require(!authorizedInstances[instance], "Already authorized");
-
-        authorizedInstances[instance] = true;
-        emit InstanceAuthorized(instance);
+    function setMasterRegistry(address _masterRegistry) external onlyOwner {
+        require(_masterRegistry != address(0), "Invalid master registry");
+        masterRegistry = IMasterRegistry(_masterRegistry);
+        emit MasterRegistrySet(_masterRegistry);
     }
 
     /**
-     * @notice Revoke an instance's authorization
-     * @dev Only owner can revoke instances
-     * @param instance Instance address to revoke
-     */
-    function revokeInstance(address instance) external onlyOwner {
-        require(authorizedInstances[instance], "Not authorized");
-
-        authorizedInstances[instance] = false;
-        emit InstanceRevoked(instance);
-    }
-
-    /**
-     * @notice Check if an instance is authorized
+     * @notice Check if an instance is authorized to post messages
+     * @dev Checks factory parentage via MasterRegistry (auto-authorization)
      * @param instance Instance address to check
      * @return authorized Whether instance is authorized
      */
     function isAuthorized(address instance) external view returns (bool authorized) {
-        return authorizedInstances[instance];
+        return masterRegistry.isInstanceFromApprovedFactory(instance);
     }
 
     // ┌─────────────────────────┐

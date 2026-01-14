@@ -222,5 +222,8 @@ interface IMasterRegistry {
 
     // Global Messaging
     function getGlobalMessageRegistry() external view returns (address);
+
+    // Factory Authorization
+    function isInstanceFromApprovedFactory(address instance) external view returns (bool);
 }
 

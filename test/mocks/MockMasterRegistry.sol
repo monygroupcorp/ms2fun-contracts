@@ -149,7 +149,17 @@ contract MockMasterRegistry is IMasterRegistry {
         return 0;
     }
 
+    address private _globalMessageRegistry;
+
     function getGlobalMessageRegistry() external view override returns (address) {
-        return address(0); // No global registry in mock
+        return _globalMessageRegistry;
+    }
+
+    function setGlobalMessageRegistry(address registry) external {
+        _globalMessageRegistry = registry;
+    }
+
+    function isInstanceFromApprovedFactory(address) external view override returns (bool) {
+        return true; // Always return true in mock for testing
     }
 }

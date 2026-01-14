@@ -284,39 +284,16 @@ contract ERC1155Instance is Ownable, ReentrancyGuard {
     // └─────────────────────────┘
 
     /**
-     * @notice Mint tokens (without message)
-     * @param editionId Edition ID
-     * @param amount Number of tokens to mint
-     */
-    function mint(uint256 editionId, uint256 amount) external payable nonReentrant {
-        _mintWithMessage(editionId, amount, "");
-    }
-
-    /**
      * @notice Mint tokens with optional message
      * @param editionId Edition ID
      * @param amount Number of tokens to mint
-     * @param message Optional message to store
+     * @param message Optional message to store (empty string skips registry call, saves gas)
      */
-    function mintWithMessage(
+    function mint(
         uint256 editionId,
         uint256 amount,
         string calldata message
     ) external payable nonReentrant {
-        _mintWithMessage(editionId, amount, message);
-    }
-
-    /**
-     * @notice Internal function to mint tokens with optional message
-     * @param editionId Edition ID
-     * @param amount Number of tokens to mint
-     * @param message Optional message to store
-     */
-    function _mintWithMessage(
-        uint256 editionId,
-        uint256 amount,
-        string memory message
-    ) internal {
         Edition storage edition = editions[editionId];
         require(edition.id != 0, "Edition not found");
         require(amount > 0, "Invalid amount");
