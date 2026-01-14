@@ -197,7 +197,9 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IUnlockCallba
         }
 
         // Deploy DN404 mirror and initialize
-        address mirror = address(new DN404Mirror(_owner));
+        // Note: _factory is passed as deployer for linking authorization only.
+        // The actual owner is synced via pullOwner() from this contract's owner().
+        address mirror = address(new DN404Mirror(_factory));
         _initializeDN404(_maxSupply, address(this), mirror);
     }
 

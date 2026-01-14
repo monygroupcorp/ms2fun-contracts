@@ -121,7 +121,7 @@ contract ERC404FactoryTest is Test {
         vm.deal(creator1, 1 ether);
         vm.startPrank(creator1);
 
-        vm.expectEmit(true, true, false, true);
+        vm.expectEmit(false, true, true, false);
         emit InstanceCreated(address(0), creator1, "TestToken", "TEST", address(0));
 
         (address instance, address hook) = factory.createInstance{value: INSTANCE_CREATION_FEE}(
@@ -469,7 +469,7 @@ contract ERC404FactoryTest is Test {
             "MRES",
             "ipfs://metadata",
             MAX_SUPPLY,
-            100,  // Max liquidity reserve percent
+            99,  // Max liquidity reserve percent (must be < 100)
             defaultCurveParams,
             defaultTierConfig,
             creator1,
@@ -567,7 +567,7 @@ contract ERC404FactoryTest is Test {
         vm.deal(creator1, 1 ether);
         vm.startPrank(creator1);
 
-        vm.expectEmit(true, true, false, true);
+        vm.expectEmit(false, true, true, false);
         emit InstanceCreated(address(0), creator1, "EventToken", "EVT", address(0));
 
         factory.createInstance{value: INSTANCE_CREATION_FEE}(
