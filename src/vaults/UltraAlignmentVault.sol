@@ -178,6 +178,9 @@ contract UltraAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback, IAlig
     uint8 public alignmentTokenDecimals; // Cached decimals for price normalization
     PoolKey public v4PoolKey;
 
+    // Associated V4 hook (set once by factory, immutable after)
+    address public hook;
+
     // Configuration
     // Gas-based reward system (M-04 security fix)
     uint256 public constant CONVERSION_BASE_GAS = 100_000;      // Fixed overhead for conversion
@@ -207,6 +210,7 @@ contract UltraAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback, IAlig
     event ConversionRewardPaid(address indexed caller, uint256 totalReward, uint256 gasCost, uint256 standardReward);
     event ConversionRewardRejected(address indexed caller, uint256 rewardAmount);
     event InsufficientRewardBalance(address indexed caller, uint256 rewardAmount, uint256 contractBalance);
+    event HookSet(address indexed hook);
 
     // ========== Constructor ==========
 
@@ -1987,6 +1991,18 @@ contract UltraAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback, IAlig
         // Validate pool configuration before setting
         _validateV4Pool(newPoolKey);
         v4PoolKey = newPoolKey;
+    }
+
+    /**
+     * @notice Set the associated V4 hook address (one-time only)
+     * @dev Called by factory after vault+hook creation. Cannot be changed once set.
+     * @param _hook Address of the UltraAlignmentV4Hook
+     */
+    function setHook(address _hook) external onlyOwner {
+        require(_hook != address(0), "Invalid hook");
+        require(hook == address(0), "Hook already set");
+        hook = _hook;
+        emit HookSet(_hook);
     }
 
     /**

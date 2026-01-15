@@ -68,6 +68,8 @@ contract ERC404BondingInstanceTest is Test {
         });
         
         // Deploy instance
+        // Note: Factory must match msg.sender for DN404Mirror linking to work
+        // Since we're pranked as 'owner', factory must be 'owner'
         instance = new ERC404BondingInstance(
             "Test Token",
             "TEST",
@@ -78,7 +80,7 @@ contract ERC404BondingInstanceTest is Test {
             mockV4PoolManager,
             address(0), // Hook set later
             mockWETH,
-            address(this), // Factory
+            owner, // Factory must match msg.sender (pranked as owner)
             mockMasterRegistry, // MasterRegistry
             owner,
             "" // styleUri

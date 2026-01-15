@@ -108,8 +108,16 @@ contract V4HookDeploymentTest is ForkTestBase {
             USDC  // Using USDC as alignment token for test
         );
 
-        // Deploy real hook factory
-        hookFactory = new UltraAlignmentHookFactory(address(0), WETH);
+        // Deploy real hook factory with infrastructure addresses
+        hookFactory = new UltraAlignmentHookFactory(
+            address(0), // hookTemplate
+            WETH,
+            UNISWAP_V4_POOL_MANAGER,
+            UNISWAP_V3_ROUTER,
+            UNISWAP_V2_ROUTER,
+            UNISWAP_V2_FACTORY,
+            UNISWAP_V3_FACTORY
+        );
 
         // Fund test contract
         vm.deal(address(this), 100 ether);

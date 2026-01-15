@@ -7,6 +7,28 @@ import {ERC404BondingInstance} from "../../../src/factories/erc404/ERC404Bonding
 import {MockMasterRegistry} from "../../mocks/MockMasterRegistry.sol";
 
 /**
+ * @title MockVaultWithHook
+ * @notice Mock vault that returns a pre-configured hook address
+ * @dev Used for testing ERC404Factory which requires vault.hook() to return non-zero
+ */
+contract MockVaultWithHook {
+    address public hook;
+    address public owner;
+
+    constructor(address _hook) {
+        hook = _hook;
+        owner = msg.sender;
+    }
+
+    function setHook(address _hook) external {
+        hook = _hook;
+    }
+
+    // Mock other vault functions that might be called
+    receive() external payable {}
+}
+
+/**
  * @title ERC404FactoryTest
  * @notice Comprehensive test suite for ERC404Factory
  * @dev Tests instance creation, parameter management, fee handling, and event emission
@@ -14,18 +36,18 @@ import {MockMasterRegistry} from "../../mocks/MockMasterRegistry.sol";
 contract ERC404FactoryTest is Test {
     ERC404Factory public factory;
     MockMasterRegistry public mockRegistry;
+    MockVaultWithHook public mockVault;
 
     // Test addresses
     address public owner = address(0x1);
     address public creator1 = address(0x2);
     address public creator2 = address(0x3);
-    address public vault = address(0x4);
     address public nonOwner = address(0x5);
 
     // Mock infrastructure addresses
     address public mockV4PoolManager = address(0x1111111111111111111111111111111111111111);
     address public mockWETH = address(0x2222222222222222222222222222222222222222);
-    address public mockHookFactory = address(0x3333333333333333333333333333333333333333);
+    address public mockHook = address(0x3333333333333333333333333333333333333333);
     address public mockInstanceTemplate = address(0x4444444444444444444444444444444444444444);
 
     // Test parameters
@@ -42,10 +64,9 @@ contract ERC404FactoryTest is Test {
         address indexed creator,
         string name,
         string symbol,
-        address indexed hook
+        address indexed vault,
+        address hook
     );
-
-    event HookFactorySet(address indexed hookFactory);
 
     function setUp() public {
         vm.startPrank(owner);
@@ -53,11 +74,13 @@ contract ERC404FactoryTest is Test {
         // Deploy mock registry
         mockRegistry = new MockMasterRegistry();
 
-        // Deploy factory
+        // Deploy mock vault with hook
+        mockVault = new MockVaultWithHook(mockHook);
+
+        // Deploy factory (no hookFactory needed anymore)
         factory = new ERC404Factory(
             address(mockRegistry),
             mockInstanceTemplate,
-            mockHookFactory,
             mockV4PoolManager,
             mockWETH
         );
@@ -107,23 +130,19 @@ contract ERC404FactoryTest is Test {
             defaultCurveParams,
             defaultTierConfig,
             creator1,
-            address(0), // No vault for this test
-            "", // styleUri
-            bytes32(0) // hookSalt
+            address(mockVault),
+            "" // styleUri
         );
 
         assertTrue(instance != address(0), "Instance should be created");
-        assertEq(hook, address(0), "Hook should be zero address when no vault provided");
+        assertEq(hook, mockHook, "Hook should match vault's hook");
 
         vm.stopPrank();
     }
 
-    function test_createInstance_withNullVault() public {
+    function test_createInstance_withVaultAndHook() public {
         vm.deal(creator1, 1 ether);
         vm.startPrank(creator1);
-
-        vm.expectEmit(false, true, true, false);
-        emit InstanceCreated(address(0), creator1, "TestToken", "TEST", address(0));
 
         (address instance, address hook) = factory.createInstance{value: INSTANCE_CREATION_FEE}(
             "TestToken",
@@ -134,12 +153,58 @@ contract ERC404FactoryTest is Test {
             defaultCurveParams,
             defaultTierConfig,
             creator1,
-            address(0),
-            "", // styleUri
-            bytes32(0) // hookSalt
+            address(mockVault),
+            "" // styleUri
         );
 
-        assertEq(hook, address(0), "Hook should be address(0) when vault is address(0)");
+        assertEq(hook, mockHook, "Hook should be from vault");
+        assertEq(factory.getVaultForInstance(instance), address(mockVault), "Vault should be tracked");
+        assertEq(factory.getHookForInstance(instance), mockHook, "Hook should be tracked");
+
+        vm.stopPrank();
+    }
+
+    function test_createInstance_vaultRequired() public {
+        vm.deal(creator1, 1 ether);
+        vm.startPrank(creator1);
+
+        vm.expectRevert("Vault required for ultraalignment");
+        factory.createInstance{value: INSTANCE_CREATION_FEE}(
+            "TestToken",
+            "TEST",
+            "ipfs://metadata",
+            MAX_SUPPLY,
+            LIQUIDITY_RESERVE_PERCENT,
+            defaultCurveParams,
+            defaultTierConfig,
+            creator1,
+            address(0), // No vault - should revert
+            "" // styleUri
+        );
+
+        vm.stopPrank();
+    }
+
+    function test_createInstance_vaultMustHaveHook() public {
+        vm.deal(creator1, 1 ether);
+        vm.startPrank(creator1);
+
+        // Create vault without hook
+        MockVaultWithHook vaultNoHook = new MockVaultWithHook(address(0));
+
+        vm.expectRevert("Vault has no hook - use UltraAlignmentHookFactory.createVaultWithHook first");
+        factory.createInstance{value: INSTANCE_CREATION_FEE}(
+            "TestToken",
+            "TEST",
+            "ipfs://metadata",
+            MAX_SUPPLY,
+            LIQUIDITY_RESERVE_PERCENT,
+            defaultCurveParams,
+            defaultTierConfig,
+            creator1,
+            address(vaultNoHook),
+            "" // styleUri
+        );
 
         vm.stopPrank();
     }
@@ -158,9 +223,8 @@ contract ERC404FactoryTest is Test {
             defaultCurveParams,
             defaultTierConfig,
             creator1,
-            address(0),
-            "", // styleUri
-            bytes32(0) // hookSalt
+            address(mockVault),
+            "" // styleUri
         );
 
         vm.stopPrank();
@@ -180,9 +244,8 @@ contract ERC404FactoryTest is Test {
             defaultCurveParams,
             defaultTierConfig,
             creator1,
-            address(0),
-            "", // styleUri
-            bytes32(0) // hookSalt
+            address(mockVault),
+            "" // styleUri
         );
 
         vm.stopPrank();
@@ -202,9 +265,8 @@ contract ERC404FactoryTest is Test {
             defaultCurveParams,
             defaultTierConfig,
             creator1,
-            address(0),
-            "", // styleUri
-            bytes32(0) // hookSalt
+            address(mockVault),
+            "" // styleUri
         );
 
         vm.stopPrank();
@@ -224,9 +286,8 @@ contract ERC404FactoryTest is Test {
             defaultCurveParams,
             defaultTierConfig,
             creator1,
-            address(0),
-            "", // styleUri
-            bytes32(0) // hookSalt
+            address(mockVault),
+            "" // styleUri
         );
 
         vm.stopPrank();
@@ -246,9 +307,8 @@ contract ERC404FactoryTest is Test {
             defaultCurveParams,
             defaultTierConfig,
             address(0),  // Invalid creator
-            address(0),
-            "", // styleUri
-            bytes32(0) // hookSalt
+            address(mockVault),
+            "" // styleUri
         );
 
         vm.stopPrank();
@@ -261,7 +321,6 @@ contract ERC404FactoryTest is Test {
         ERC404Factory factoryBadPoolManager = new ERC404Factory(
             address(mockRegistry),
             mockInstanceTemplate,
-            mockHookFactory,
             address(0),  // Zero pool manager
             mockWETH
         );
@@ -281,9 +340,8 @@ contract ERC404FactoryTest is Test {
             defaultCurveParams,
             defaultTierConfig,
             creator1,
-            address(0),
-            "", // styleUri
-            bytes32(0) // hookSalt
+            address(mockVault),
+            "" // styleUri
         );
 
         vm.stopPrank();
@@ -296,7 +354,6 @@ contract ERC404FactoryTest is Test {
         ERC404Factory factoryBadWeth = new ERC404Factory(
             address(mockRegistry),
             mockInstanceTemplate,
-            mockHookFactory,
             mockV4PoolManager,
             address(0)  // Zero WETH
         );
@@ -316,9 +373,8 @@ contract ERC404FactoryTest is Test {
             defaultCurveParams,
             defaultTierConfig,
             creator1,
-            address(0),
-            "", // styleUri
-            bytes32(0) // hookSalt
+            address(mockVault),
+            "" // styleUri
         );
 
         vm.stopPrank();
@@ -328,7 +384,7 @@ contract ERC404FactoryTest is Test {
     // Fee Management Tests
     // ========================
 
-    function test_rerollFee_defaultValue() public {
+    function test_instanceCreationFee_defaultValue() public {
         assertEq(factory.instanceCreationFee(), INSTANCE_CREATION_FEE);
     }
 
@@ -344,48 +400,6 @@ contract ERC404FactoryTest is Test {
 
         vm.expectRevert();
         factory.setInstanceCreationFee(0.02 ether);
-
-        vm.stopPrank();
-    }
-
-    // ========================
-    // Hook Factory Tests
-    // ========================
-
-    function test_hookFactory_initialization() public {
-        assertEq(address(factory.hookFactory()), mockHookFactory);
-    }
-
-    function test_setHookFactory_ownerOnly() public {
-        address newHookFactory = address(0x5555555555555555555555555555555555555555);
-
-        vm.startPrank(owner);
-
-        vm.expectEmit(true, false, false, false);
-        emit HookFactorySet(newHookFactory);
-
-        factory.setHookFactory(newHookFactory);
-        assertEq(address(factory.hookFactory()), newHookFactory);
-
-        vm.stopPrank();
-    }
-
-    function test_setHookFactory_nonOwnerFails() public {
-        address newHookFactory = address(0x5555555555555555555555555555555555555555);
-
-        vm.startPrank(nonOwner);
-
-        vm.expectRevert();
-        factory.setHookFactory(newHookFactory);
-
-        vm.stopPrank();
-    }
-
-    function test_setHookFactory_invalidAddress() public {
-        vm.startPrank(owner);
-
-        vm.expectRevert("Invalid hook factory");
-        factory.setHookFactory(address(0));
 
         vm.stopPrank();
     }
@@ -438,9 +452,8 @@ contract ERC404FactoryTest is Test {
             customCurveParams,
             defaultTierConfig,
             creator1,
-            address(0),
-            "", // styleUri
-            bytes32(0) // hookSalt
+            address(mockVault),
+            "" // styleUri
         );
 
         assertTrue(instance != address(0), "Instance with custom params should be created");
@@ -461,9 +474,8 @@ contract ERC404FactoryTest is Test {
             defaultCurveParams,
             defaultTierConfig,
             creator1,
-            address(0),
-            "", // styleUri
-            bytes32(0) // hookSalt
+            address(mockVault),
+            "" // styleUri
         );
 
         assertTrue(instance != address(0), "Instance with minimal supply should be created");
@@ -484,9 +496,8 @@ contract ERC404FactoryTest is Test {
             defaultCurveParams,
             defaultTierConfig,
             creator1,
-            address(0),
-            "", // styleUri
-            bytes32(0) // hookSalt
+            address(mockVault),
+            "" // styleUri
         );
 
         assertTrue(instance != address(0), "Instance with max reserve should be created");
@@ -516,9 +527,8 @@ contract ERC404FactoryTest is Test {
             defaultCurveParams,
             defaultTierConfig,
             creator1,
-            address(0),
-            "", // styleUri
-            bytes32(0) // hookSalt
+            address(mockVault),
+            "" // styleUri
         );
 
         uint256 balanceAfter = creator1.balance;
@@ -548,9 +558,8 @@ contract ERC404FactoryTest is Test {
             defaultCurveParams,
             defaultTierConfig,
             creator1,
-            address(0),
-            "", // styleUri
-            bytes32(0) // hookSalt
+            address(mockVault),
+            "" // styleUri
         );
 
         vm.stopPrank();
@@ -566,9 +575,8 @@ contract ERC404FactoryTest is Test {
             defaultCurveParams,
             defaultTierConfig,
             creator2,
-            address(0),
-            "", // styleUri
-            bytes32(0) // hookSalt
+            address(mockVault),
+            "" // styleUri
         );
 
         vm.stopPrank();
@@ -582,8 +590,9 @@ contract ERC404FactoryTest is Test {
         vm.deal(creator1, 1 ether);
         vm.startPrank(creator1);
 
+        // Note: event signature changed to include vault
         vm.expectEmit(false, true, true, false);
-        emit InstanceCreated(address(0), creator1, "EventToken", "EVT", address(0));
+        emit InstanceCreated(address(0), creator1, "EventToken", "EVT", address(mockVault), mockHook);
 
         factory.createInstance{value: INSTANCE_CREATION_FEE}(
             "EventToken",
@@ -594,9 +603,8 @@ contract ERC404FactoryTest is Test {
             defaultCurveParams,
             defaultTierConfig,
             creator1,
-            address(0),
-            "", // styleUri
-            bytes32(0) // hookSalt
+            address(mockVault),
+            "" // styleUri
         );
 
         vm.stopPrank();
@@ -624,9 +632,8 @@ contract ERC404FactoryTest is Test {
             defaultCurveParams,
             defaultTierConfig,
             creator1,
-            address(0),
-            "", // styleUri
-            bytes32(0) // hookSalt
+            address(mockVault),
+            "" // styleUri
         );
 
         assertTrue(instance1 != address(0), "First instance should be created");
@@ -641,9 +648,8 @@ contract ERC404FactoryTest is Test {
             defaultCurveParams,
             defaultTierConfig,
             creator1,
-            address(0),
-            "", // styleUri
-            bytes32(0) // hookSalt
+            address(mockVault),
+            "" // styleUri
         );
 
         assertTrue(instance2 != address(0), "Second instance should also be created");
@@ -677,14 +683,60 @@ contract ERC404FactoryTest is Test {
             defaultCurveParams,
             defaultTierConfig,
             creator2,  // Different creator
-            address(0),
-            "", // styleUri
-            bytes32(0) // hookSalt
+            address(mockVault),
+            "" // styleUri
         );
 
         assertTrue(instance != address(0), "Instance should be created with different creator");
 
         vm.stopPrank();
     }
-}
 
+    // ========================
+    // Vault/Hook Tracking Tests
+    // ========================
+
+    function test_getVaultForInstance() public {
+        vm.deal(creator1, 1 ether);
+        vm.startPrank(creator1);
+
+        (address instance, ) = factory.createInstance{value: INSTANCE_CREATION_FEE}(
+            "TestToken",
+            "TEST",
+            "ipfs://metadata",
+            MAX_SUPPLY,
+            LIQUIDITY_RESERVE_PERCENT,
+            defaultCurveParams,
+            defaultTierConfig,
+            creator1,
+            address(mockVault),
+            "" // styleUri
+        );
+
+        assertEq(factory.getVaultForInstance(instance), address(mockVault), "Should return correct vault");
+
+        vm.stopPrank();
+    }
+
+    function test_getHookForInstance() public {
+        vm.deal(creator1, 1 ether);
+        vm.startPrank(creator1);
+
+        (address instance, ) = factory.createInstance{value: INSTANCE_CREATION_FEE}(
+            "TestToken",
+            "TEST",
+            "ipfs://metadata",
+            MAX_SUPPLY,
+            LIQUIDITY_RESERVE_PERCENT,
+            defaultCurveParams,
+            defaultTierConfig,
+            creator1,
+            address(mockVault),
+            "" // styleUri
+        );
+
+        assertEq(factory.getHookForInstance(instance), mockHook, "Should return correct hook");
+
+        vm.stopPrank();
+    }
+}

@@ -60,6 +60,7 @@ contract ERC404RerollTest is Test {
         tierConfig.passwordHashes[0] = keccak256(abi.encodePacked("password1"));
         tierConfig.volumeCaps[0] = 100_000_000 ether;
 
+        // Note: Factory must match msg.sender for DN404Mirror linking to work
         token = new ERC404BondingInstance(
             "TestToken",
             "TEST",
@@ -70,15 +71,33 @@ contract ERC404RerollTest is Test {
             mockPoolManager,
             mockHook,
             mockWETH,
-            factory,
+            address(this), // Factory must match msg.sender (deployer)
             mockMasterRegistry,
             owner,
             "" // styleUri
         );
 
-        // Fund users
+        // Fund users with ETH
         vm.deal(user1, 10 ether);
         vm.deal(user2, 10 ether);
+        // Note: Don't transfer tokens here - each test uses _setupUserWithNFTs
+        // to get exactly the tokens/NFTs needed for that specific test
+    }
+
+    /// @notice Helper to give a user tokens and mint NFTs
+    function _setupUserWithNFTs(address user, uint256 nftCount) internal {
+        // Ensure user has enough tokens
+        uint256 needed = nftCount * UNIT;
+        uint256 currentBalance = token.balanceOf(user);
+
+        if (currentBalance < needed) {
+            vm.prank(address(token));
+            token.transfer(user, needed - currentBalance);
+        }
+
+        // Mint NFTs for the user
+        vm.prank(user);
+        token.balanceMint(nftCount);
     }
 
     // ┌─────────────────────────┐
@@ -86,9 +105,8 @@ contract ERC404RerollTest is Test {
     // └─────────────────────────┘
 
     function test_RerollInitiation_BasicFlow() public {
-        // Setup: Manually mint tokens to user1
-        vm.prank(owner);
-        token.balanceMint(5); // 5 NFTs = 5M tokens
+        // Setup: Give user1 5 NFTs (transfers tokens and mints NFTs)
+        _setupUserWithNFTs(user1, 5);
 
         uint256 rerollAmount = 2 * UNIT; // 2M tokens for 2 NFTs
         uint256[] memory exemptedIds = new uint256[](0);
@@ -103,9 +121,8 @@ contract ERC404RerollTest is Test {
     }
 
     function test_RerollCompletion_BalancePreserved() public {
-        // Setup: Give user1 10M tokens (10 NFTs)
-        vm.prank(owner);
-        token.balanceMint(10);
+        // Setup: Give user1 10 NFTs
+        _setupUserWithNFTs(user1, 10);
 
         uint256 initialBalance = token.balanceOf(user1);
         uint256 rerollAmount = 4 * UNIT; // 4M tokens (4 NFTs)
@@ -119,9 +136,8 @@ contract ERC404RerollTest is Test {
     }
 
     function test_RerollRevert_InsufficientBalance() public {
-        // Setup: Give user1 2M tokens only
-        vm.prank(owner);
-        token.balanceMint(2);
+        // Setup: Give user1 2 NFTs only
+        _setupUserWithNFTs(user1, 2);
 
         uint256 rerollAmount = 5 * UNIT; // Try to reroll 5M tokens
         uint256[] memory exemptedIds = new uint256[](0);
@@ -140,9 +156,8 @@ contract ERC404RerollTest is Test {
     }
 
     function test_RerollRevert_TokensNotRepresentingNFT() public {
-        // Setup: Give user1 some tokens
-        vm.prank(owner);
-        token.balanceMint(5);
+        // Setup: Give user1 5 NFTs
+        _setupUserWithNFTs(user1, 5);
 
         uint256 rerollAmount = UNIT / 2; // 500k tokens (less than 1 NFT)
         uint256[] memory exemptedIds = new uint256[](0);
@@ -157,9 +172,8 @@ contract ERC404RerollTest is Test {
     // └─────────────────────────┘
 
     function test_Escrow_TokensHeldDuringReroll() public {
-        // Setup: Give user1 5M tokens
-        vm.prank(owner);
-        token.balanceMint(5);
+        // Setup: Give user1 5 NFTs
+        _setupUserWithNFTs(user1, 5);
 
         uint256 rerollAmount = 2 * UNIT;
 
@@ -175,11 +189,9 @@ contract ERC404RerollTest is Test {
     }
 
     function test_Escrow_MultipleUsers_Independent() public {
-        // Setup: Give both users tokens
-        vm.prank(owner);
-        token.balanceMint(5); // For user1
-        vm.prank(owner);
-        token.balanceMint(5); // For user2
+        // Setup: Give both users 5 NFTs each
+        _setupUserWithNFTs(user1, 5);
+        _setupUserWithNFTs(user2, 5);
 
         uint256 rerollAmount1 = 2 * UNIT;
         uint256 rerollAmount2 = 3 * UNIT;
@@ -206,8 +218,7 @@ contract ERC404RerollTest is Test {
 
     function test_Reroll_WithExemptedNFTs() public {
         // Setup: Give user1 5 NFTs
-        vm.prank(owner);
-        token.balanceMint(5);
+        _setupUserWithNFTs(user1, 5);
 
         uint256[] memory exemptedIds = new uint256[](2);
         exemptedIds[0] = 1;
@@ -226,8 +237,7 @@ contract ERC404RerollTest is Test {
 
     function test_Reroll_AllNFTsExempted() public {
         // Setup: Give user1 3 NFTs
-        vm.prank(owner);
-        token.balanceMint(3);
+        _setupUserWithNFTs(user1, 3);
 
         uint256[] memory exemptedIds = new uint256[](3);
         exemptedIds[0] = 1;
@@ -245,8 +255,7 @@ contract ERC404RerollTest is Test {
 
     function test_Reroll_NoExemptions() public {
         // Setup: Give user1 5 NFTs
-        vm.prank(owner);
-        token.balanceMint(5);
+        _setupUserWithNFTs(user1, 5);
 
         uint256[] memory exemptedIds = new uint256[](0);
         uint256 rerollAmount = 5 * UNIT; // Reroll all
@@ -266,8 +275,7 @@ contract ERC404RerollTest is Test {
 
     function test_Events_RerollInitiatedAndCompleted() public {
         // Setup: Give user1 4 NFTs
-        vm.prank(owner);
-        token.balanceMint(4);
+        _setupUserWithNFTs(user1, 4);
 
         uint256[] memory exemptedIds = new uint256[](1);
         exemptedIds[0] = 2;
@@ -292,8 +300,7 @@ contract ERC404RerollTest is Test {
 
     function test_Reroll_ExactBalance() public {
         // Setup: Give user1 exactly 3 NFTs
-        vm.prank(owner);
-        token.balanceMint(3);
+        _setupUserWithNFTs(user1, 3);
 
         uint256 rerollAmount = 3 * UNIT; // Exactly the balance
 
@@ -306,8 +313,7 @@ contract ERC404RerollTest is Test {
 
     function test_Reroll_MinimumAmount() public {
         // Setup: Give user1 1 NFT
-        vm.prank(owner);
-        token.balanceMint(1);
+        _setupUserWithNFTs(user1, 1);
 
         uint256 rerollAmount = UNIT; // Minimum viable amount
 
@@ -320,8 +326,7 @@ contract ERC404RerollTest is Test {
 
     function test_Reroll_LargeExemptionList() public {
         // Setup: Give user1 100 NFTs
-        vm.prank(owner);
-        token.balanceMint(100);
+        _setupUserWithNFTs(user1, 100);
 
         // Exempt 50 NFTs
         uint256[] memory exemptedIds = new uint256[](50);
@@ -340,11 +345,9 @@ contract ERC404RerollTest is Test {
 
     function test_Reroll_SkipNFTPreserved() public {
         // Setup: Give user1 5 NFTs
-        vm.prank(owner);
-        token.balanceMint(5);
+        _setupUserWithNFTs(user1, 5);
 
-        // Set skipNFT to true
-        vm.prank(user1);
+        // Get original skipNFT state
         bool originalSkipNFT = token.getSkipNFT(user1);
 
         // Perform reroll
@@ -361,8 +364,7 @@ contract ERC404RerollTest is Test {
 
     function test_Reroll_NonReentrant() public {
         // Setup: Give user1 5 NFTs
-        vm.prank(owner);
-        token.balanceMint(5);
+        _setupUserWithNFTs(user1, 5);
 
         // The nonReentrant modifier on rerollSelectedNFTs prevents direct reentrancy
         // This test verifies the function signature has nonReentrant guard

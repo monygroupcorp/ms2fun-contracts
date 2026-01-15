@@ -65,14 +65,12 @@ contract MasterRegistryVaultQueriesTest is Test {
             mockV2Factory, mockV3Factory, mockAlignmentToken
         );
 
-        // Deploy factory with mock parameters
+        // Deploy factory with mock parameters (no hookFactory needed)
         address mockInstanceTemplate = address(0x7777);
-        address mockHookFactory = address(0x8888);
 
         factory = new ERC404Factory(
             address(registry),
             mockInstanceTemplate,
-            mockHookFactory,
             mockPoolManager,
             mockWeth
         );

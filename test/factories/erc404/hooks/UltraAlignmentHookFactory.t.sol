@@ -71,8 +71,16 @@ contract UltraAlignmentHookFactoryTest is Test {
         });
         vault.setV4PoolKey(mockPoolKey);
 
-        // Deploy factory
-        factory = new UltraAlignmentHookFactory(address(0), wethAddr);
+        // Deploy factory with all infrastructure addresses
+        factory = new UltraAlignmentHookFactory(
+            address(0), // hookTemplate
+            wethAddr,
+            address(poolManager),
+            address(0x5555555555555555555555555555555555555555),  // V3 router
+            address(0x6666666666666666666666666666666666666666),  // V2 router
+            address(0x7777777777777777777777777777777777777777),  // V2 factory
+            address(0x8888888888888888888888888888888888888888)   // V3 factory
+        );
 
         vm.stopPrank();
 
@@ -401,7 +409,15 @@ contract UltraAlignmentHookFactoryTest is Test {
 
     function test_constructor_validAddresses() public {
         UltraAlignmentHookFactory newFactory =
-            new UltraAlignmentHookFactory(address(0x888), wethAddr);
+            new UltraAlignmentHookFactory(
+                address(0x888), // hookTemplate
+                wethAddr,
+                address(poolManager),
+                address(0x5555555555555555555555555555555555555555),
+                address(0x6666666666666666666666666666666666666666),
+                address(0x7777777777777777777777777777777777777777),
+                address(0x8888888888888888888888888888888888888888)
+            );
         assertEq(newFactory.weth(), wethAddr, "WETH should be set");
         assertEq(newFactory.hookCreationFee(), 0.001 ether, "Default fee set");
     }
