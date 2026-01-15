@@ -60,7 +60,7 @@ contract ERC404Factory is Ownable, ReentrancyGuard {
 
     /**
      * @notice Create a new ERC404 bonding instance with bonding curve and password-protected tiers
-     * @dev Requires vault to have been created with its hook via UltraAlignmentHookFactory.createVaultWithHook
+     * @dev Requires vault and hook to be created first via UltraAlignmentHookFactory
      * @param name Token name
      * @param symbol Token symbol
      * @param metadataURI Metadata URI
@@ -69,10 +69,10 @@ contract ERC404Factory is Ownable, ReentrancyGuard {
      * @param curveParams Bonding curve parameters
      * @param tierConfig Tier configuration (password-protected tiers)
      * @param creator Creator address (will be owner)
-     * @param vault Vault address (must have hook already configured)
+     * @param vault Vault address for ultraalignment
+     * @param hook Hook address (created via UltraAlignmentHookFactory.createHook)
      * @param styleUri Style URI (ipfs://, ar://, https://, or inline:css:/inline:js:)
      * @return instance Address of the created ERC404 instance
-     * @return hook Address of the vault's hook
      */
     function createInstance(
         string memory name,
@@ -84,8 +84,9 @@ contract ERC404Factory is Ownable, ReentrancyGuard {
         ERC404BondingInstance.TierConfig memory tierConfig,
         address creator,
         address vault,
+        address hook,
         string memory styleUri
-    ) external payable nonReentrant returns (address instance, address hook) {
+    ) external payable nonReentrant returns (address instance) {
         require(msg.value >= instanceCreationFee, "Insufficient fee");
         require(bytes(name).length > 0, "Invalid name");
         require(bytes(symbol).length > 0, "Invalid symbol");
@@ -94,13 +95,11 @@ contract ERC404Factory is Ownable, ReentrancyGuard {
         require(v4PoolManager != address(0), "V4 pool manager not set");
         require(weth != address(0), "WETH not set");
 
-        // Vault is required for ultraalignment
+        // Vault and hook are required for ultraalignment
         require(vault != address(0), "Vault required for ultraalignment");
         require(vault.code.length > 0, "Vault must be a contract");
-
-        // Get hook from vault (vault+hook are created together, hook is already set)
-        hook = UltraAlignmentVault(payable(vault)).hook();
-        require(hook != address(0), "Vault has no hook - use UltraAlignmentHookFactory.createVaultWithHook first");
+        require(hook != address(0), "Hook required for ultraalignment");
+        require(hook.code.length > 0, "Hook must be a contract");
 
         // Deploy new bonding instance WITH hook address (enforced alignment)
         instance = address(new ERC404BondingInstance(
@@ -111,7 +110,7 @@ contract ERC404Factory is Ownable, ReentrancyGuard {
             curveParams,
             tierConfig,
             v4PoolManager,
-            hook, // Hook from vault (mandatory)
+            hook, // Hook (mandatory for ultraalignment)
             weth,
             address(this),
             address(masterRegistry),

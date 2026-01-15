@@ -71,16 +71,8 @@ contract UltraAlignmentHookFactoryTest is Test {
         });
         vault.setV4PoolKey(mockPoolKey);
 
-        // Deploy factory with all infrastructure addresses
-        factory = new UltraAlignmentHookFactory(
-            address(0), // hookTemplate
-            wethAddr,
-            address(poolManager),
-            address(0x5555555555555555555555555555555555555555),  // V3 router
-            address(0x6666666666666666666666666666666666666666),  // V2 router
-            address(0x7777777777777777777777777777777777777777),  // V2 factory
-            address(0x8888888888888888888888888888888888888888)   // V3 factory
-        );
+        // Deploy factory
+        factory = new UltraAlignmentHookFactory(address(0)); // hookTemplate
 
         vm.stopPrank();
 
@@ -403,22 +395,13 @@ contract UltraAlignmentHookFactoryTest is Test {
 
     function test_constructor_initialization() public view {
         assertEq(factory.hookCreationFee(), 0.001 ether, "Default fee should be set");
-        assertEq(factory.weth(), wethAddr, "WETH should be set");
         assertTrue(factory.owner() == owner, "Owner should be initialized");
     }
 
     function test_constructor_validAddresses() public {
         UltraAlignmentHookFactory newFactory =
-            new UltraAlignmentHookFactory(
-                address(0x888), // hookTemplate
-                wethAddr,
-                address(poolManager),
-                address(0x5555555555555555555555555555555555555555),
-                address(0x6666666666666666666666666666666666666666),
-                address(0x7777777777777777777777777777777777777777),
-                address(0x8888888888888888888888888888888888888888)
-            );
-        assertEq(newFactory.weth(), wethAddr, "WETH should be set");
+            new UltraAlignmentHookFactory(address(0x888)); // hookTemplate
+        assertEq(newFactory.hookTemplate(), address(0x888), "Hook template should be set");
         assertEq(newFactory.hookCreationFee(), 0.001 ether, "Default fee set");
     }
 
