@@ -156,6 +156,8 @@ contract UltraAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback, IAlig
     uint256 public totalPendingETH;
     uint256 public accumulatedFees;
     uint256 public totalLPUnits;
+    uint256 public totalEthLocked; // Cumulative ETH received (for TVL tracking)
+    uint256 public totalUniqueBenefactors; // Count of unique addresses that have contributed
     uint256 public lastVaultFeeCollectionTime;
     uint256 public vaultFeeCollectionInterval = 1 days; // Collect vault fees once per day
 
@@ -302,6 +304,9 @@ contract UltraAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback, IAlig
         if(pendingETH[benefactor] == 0){
             conversionParticipants.push(benefactor);
         }
+        if(benefactorTotalETH[benefactor] == 0){
+            totalUniqueBenefactors++;
+        }
         benefactorTotalETH[benefactor] += amount;
         pendingETH[benefactor] += amount;
         totalPendingETH += amount;
@@ -414,6 +419,9 @@ contract UltraAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback, IAlig
             accumulatedDustShares = 0;
             emit DustDistributed(largestContributor, dustToDistribute);
         }
+
+        // Track cumulative ETH for TVL reporting
+        totalEthLocked += ethToAdd;
 
         // Clear conversion participants for next dragnet
         totalPendingETH = 0;
