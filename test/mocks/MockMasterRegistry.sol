@@ -162,4 +162,32 @@ contract MockMasterRegistry is IMasterRegistry {
     function isInstanceFromApprovedFactory(address) external view override returns (bool) {
         return true; // Always return true in mock for testing
     }
+
+    // Namespace tracking for name collision tests
+    mapping(bytes32 => bool) private _nameHashes;
+
+    function isNameTaken(string memory name) external view override returns (bool) {
+        bytes32 nameHash = keccak256(abi.encodePacked(_toLowerCase(name)));
+        return _nameHashes[nameHash];
+    }
+
+    // Helper to mark a name as taken (for testing)
+    function markNameTaken(string memory name) external {
+        bytes32 nameHash = keccak256(abi.encodePacked(_toLowerCase(name)));
+        _nameHashes[nameHash] = true;
+    }
+
+    // Simple lowercase helper (matches MetadataUtils behavior)
+    function _toLowerCase(string memory str) internal pure returns (string memory) {
+        bytes memory bStr = bytes(str);
+        bytes memory bLower = new bytes(bStr.length);
+        for (uint256 i = 0; i < bStr.length; i++) {
+            if ((uint8(bStr[i]) >= 65) && (uint8(bStr[i]) <= 90)) {
+                bLower[i] = bytes1(uint8(bStr[i]) + 32);
+            } else {
+                bLower[i] = bStr[i];
+            }
+        }
+        return string(bLower);
+    }
 }

@@ -68,6 +68,9 @@ contract ERC1155Factory is Ownable, ReentrancyGuard {
         require(vault != address(0), "Invalid vault");
         require(vault.code.length > 0, "Vault must be a contract");
 
+        // Check namespace availability before deploying (saves gas on collision)
+        require(!masterRegistry.isNameTaken(name), "Name already taken");
+
         // Deploy new instance
         instance = address(new ERC1155Instance(
             name,

@@ -392,6 +392,17 @@ contract MasterRegistryV1 is UUPSUpgradeable, Ownable, ReentrancyGuard, IMasterR
     }
 
     /**
+     * @notice Check if a project name is already taken
+     * @dev Used by factories to check name availability before creating instances
+     * @param name The project name to check
+     * @return True if the name is already taken
+     */
+    function isNameTaken(string memory name) external view override returns (bool) {
+        bytes32 nameHash = MetadataUtils.toNameHash(name);
+        return nameHashes[nameHash];
+    }
+
+    /**
      * @notice Get total number of instances
      */
     function getTotalInstances() external view returns (uint256) {

@@ -225,5 +225,8 @@ interface IMasterRegistry {
 
     // Factory Authorization
     function isInstanceFromApprovedFactory(address instance) external view returns (bool);
+
+    // Namespace Protection
+    function isNameTaken(string memory name) external view returns (bool);
 }
 

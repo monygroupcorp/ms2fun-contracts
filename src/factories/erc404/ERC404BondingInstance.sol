@@ -137,8 +137,8 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IUnlockCallba
     // └─────────────────────────┘
 
     constructor(
-        string memory _name,
-        string memory _symbol,
+        string memory name_,
+        string memory symbol_,
         uint256 _maxSupply,
         uint256 _liquidityReservePercent,
         BondingCurveParams memory _curveParams,
@@ -169,8 +169,8 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IUnlockCallba
 
         _initializeOwner(_owner);
 
-        _name = _name;
-        _symbol = _symbol;
+        _name = name_;
+        _symbol = symbol_;
         MAX_SUPPLY = _maxSupply;
         LIQUIDITY_RESERVE = (_maxSupply * _liquidityReservePercent) / 100;
         curveParams = BondingCurveMath.Params({

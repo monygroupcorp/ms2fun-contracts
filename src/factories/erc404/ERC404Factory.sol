@@ -95,6 +95,9 @@ contract ERC404Factory is Ownable, ReentrancyGuard {
         require(v4PoolManager != address(0), "V4 pool manager not set");
         require(weth != address(0), "WETH not set");
 
+        // Check namespace availability before deploying (saves gas on collision)
+        require(!masterRegistry.isNameTaken(name), "Name already taken");
+
         // Vault and hook are required for ultraalignment
         require(vault != address(0), "Vault required for ultraalignment");
         require(vault.code.length > 0, "Vault must be a contract");
