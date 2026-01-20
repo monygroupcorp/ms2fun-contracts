@@ -755,6 +755,27 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IUnlockCallba
         );
     }
 
+    /// @notice Returns data needed for project card display
+    /// @dev Implements IInstance interface for QueryAggregator compatibility
+    /// @return currentPrice Current bonding curve price
+    /// @return totalSupply Current bonding supply
+    /// @return maxSupply Maximum supply (MAX_SUPPLY constant)
+    /// @return isActive Whether bonding is active and open
+    /// @return extraData Reserved for future use (empty for now)
+    function getCardData() external view returns (
+        uint256 currentPrice,
+        uint256 totalSupply,
+        uint256 maxSupply,
+        bool isActive,
+        bytes memory extraData
+    ) {
+        currentPrice = calculateCost(1 ether); // Price for 1 token
+        totalSupply = totalBondingSupply;
+        maxSupply = MAX_SUPPLY;
+        isActive = bondingActive && bondingOpenTime != 0 && block.timestamp >= bondingOpenTime && liquidityPool == address(0);
+        extraData = "";
+    }
+
     /**
      * @notice Get liquidity pool information
      * @return poolAddress Address of the liquidity pool (address(0) if not deployed)

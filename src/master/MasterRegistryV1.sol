@@ -409,6 +409,37 @@ contract MasterRegistryV1 is UUPSUpgradeable, Ownable, ReentrancyGuard, IMasterR
         return allInstances.length;
     }
 
+    /**
+     * @notice Get instance address by index
+     * @param index Index in allInstances array (0-based)
+     * @return Instance address at that index
+     */
+    function getInstanceByIndex(uint256 index) external view returns (address) {
+        require(index < allInstances.length, "Index out of bounds");
+        return allInstances[index];
+    }
+
+    /**
+     * @notice Get paginated list of instance addresses
+     * @param offset Starting index (0-based)
+     * @param limit Maximum number of addresses to return
+     * @return instances Array of instance addresses
+     */
+    function getInstanceAddresses(uint256 offset, uint256 limit)
+        external view returns (address[] memory instances)
+    {
+        uint256 total = allInstances.length;
+        if (offset >= total) return new address[](0);
+
+        uint256 end = offset + limit;
+        if (end > total) end = total;
+
+        instances = new address[](end - offset);
+        for (uint256 i = offset; i < end; i++) {
+            instances[i - offset] = allInstances[i];
+        }
+    }
+
     // ============ Competitive Rental Queue System ============
     // Note: Queue system extracted to FeaturedQueueManager contract
     // Use featuredQueueManager address to interact with queue functions

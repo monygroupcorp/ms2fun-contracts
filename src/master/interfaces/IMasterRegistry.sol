@@ -228,5 +228,23 @@ interface IMasterRegistry {
 
     // Namespace Protection
     function isNameTaken(string memory name) external view returns (bool);
+
+    // Instance Enumeration
+    function getTotalInstances() external view returns (uint256);
+    function getInstanceByIndex(uint256 index) external view returns (address);
+    function getInstanceAddresses(uint256 offset, uint256 limit) external view returns (address[] memory);
+
+    // Vault Query Methods
+    function getTotalVaults() external view returns (uint256);
+    function getVaultsByTVL(uint256 limit) external view returns (
+        address[] memory vaults,
+        uint256[] memory tvls,
+        string[] memory names
+    );
+    function getVaultsByPopularity(uint256 limit) external view returns (
+        address[] memory vaults,
+        uint256[] memory instanceCounts,
+        string[] memory names
+    );
 }
 

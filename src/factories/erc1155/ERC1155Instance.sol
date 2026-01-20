@@ -475,6 +475,70 @@ contract ERC1155Instance is Ownable, ReentrancyGuard {
     // │   Metadata Functions    │
     // └─────────────────────────┘
 
+    /// @notice Returns data needed for project card display
+    /// @dev Implements IInstance interface for QueryAggregator compatibility
+    ///      Iterates all editions to compute aggregate values
+    /// @return floorPrice Lowest base price across all editions
+    /// @return totalMinted Sum of minted counts across all editions
+    /// @return maxSupply Sum of limited supplies (0 if any edition is unlimited)
+    /// @return isActive True if any edition has remaining supply
+    /// @return extraData Reserved for future use (empty for now)
+    function getCardData() external view returns (
+        uint256 floorPrice,
+        uint256 totalMinted,
+        uint256 maxSupply,
+        bool isActive,
+        bytes memory extraData
+    ) {
+        uint256 editionCount = nextEditionId - 1;
+
+        // Handle no editions case
+        if (editionCount == 0) {
+            return (0, 0, 0, false, "");
+        }
+
+        floorPrice = type(uint256).max;
+        totalMinted = 0;
+        maxSupply = 0;
+        isActive = false;
+        bool hasUnlimited = false;
+
+        for (uint256 i = 1; i <= editionCount; i++) {
+            Edition storage ed = editions[i];
+
+            // Track lowest price
+            if (ed.basePrice < floorPrice) {
+                floorPrice = ed.basePrice;
+            }
+
+            // Sum minted
+            totalMinted += ed.minted;
+
+            // Track supply
+            if (ed.supply == 0) {
+                hasUnlimited = true;
+            } else {
+                maxSupply += ed.supply;
+                if (ed.minted < ed.supply) {
+                    isActive = true;
+                }
+            }
+        }
+
+        // Handle unlimited editions
+        if (hasUnlimited) {
+            maxSupply = 0; // 0 signals unlimited
+            isActive = true;
+        }
+
+        // Handle edge case where floorPrice wasn't set
+        if (floorPrice == type(uint256).max) {
+            floorPrice = 0;
+        }
+
+        extraData = "";
+    }
+
     /**
      * @notice Get edition metadata
      * @param editionId Edition ID
