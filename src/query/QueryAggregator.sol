@@ -18,6 +18,8 @@ interface IFeaturedQueueManager {
         uint256 renewalDeposit,
         bool isExpired
     );
+
+    function queueLength() external view returns (uint256);
 }
 
 /// @notice Interface for GlobalMessageRegistry
@@ -196,23 +198,38 @@ contract QueryAggregator is UUPSUpgradeable, Ownable {
     {
         require(limit <= MAX_QUERY_LIMIT, "Limit too high");
 
-        // 1. Get featured instances from queue
-        uint256 endIndex = offset + limit;
-        (address[] memory featuredAddresses, uint256 total) =
-            featuredQueueManager.getFeaturedInstances(offset, endIndex);
-        totalFeatured = total;
+        // 1. Get queue length for bounds checking
+        uint256 queueLen = featuredQueueManager.queueLength();
+        totalFeatured = queueLen;
 
-        // 2. Hydrate each into ProjectCard
+        // 2. Get top 3 vaults by TVL (do this regardless of featured count)
+        topVaults = _getTopVaults(3);
+
+        // 3. Get recent activity (do this regardless of featured count)
+        recentActivity = globalMessageRegistry.getRecentMessages(5);
+
+        // 4. Handle bounds clamping for featured projects
+        if (offset >= queueLen) {
+            // Return empty projects if offset is past end
+            projects = new ProjectCard[](0);
+            return (projects, totalFeatured, topVaults, recentActivity);
+        }
+
+        // Clamp endIndex to queue bounds
+        uint256 endIndex = offset + limit;
+        if (endIndex > queueLen) {
+            endIndex = queueLen;
+        }
+
+        // 5. Get featured instances from queue
+        (address[] memory featuredAddresses, ) =
+            featuredQueueManager.getFeaturedInstances(offset, endIndex);
+
+        // 6. Hydrate each into ProjectCard
         projects = new ProjectCard[](featuredAddresses.length);
         for (uint256 i = 0; i < featuredAddresses.length; i++) {
             projects[i] = _hydrateProject(featuredAddresses[i]);
         }
-
-        // 3. Get top 3 vaults by TVL
-        topVaults = _getTopVaults(3);
-
-        // 4. Get recent activity
-        recentActivity = globalMessageRegistry.getRecentMessages(5);
     }
 
     /**

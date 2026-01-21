@@ -135,20 +135,27 @@ contract FeaturedQueueManager is UUPSUpgradeable, Ownable, ReentrancyGuard {
     }
 
     /**
+     * @notice Get current queue length
+     */
+    function queueLength() external view returns (uint256) {
+        return featuredQueue.length;
+    }
+
+    /**
      * @notice Get current queue utilization metrics
      */
     function getQueueUtilization() external view returns (
         uint256 currentUtilization,
         uint256 adjustedBasePrice,
-        uint256 queueLength,
+        uint256 length,
         uint256 maxSize
     ) {
-        queueLength = featuredQueue.length;
+        length = featuredQueue.length;
         maxSize = maxQueueSize;
-        currentUtilization = (queueLength * 10000) / maxQueueSize;
+        currentUtilization = (length * 10000) / maxQueueSize;
         adjustedBasePrice = baseRentalPrice + (baseRentalPrice * currentUtilization) / 10000;
 
-        return (currentUtilization, adjustedBasePrice, queueLength, maxSize);
+        return (currentUtilization, adjustedBasePrice, length, maxSize);
     }
 
     /**
