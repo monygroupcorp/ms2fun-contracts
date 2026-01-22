@@ -20,6 +20,9 @@ contract ERC1155Factory is Ownable, ReentrancyGuard {
     // Mapping from instance to vault
     mapping(address => address) public instanceToVault;
 
+    // Trusted agents that can add editions on behalf of users
+    mapping(address => bool) public isAgent;
+
     event InstanceCreated(
         address indexed instance,
         address indexed creator,
@@ -124,8 +127,9 @@ contract ERC1155Factory is Ownable, ReentrancyGuard {
         ERC1155Instance.PricingModel pricingModel,
         uint256 priceIncreaseRate
     ) external returns (uint256 editionId) {
+        require(isAgent[msg.sender], "Not authorized agent");
         ERC1155Instance instanceContract = ERC1155Instance(instance);
-        
+
         // Call addEdition on instance
         instanceContract.addEdition(
             pieceTitle,
@@ -160,5 +164,14 @@ contract ERC1155Factory is Ownable, ReentrancyGuard {
      */
     function setInstanceCreationFee(uint256 _fee) external onlyOwner {
         instanceCreationFee = _fee;
+    }
+
+    /**
+     * @notice Set agent authorization (owner only)
+     * @param agent Address to authorize/deauthorize
+     * @param authorized Whether the agent is authorized
+     */
+    function setAgent(address agent, bool authorized) external onlyOwner {
+        isAgent[agent] = authorized;
     }
 }

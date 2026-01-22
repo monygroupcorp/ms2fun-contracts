@@ -158,7 +158,7 @@ contract ERC1155Instance is Ownable, ReentrancyGuard {
         PricingModel pricingModel,
         uint256 priceIncreaseRate
     ) external {
-        require(msg.sender == factory || msg.sender == creator, "Not authorized");
+        require(msg.sender == factory || msg.sender == owner(), "Not authorized");
         require(bytes(pieceTitle).length > 0, "Invalid title");
         require(basePrice > 0, "Invalid price");
         
@@ -197,7 +197,7 @@ contract ERC1155Instance is Ownable, ReentrancyGuard {
      * @param metadataURI New metadata URI
      */
     function updateEditionMetadata(uint256 editionId, string memory metadataURI) external {
-        require(msg.sender == creator, "Not creator");
+        require(msg.sender == owner(), "Not owner");
         require(editions[editionId].id != 0, "Edition not found");
 
         editions[editionId].metadataURI = metadataURI;
@@ -349,22 +349,22 @@ contract ERC1155Instance is Ownable, ReentrancyGuard {
      * @param amount Amount to withdraw
      */
     function withdraw(uint256 amount) external nonReentrant {
-        require(msg.sender == creator, "Not creator");
+        require(msg.sender == owner(), "Not owner");
         require(amount > 0, "Invalid amount");
         require(amount <= address(this).balance, "Insufficient balance");
 
         // Calculate tithe (20%)
         uint256 taxAmount = (amount * 20) / 100;
-        uint256 creatorAmount = amount - taxAmount;
+        uint256 ownerAmount = amount - taxAmount;
 
         // Send tithe to vault (via receive fallback)
         // Vault will accumulate fees and track this instance as the benefactor
         SafeTransferLib.safeTransferETH(address(vault), taxAmount);
 
-        // Transfer remainder to creator
-        SafeTransferLib.safeTransferETH(creator, creatorAmount);
+        // Transfer remainder to owner
+        SafeTransferLib.safeTransferETH(owner(), ownerAmount);
 
-        emit Withdrawn(creator, creatorAmount, taxAmount);
+        emit Withdrawn(owner(), ownerAmount, taxAmount);
     }
 
     /**
@@ -391,9 +391,9 @@ contract ERC1155Instance is Ownable, ReentrancyGuard {
         // Call vault's claimFees, which uses msg.sender (this contract) as the benefactor
         totalClaimed = vault.claimFees();
 
-        // Route all claimed fees to the creator
+        // Route all claimed fees to the owner
         require(totalClaimed > 0, "No fees to claim");
-        SafeTransferLib.safeTransferETH(creator, totalClaimed);
+        SafeTransferLib.safeTransferETH(owner(), totalClaimed);
     }
 
     // ┌─────────────────────────┐
@@ -801,7 +801,7 @@ contract ERC1155Instance is Ownable, ReentrancyGuard {
      * @param uri Style URI (ipfs://, ar://, https://, or inline:css:... / inline:js:...)
      */
     function setStyle(string memory uri) external {
-        require(msg.sender == creator, "Not creator");
+        require(msg.sender == owner(), "Not owner");
         styleUri = uri;
     }
 
@@ -811,7 +811,7 @@ contract ERC1155Instance is Ownable, ReentrancyGuard {
      * @param uri Style URI (overrides project-level)
      */
     function setEditionStyle(uint256 editionId, string memory uri) external {
-        require(msg.sender == creator, "Not creator");
+        require(msg.sender == owner(), "Not owner");
         require(editions[editionId].id != 0, "Edition not found");
         editionStyleUri[editionId] = uri;
     }

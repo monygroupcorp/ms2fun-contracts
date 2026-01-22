@@ -68,6 +68,9 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
         // Deploy factory
         factory = new ERC1155Factory(mockRegistry, mockInstanceTemplate);
 
+        // Authorize creator as an agent for addEdition calls
+        factory.setAgent(creator, true);
+
         // NOTE: authorizeInstanceFactory removed - vault now accepts all ETH contributions
         // vault.authorizeInstanceFactory(address(factory));
 
