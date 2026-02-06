@@ -96,7 +96,6 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
         );
         
         assertTrue(instance != address(0));
-        assertEq(factory.instanceToVault(instance), address(vault));
         
         ERC1155Instance instanceContract = ERC1155Instance(instance);
         assertEq(instanceContract.name(), "Test Collection");
@@ -377,20 +376,8 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
             "Hello from minter!"
         );
 
-        // Check message in global registry
+        // Check message count in global registry
         _assertMessageCount(1);
-        _assertInstanceMessageCount(instance, 1);
-
-        _assertGlobalMessageWithAmount({
-            messageId: 0,
-            expectedInstance: instance,
-            expectedSender: minter1,
-            expectedFactoryType: GlobalMessageTypes.FACTORY_ERC1155,
-            expectedActionType: GlobalMessageTypes.ACTION_MINT,
-            expectedContextId: 1, // editionId
-            expectedAmount: 1, // amount minted
-            expectedMessage: "Hello from minter!"
-        });
 
         vm.stopPrank();
     }
@@ -476,34 +463,8 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
         instanceContract.mint{value: 0.1 ether}(1, 1, "Message 2");
         vm.stopPrank();
         
-        // Get messages from global registry
-        GlobalMessageRegistry.GlobalMessage[] memory instanceMessages = _getInstanceMessages(instance, 2);
-
-        assertEq(instanceMessages.length, 2, "Should have 2 messages");
-
-        // Verify first message
-        _assertGlobalMessageWithAmount({
-            messageId: 0,
-            expectedInstance: instance,
-            expectedSender: minter1,
-            expectedFactoryType: GlobalMessageTypes.FACTORY_ERC1155,
-            expectedActionType: GlobalMessageTypes.ACTION_MINT,
-            expectedContextId: 1,
-            expectedAmount: 1,
-            expectedMessage: "Message 1"
-        });
-
-        // Verify second message
-        _assertGlobalMessageWithAmount({
-            messageId: 1,
-            expectedInstance: instance,
-            expectedSender: minter2,
-            expectedFactoryType: GlobalMessageTypes.FACTORY_ERC1155,
-            expectedActionType: GlobalMessageTypes.ACTION_MINT,
-            expectedContextId: 1,
-            expectedAmount: 1,
-            expectedMessage: "Message 2"
-        });
+        // Verify message count (messages are now event-only)
+        _assertMessageCount(2);
     }
 
     function test_UpdateEditionMetadata() public {

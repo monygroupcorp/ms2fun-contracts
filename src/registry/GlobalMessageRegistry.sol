@@ -8,32 +8,18 @@ import { IMasterRegistry } from "../master/interfaces/IMasterRegistry.sol";
 /**
  * @title GlobalMessageRegistry
  * @notice Centralized registry for all protocol messages across instances
- * @dev Enables protocol-wide activity tracking and discovery in a single RPC call
- *      Authorization is automatic: any instance created by an approved factory can post messages
+ * @dev All message data is emitted via events for off-chain indexing.
+ *      Authorization is automatic: any instance created by an approved factory can post messages.
  */
 contract GlobalMessageRegistry is Ownable {
     using GlobalMessagePacking for uint256;
 
     // ┌─────────────────────────┐
-    // │         Types           │
-    // └─────────────────────────┘
-
-    struct GlobalMessage {
-        address instance;      // Which project instance emitted this message
-        address sender;        // User who performed the action
-        uint256 packedData;    // Packed metadata (timestamp, factory type, action type, context ID, amount)
-        string message;        // User-provided message text
-    }
-
-    // ┌─────────────────────────┐
     // │      State Variables    │
     // └─────────────────────────┘
 
-    /// @notice All messages in chronological order (append-only)
-    GlobalMessage[] public messages;
-
-    /// @notice Index mapping instance => array of message IDs
-    mapping(address => uint256[]) private instanceMessageIds;
+    /// @notice Running message counter for unique IDs
+    uint256 public messageCount;
 
     /// @notice MasterRegistry for factory parentage verification
     IMasterRegistry public masterRegistry;
@@ -49,7 +35,8 @@ contract GlobalMessageRegistry is Ownable {
         uint8 factoryType,
         uint8 actionType,
         uint32 contextId,
-        uint256 timestamp
+        uint256 timestamp,
+        string message
     );
 
     event MasterRegistrySet(address indexed masterRegistry);
@@ -92,19 +79,10 @@ contract GlobalMessageRegistry is Ownable {
         require(instance != address(0), "Invalid instance");
         require(sender != address(0), "Invalid sender");
 
-        // Create message
-        messageId = messages.length;
-        messages.push(GlobalMessage({
-            instance: instance,
-            sender: sender,
-            packedData: packedData,
-            message: message
-        }));
+        // Assign message ID
+        messageId = messageCount++;
 
-        // Index by instance
-        instanceMessageIds[instance].push(messageId);
-
-        // Emit event with unpacked data for indexing
+        // Emit event with all data for indexing
         (uint32 timestamp, uint8 factoryType, uint8 actionType, uint32 contextId, ) =
             GlobalMessagePacking.unpack(packedData);
 
@@ -115,7 +93,8 @@ contract GlobalMessageRegistry is Ownable {
             factoryType,
             actionType,
             contextId,
-            timestamp
+            timestamp,
+            message
         );
     }
 
@@ -144,157 +123,11 @@ contract GlobalMessageRegistry is Ownable {
         return masterRegistry.isInstanceFromApprovedFactory(instance);
     }
 
-    // ┌─────────────────────────┐
-    // │    Query Functions      │
-    // └─────────────────────────┘
-
-    /**
-     * @notice Get a single message by ID
-     * @param messageId Message ID
-     * @return message The global message
-     */
-    function getMessage(uint256 messageId) external view returns (GlobalMessage memory message) {
-        require(messageId < messages.length, "Message does not exist");
-        return messages[messageId];
-    }
-
     /**
      * @notice Get total message count
      * @return count Total number of messages
      */
     function getMessageCount() external view returns (uint256 count) {
-        return messages.length;
-    }
-
-    /**
-     * @notice Get recent messages (most recent first)
-     * @param count Number of messages to retrieve
-     * @return recentMessages Array of recent messages
-     */
-    function getRecentMessages(uint256 count) external view returns (GlobalMessage[] memory recentMessages) {
-        uint256 totalMessages = messages.length;
-        if (totalMessages == 0) {
-            return new GlobalMessage[](0);
-        }
-
-        uint256 actualCount = count > totalMessages ? totalMessages : count;
-        recentMessages = new GlobalMessage[](actualCount);
-
-        for (uint256 i = 0; i < actualCount; i++) {
-            recentMessages[i] = messages[totalMessages - 1 - i];
-        }
-    }
-
-    /**
-     * @notice Get paginated messages (supports large queries)
-     * @param offset Starting index (0 = most recent)
-     * @param limit Number of messages to retrieve
-     * @return paginatedMessages Array of messages
-     */
-    function getRecentMessagesPaginated(
-        uint256 offset,
-        uint256 limit
-    ) external view returns (GlobalMessage[] memory paginatedMessages) {
-        uint256 totalMessages = messages.length;
-        if (totalMessages == 0 || offset >= totalMessages) {
-            return new GlobalMessage[](0);
-        }
-
-        uint256 remaining = totalMessages - offset;
-        uint256 actualLimit = limit > remaining ? remaining : limit;
-        paginatedMessages = new GlobalMessage[](actualLimit);
-
-        for (uint256 i = 0; i < actualLimit; i++) {
-            paginatedMessages[i] = messages[totalMessages - 1 - offset - i];
-        }
-    }
-
-    /**
-     * @notice Get message count for a specific instance
-     * @param instance Instance address
-     * @return count Number of messages from this instance
-     */
-    function getMessageCountForInstance(address instance) external view returns (uint256 count) {
-        return instanceMessageIds[instance].length;
-    }
-
-    /**
-     * @notice Get recent messages for a specific instance
-     * @param instance Instance address
-     * @param count Number of messages to retrieve
-     * @return instanceMessages Array of messages from this instance
-     */
-    function getInstanceMessages(
-        address instance,
-        uint256 count
-    ) external view returns (GlobalMessage[] memory instanceMessages) {
-        uint256[] storage messageIds = instanceMessageIds[instance];
-        uint256 totalInstanceMessages = messageIds.length;
-
-        if (totalInstanceMessages == 0) {
-            return new GlobalMessage[](0);
-        }
-
-        uint256 actualCount = count > totalInstanceMessages ? totalInstanceMessages : count;
-        instanceMessages = new GlobalMessage[](actualCount);
-
-        for (uint256 i = 0; i < actualCount; i++) {
-            uint256 messageId = messageIds[totalInstanceMessages - 1 - i];
-            instanceMessages[i] = messages[messageId];
-        }
-    }
-
-    /**
-     * @notice Get paginated messages for a specific instance
-     * @param instance Instance address
-     * @param offset Starting index (0 = most recent)
-     * @param limit Number of messages to retrieve
-     * @return paginatedMessages Array of messages from this instance
-     */
-    function getInstanceMessagesPaginated(
-        address instance,
-        uint256 offset,
-        uint256 limit
-    ) external view returns (GlobalMessage[] memory paginatedMessages) {
-        uint256[] storage messageIds = instanceMessageIds[instance];
-        uint256 totalInstanceMessages = messageIds.length;
-
-        if (totalInstanceMessages == 0 || offset >= totalInstanceMessages) {
-            return new GlobalMessage[](0);
-        }
-
-        uint256 remaining = totalInstanceMessages - offset;
-        uint256 actualLimit = limit > remaining ? remaining : limit;
-        paginatedMessages = new GlobalMessage[](actualLimit);
-
-        for (uint256 i = 0; i < actualLimit; i++) {
-            uint256 messageId = messageIds[totalInstanceMessages - 1 - offset - i];
-            paginatedMessages[i] = messages[messageId];
-        }
-    }
-
-    /**
-     * @notice Get all message IDs for a specific instance
-     * @dev Use with caution for instances with many messages - prefer pagination
-     * @param instance Instance address
-     * @return messageIds Array of message IDs
-     */
-    function getInstanceMessageIds(address instance) external view returns (uint256[] memory messageIds) {
-        return instanceMessageIds[instance];
-    }
-
-    /**
-     * @notice Batch query messages by IDs
-     * @param messageIds Array of message IDs to query
-     * @return batchMessages Array of messages
-     */
-    function getMessagesBatch(uint256[] calldata messageIds) external view returns (
-        GlobalMessage[] memory batchMessages
-    ) {
-        batchMessages = new GlobalMessage[](messageIds.length);
-        for (uint256 i = 0; i < messageIds.length; i++) {
-            require(messageIds[i] < messages.length, "Message does not exist");
-            batchMessages[i] = messages[messageIds[i]];
-        }
+        return messageCount;
     }
 }

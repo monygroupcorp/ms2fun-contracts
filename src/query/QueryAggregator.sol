@@ -24,14 +24,7 @@ interface IFeaturedQueueManager {
 
 /// @notice Interface for GlobalMessageRegistry
 interface IGlobalMessageRegistry {
-    struct GlobalMessage {
-        address instance;
-        address sender;
-        uint256 packedData;
-        string message;
-    }
-
-    function getRecentMessages(uint256 count) external view returns (GlobalMessage[] memory);
+    function getMessageCount() external view returns (uint256);
 }
 
 /// @notice Interface for ERC404 balance queries
@@ -56,11 +49,12 @@ interface IERC404Staking {
 /**
  * @title QueryAggregator
  * @notice Read-only aggregator that batches queries across multiple registry contracts
- * @dev Reduces frontend RPC calls from 80+ to 1-3 per page by aggregating data from:
+ * @dev Reduces frontend RPC calls by aggregating data from:
  *      - MasterRegistry (instances, factories, vaults)
  *      - FeaturedQueueManager (featured queue positions)
- *      - GlobalMessageRegistry (recent activity)
  *      - Individual instance contracts (dynamic card data)
+ *
+ *      Vault leaderboards and instance enumeration are handled off-chain via EventIndexer.
  */
 contract QueryAggregator is UUPSUpgradeable, Ownable {
     // ============ Data Structures ============
@@ -89,14 +83,6 @@ contract QueryAggregator is UUPSUpgradeable, Ownable {
         // From FeaturedQueueManager
         uint256 featuredPosition;
         uint256 featuredExpires;
-    }
-
-    /// @notice Compact vault info for leaderboards
-    struct VaultSummary {
-        address vault;
-        string name;
-        uint256 tvl;
-        uint256 instanceCount;
     }
 
     /// @notice ERC404 token holdings for a user
@@ -180,20 +166,16 @@ contract QueryAggregator is UUPSUpgradeable, Ownable {
     // ============ Main Query Methods ============
 
     /**
-     * @notice Fetches all data needed for the home page in one call
+     * @notice Fetches featured projects for the home page
      * @param offset Starting index in featured queue
      * @param limit Number of projects to return (max 50)
      * @return projects Fully populated ProjectCard array
      * @return totalFeatured Total count in featured queue (for pagination)
-     * @return topVaults Top 3 vaults by TVL
-     * @return recentActivity Last 5 global messages
      */
     function getHomePageData(uint256 offset, uint256 limit)
         external view returns (
             ProjectCard[] memory projects,
-            uint256 totalFeatured,
-            VaultSummary[] memory topVaults,
-            IGlobalMessageRegistry.GlobalMessage[] memory recentActivity
+            uint256 totalFeatured
         )
     {
         require(limit <= MAX_QUERY_LIMIT, "Limit too high");
@@ -202,17 +184,10 @@ contract QueryAggregator is UUPSUpgradeable, Ownable {
         uint256 queueLen = featuredQueueManager.queueLength();
         totalFeatured = queueLen;
 
-        // 2. Get top 3 vaults by TVL (do this regardless of featured count)
-        topVaults = _getTopVaults(3);
-
-        // 3. Get recent activity (do this regardless of featured count)
-        recentActivity = globalMessageRegistry.getRecentMessages(5);
-
-        // 4. Handle bounds clamping for featured projects
+        // 2. Handle bounds clamping for featured projects
         if (offset >= queueLen) {
-            // Return empty projects if offset is past end
             projects = new ProjectCard[](0);
-            return (projects, totalFeatured, topVaults, recentActivity);
+            return (projects, totalFeatured);
         }
 
         // Clamp endIndex to queue bounds
@@ -221,11 +196,11 @@ contract QueryAggregator is UUPSUpgradeable, Ownable {
             endIndex = queueLen;
         }
 
-        // 5. Get featured instances from queue
+        // 3. Get featured instances from queue
         (address[] memory featuredAddresses, ) =
             featuredQueueManager.getFeaturedInstances(offset, endIndex);
 
-        // 6. Hydrate each into ProjectCard
+        // 4. Hydrate each into ProjectCard
         projects = new ProjectCard[](featuredAddresses.length);
         for (uint256 i = 0; i < featuredAddresses.length; i++) {
             projects[i] = _hydrateProject(featuredAddresses[i]);
@@ -252,12 +227,13 @@ contract QueryAggregator is UUPSUpgradeable, Ownable {
      * @notice Fetches all holdings for a user across specified instances and vaults
      * @param user User address to query
      * @param instances Array of instance addresses to check
+     * @param vaultAddrs Array of vault addresses to check for benefactor positions
      * @return erc404Holdings All ERC404 token/NFT holdings with non-zero balance
      * @return erc1155Holdings All ERC1155 edition holdings with non-zero balance
      * @return vaultPositions All vault benefactor positions with non-zero shares
      * @return totalClaimable Sum of all claimable rewards (ETH)
      */
-    function getPortfolioData(address user, address[] calldata instances)
+    function getPortfolioData(address user, address[] calldata instances, address[] calldata vaultAddrs)
         external view returns (
             ERC404Holding[] memory erc404Holdings,
             ERC1155Holding[] memory erc1155Holdings,
@@ -307,69 +283,12 @@ contract QueryAggregator is UUPSUpgradeable, Ownable {
             erc1155Holdings[i] = tempERC1155[i];
         }
 
-        // Get vault positions
-        vaultPositions = _getVaultPositions(user);
+        // Get vault positions from provided addresses
+        vaultPositions = _getVaultPositions(user, vaultAddrs);
 
         // Add vault claimable to total
         for (uint256 i = 0; i < vaultPositions.length; i++) {
             totalClaimable += vaultPositions[i].claimable;
-        }
-    }
-
-    /**
-     * @notice Fetches ranked vault list
-     * @param sortBy 0 = by TVL, 1 = by popularity (instance count)
-     * @param limit Number of vaults to return (max 50)
-     * @return vaults Sorted VaultSummary array
-     */
-    function getVaultLeaderboard(uint8 sortBy, uint256 limit)
-        external view returns (VaultSummary[] memory vaults)
-    {
-        require(limit <= MAX_QUERY_LIMIT, "Limit too high");
-
-        if (sortBy == 0) {
-            // Sort by TVL - delegate to existing method
-            (address[] memory addrs, uint256[] memory tvls, string[] memory names) =
-                masterRegistry.getVaultsByTVL(limit);
-
-            vaults = new VaultSummary[](addrs.length);
-            for (uint256 i = 0; i < addrs.length; i++) {
-                try masterRegistry.getVaultInfo(addrs[i]) returns (IMasterRegistry.VaultInfo memory info) {
-                    vaults[i] = VaultSummary({
-                        vault: addrs[i],
-                        name: names[i],
-                        tvl: tvls[i],
-                        instanceCount: info.instanceCount
-                    });
-                } catch {
-                    vaults[i] = VaultSummary({
-                        vault: addrs[i],
-                        name: names[i],
-                        tvl: tvls[i],
-                        instanceCount: 0
-                    });
-                }
-            }
-        } else {
-            // Sort by popularity - delegate to existing method
-            (address[] memory addrs, uint256[] memory counts, string[] memory names) =
-                masterRegistry.getVaultsByPopularity(limit);
-
-            vaults = new VaultSummary[](addrs.length);
-            for (uint256 i = 0; i < addrs.length; i++) {
-                // Fetch TVL separately
-                uint256 tvl = 0;
-                try IAlignmentVault(payable(addrs[i])).accumulatedFees() returns (uint256 fees) {
-                    tvl = fees;
-                } catch {}
-
-                vaults[i] = VaultSummary({
-                    vault: addrs[i],
-                    name: names[i],
-                    tvl: tvl,
-                    instanceCount: counts[i]
-                });
-            }
         }
     }
 
@@ -432,36 +351,6 @@ contract QueryAggregator is UUPSUpgradeable, Ownable {
                 }
             } catch {}
         } catch {}
-    }
-
-    /**
-     * @notice Get top vaults by TVL
-     * @param limit Number of vaults to return
-     * @return vaults VaultSummary array
-     */
-    function _getTopVaults(uint256 limit) internal view returns (VaultSummary[] memory vaults) {
-        try masterRegistry.getVaultsByTVL(limit) returns (
-            address[] memory addrs,
-            uint256[] memory tvls,
-            string[] memory names
-        ) {
-            vaults = new VaultSummary[](addrs.length);
-            for (uint256 i = 0; i < addrs.length; i++) {
-                uint256 instanceCount = 0;
-                try masterRegistry.getVaultInfo(addrs[i]) returns (IMasterRegistry.VaultInfo memory info) {
-                    instanceCount = info.instanceCount;
-                } catch {}
-
-                vaults[i] = VaultSummary({
-                    vault: addrs[i],
-                    name: names[i],
-                    tvl: tvls[i],
-                    instanceCount: instanceCount
-                });
-            }
-        } catch {
-            vaults = new VaultSummary[](0);
-        }
     }
 
     /**
@@ -538,50 +427,49 @@ contract QueryAggregator is UUPSUpgradeable, Ownable {
     }
 
     /**
-     * @notice Get vault positions for a user
+     * @notice Get vault positions for a user from provided vault addresses
+     * @param user User address
+     * @param vaultAddrs Vault addresses to check (provided by frontend via EventIndexer)
      */
-    function _getVaultPositions(address user) internal view returns (VaultPosition[] memory positions) {
-        // Get all vaults
-        try masterRegistry.getVaultList() returns (address[] memory vaultAddrs) {
-            VaultPosition[] memory tempPositions = new VaultPosition[](vaultAddrs.length);
-            uint256 positionCount = 0;
+    function _getVaultPositions(address user, address[] calldata vaultAddrs)
+        internal view returns (VaultPosition[] memory positions)
+    {
+        VaultPosition[] memory tempPositions = new VaultPosition[](vaultAddrs.length);
+        uint256 positionCount = 0;
 
-            for (uint256 i = 0; i < vaultAddrs.length; i++) {
-                address vaultAddr = vaultAddrs[i];
+        for (uint256 i = 0; i < vaultAddrs.length; i++) {
+            address vaultAddr = vaultAddrs[i];
 
-                try IAlignmentVault(payable(vaultAddr)).getBenefactorShares(user) returns (uint256 shares) {
-                    if (shares > 0) {
-                        VaultPosition memory pos;
-                        pos.vault = vaultAddr;
-                        pos.shares = shares;
+            try IAlignmentVault(payable(vaultAddr)).getBenefactorShares(user) returns (uint256 shares) {
+                if (shares > 0) {
+                    VaultPosition memory pos;
+                    pos.vault = vaultAddr;
+                    pos.shares = shares;
 
-                        // Get vault name
-                        try masterRegistry.getVaultInfo(vaultAddr) returns (IMasterRegistry.VaultInfo memory info) {
-                            pos.name = info.name;
-                        } catch {}
+                    // Get vault name
+                    try masterRegistry.getVaultInfo(vaultAddr) returns (IMasterRegistry.VaultInfo memory info) {
+                        pos.name = info.name;
+                    } catch {}
 
-                        // Get contribution
-                        try IAlignmentVault(payable(vaultAddr)).getBenefactorContribution(user) returns (uint256 contribution) {
-                            pos.contribution = contribution;
-                        } catch {}
+                    // Get contribution
+                    try IAlignmentVault(payable(vaultAddr)).getBenefactorContribution(user) returns (uint256 contribution) {
+                        pos.contribution = contribution;
+                    } catch {}
 
-                        // Get claimable
-                        try IAlignmentVault(payable(vaultAddr)).calculateClaimableAmount(user) returns (uint256 claimable) {
-                            pos.claimable = claimable;
-                        } catch {}
+                    // Get claimable
+                    try IAlignmentVault(payable(vaultAddr)).calculateClaimableAmount(user) returns (uint256 claimable) {
+                        pos.claimable = claimable;
+                    } catch {}
 
-                        tempPositions[positionCount++] = pos;
-                    }
-                } catch {}
-            }
+                    tempPositions[positionCount++] = pos;
+                }
+            } catch {}
+        }
 
-            // Trim to actual size
-            positions = new VaultPosition[](positionCount);
-            for (uint256 i = 0; i < positionCount; i++) {
-                positions[i] = tempPositions[i];
-            }
-        } catch {
-            positions = new VaultPosition[](0);
+        // Trim to actual size
+        positions = new VaultPosition[](positionCount);
+        for (uint256 i = 0; i < positionCount; i++) {
+            positions[i] = tempPositions[i];
         }
     }
 

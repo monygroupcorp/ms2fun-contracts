@@ -29,9 +29,6 @@ contract FeaturedQueueManager is UUPSUpgradeable, Ownable, ReentrancyGuard {
     // Quick position lookups (1-indexed, 0 = not in queue)
     mapping(address => uint256) public instancePosition;
 
-    // Per-position competitive pricing
-    mapping(uint256 => IMasterRegistry.PositionDemand) public positionDemand;
-
     // Auto-renewal deposits
     mapping(address => uint256) public renewalDeposits;
 
@@ -122,13 +119,6 @@ contract FeaturedQueueManager is UUPSUpgradeable, Ownable, ReentrancyGuard {
                 uint256 competitivePrice = (slot.rentPaid * demandMultiplier) / 100;
                 return competitivePrice > adjustedBase ? competitivePrice : adjustedBase;
             }
-        }
-
-        // Check demand tracking
-        IMasterRegistry.PositionDemand memory demand = positionDemand[position];
-        if (demand.lastRentalTime > 0) {
-            uint256 demandPrice = (demand.lastRentalPrice * demandMultiplier) / 100;
-            return demandPrice > adjustedBase ? demandPrice : adjustedBase;
         }
 
         return adjustedBase;
@@ -365,9 +355,6 @@ contract FeaturedQueueManager is UUPSUpgradeable, Ownable, ReentrancyGuard {
         require(currentSlot.active, "Rental not active");
         require(block.timestamp < currentSlot.expiresAt, "Rental expired");
 
-        // Get the FULL competitive price
-        uint256 fullCompetitivePrice = getPositionRentalPrice(targetPosition);
-
         // Calculate what THIS user pays (with their credit)
         uint256 bumpCost = _calculateBumpCost(currentPosition, targetPosition, additionalDuration);
         require(msg.value >= bumpCost, "Insufficient payment");
@@ -394,13 +381,6 @@ contract FeaturedQueueManager is UUPSUpgradeable, Ownable, ReentrancyGuard {
         // Place at target position
         featuredQueue[targetPosition - 1] = movingSlot;
         instancePosition[instance] = targetPosition;
-
-        // Update demand tracking with FULL competitive price
-        positionDemand[targetPosition] = IMasterRegistry.PositionDemand({
-            lastRentalPrice: fullCompetitivePrice,
-            lastRentalTime: block.timestamp,
-            totalRentalsAllTime: positionDemand[targetPosition].totalRentalsAllTime + 1
-        });
 
         // Refund excess
         if (msg.value > bumpCost) {
@@ -545,13 +525,6 @@ contract FeaturedQueueManager is UUPSUpgradeable, Ownable, ReentrancyGuard {
             featuredQueue[index] = newSlot;
             instancePosition[instance] = position;
         }
-
-        // Update demand tracking
-        positionDemand[position] = IMasterRegistry.PositionDemand({
-            lastRentalPrice: rentPaid,
-            lastRentalTime: block.timestamp,
-            totalRentalsAllTime: positionDemand[position].totalRentalsAllTime + 1
-        });
     }
 
     /**

@@ -5,7 +5,6 @@ import {UUPSUpgradeable} from "solady/utils/UUPSUpgradeable.sol";
 import {Ownable} from "solady/auth/Ownable.sol";
 import {ReentrancyGuard} from "solady/utils/ReentrancyGuard.sol";
 import {IMasterRegistry} from "./interfaces/IMasterRegistry.sol";
-import {IAlignmentVault} from "../interfaces/IAlignmentVault.sol";
 import {MetadataUtils} from "../shared/libraries/MetadataUtils.sol";
 import {VaultRegistry} from "../registry/VaultRegistry.sol";
 import {FactoryApprovalGovernance} from "../governance/FactoryApprovalGovernance.sol";
@@ -48,11 +47,6 @@ contract MasterRegistryV1 is UUPSUpgradeable, Ownable, ReentrancyGuard, IMasterR
     mapping(address => bool) public registeredFactories;
     mapping(bytes32 => bool) public nameHashes; // For name collision prevention
     mapping(address => IMasterRegistry.InstanceInfo) public instanceInfo;
-    mapping(address => address[]) public creatorInstances; // creator => instances[]
-
-    // Instance Enumeration (for listing all instances)
-    address[] public allInstances; // Array of all registered instances
-    mapping(address => uint256) public instanceIndex; // instance address => index in allInstances
 
     // Phase 2 Registry Contracts
     address public vaultRegistry;
@@ -65,11 +59,7 @@ contract MasterRegistryV1 is UUPSUpgradeable, Ownable, ReentrancyGuard, IMasterR
     // Vault Registry - Hook is now managed by vault, not MasterRegistry
     mapping(address => IMasterRegistry.VaultInfo) public vaultInfo;
     mapping(address => bool) public registeredVaults;
-    address[] public vaultList;
     uint256 public vaultRegistrationFee = 0.05 ether;
-
-    // Vault-to-Instance tracking (for queries and analytics)
-    mapping(address => address[]) public vaultInstances; // vault => instances using it
 
     // Note: Competitive Rental Queue System has been extracted to FeaturedQueueManager
 
@@ -317,18 +307,6 @@ contract MasterRegistryV1 is UUPSUpgradeable, Ownable, ReentrancyGuard, IMasterR
             registeredAt: block.timestamp
         });
 
-        creatorInstances[creator].push(instance);
-
-        // Track instance in enumeration array
-        instanceIndex[instance] = allInstances.length;
-        allInstances.push(instance);
-
-        // Track vault usage if vault is provided and registered
-        if (vault != address(0) && registeredVaults[vault]) {
-            vaultInstances[vault].push(instance);
-            vaultInfo[vault].instanceCount++;
-        }
-
         emit InstanceRegistered(instance, factory, creator, name);
         emit CreatorInstanceAdded(creator, instance);
     }
@@ -356,13 +334,6 @@ contract MasterRegistryV1 is UUPSUpgradeable, Ownable, ReentrancyGuard, IMasterR
     function getInstanceInfo(address instance) external view returns (IMasterRegistry.InstanceInfo memory) {
         require(instanceInfo[instance].instance != address(0), "Instance not found");
         return instanceInfo[instance];
-    }
-
-    /**
-     * @notice Get creator instances
-     */
-    function getCreatorInstances(address creator) external view returns (address[] memory) {
-        return creatorInstances[creator];
     }
 
     /**
@@ -402,44 +373,6 @@ contract MasterRegistryV1 is UUPSUpgradeable, Ownable, ReentrancyGuard, IMasterR
         return nameHashes[nameHash];
     }
 
-    /**
-     * @notice Get total number of instances
-     */
-    function getTotalInstances() external view returns (uint256) {
-        return allInstances.length;
-    }
-
-    /**
-     * @notice Get instance address by index
-     * @param index Index in allInstances array (0-based)
-     * @return Instance address at that index
-     */
-    function getInstanceByIndex(uint256 index) external view returns (address) {
-        require(index < allInstances.length, "Index out of bounds");
-        return allInstances[index];
-    }
-
-    /**
-     * @notice Get paginated list of instance addresses
-     * @param offset Starting index (0-based)
-     * @param limit Maximum number of addresses to return
-     * @return instances Array of instance addresses
-     */
-    function getInstanceAddresses(uint256 offset, uint256 limit)
-        external view returns (address[] memory instances)
-    {
-        uint256 total = allInstances.length;
-        if (offset >= total) return new address[](0);
-
-        uint256 end = offset + limit;
-        if (end > total) end = total;
-
-        instances = new address[](end - offset);
-        for (uint256 i = offset; i < end; i++) {
-            instances[i - offset] = allInstances[i];
-        }
-    }
-
     // ============ Competitive Rental Queue System ============
     // Note: Queue system extracted to FeaturedQueueManager contract
     // Use featuredQueueManager address to interact with queue functions
@@ -465,7 +398,6 @@ contract MasterRegistryV1 is UUPSUpgradeable, Ownable, ReentrancyGuard, IMasterR
         }
 
         registeredVaults[vault] = true;
-        vaultList.push(vault);
 
         vaultInfo[vault] = IMasterRegistry.VaultInfo({
             vault: vault,
@@ -473,8 +405,7 @@ contract MasterRegistryV1 is UUPSUpgradeable, Ownable, ReentrancyGuard, IMasterR
             name: name,
             metadataURI: metadataURI,
             active: true,
-            registeredAt: block.timestamp,
-            instanceCount: 0
+            registeredAt: block.timestamp
         });
 
         // Refund excess (only for direct registration)
@@ -491,10 +422,6 @@ contract MasterRegistryV1 is UUPSUpgradeable, Ownable, ReentrancyGuard, IMasterR
         return vaultInfo[vault];
     }
 
-    function getVaultList() external view override returns (address[] memory) {
-        return vaultList;
-    }
-
     function isVaultRegistered(address vault) external view override returns (bool) {
         return registeredVaults[vault] && vaultInfo[vault].active;
     }
@@ -503,184 +430,6 @@ contract MasterRegistryV1 is UUPSUpgradeable, Ownable, ReentrancyGuard, IMasterR
         require(registeredVaults[vault], "Vault not registered");
         vaultInfo[vault].active = false;
         emit VaultDeactivated(vault);
-    }
-
-    // ============ Vault Query Functions ============
-
-    /**
-     * @notice Get total number of registered vaults
-     * @return Total vault count
-     */
-    function getTotalVaults() external view returns (uint256) {
-        return vaultList.length;
-    }
-
-    /**
-     * @notice Get all instances using a specific vault
-     * @param vault Vault address to query
-     * @return Array of instance addresses using this vault
-     */
-    function getInstancesByVault(address vault) external view returns (address[] memory) {
-        require(registeredVaults[vault], "Vault not registered");
-        return vaultInstances[vault];
-    }
-
-    /**
-     * @notice Get paginated vault list with full info
-     * @param startIndex Starting index (0-based)
-     * @param endIndex Ending index (exclusive)
-     * @return vaults Array of vault addresses
-     * @return infos Array of vault info structs
-     * @return total Total number of vaults
-     */
-    function getVaults(
-        uint256 startIndex,
-        uint256 endIndex
-    ) external view returns (
-        address[] memory vaults,
-        VaultInfo[] memory infos,
-        uint256 total
-    ) {
-        require(endIndex > startIndex, "Invalid range");
-        require(endIndex <= vaultList.length, "End index out of bounds");
-
-        uint256 resultSize = endIndex - startIndex;
-        vaults = new address[](resultSize);
-        infos = new VaultInfo[](resultSize);
-
-        for (uint256 i = startIndex; i < endIndex; i++) {
-            address vault = vaultList[i];
-            vaults[i - startIndex] = vault;
-            infos[i - startIndex] = vaultInfo[vault];
-        }
-
-        return (vaults, infos, vaultList.length);
-    }
-
-    /**
-     * @notice Get vaults sorted by popularity (most instances)
-     * @param limit Maximum number of vaults to return
-     * @return vaults Array of vault addresses (sorted by popularity)
-     * @return instanceCounts Array of instance counts for each vault
-     * @return names Array of vault names
-     */
-    function getVaultsByPopularity(
-        uint256 limit
-    ) external view returns (
-        address[] memory vaults,
-        uint256[] memory instanceCounts,
-        string[] memory names
-    ) {
-        uint256 totalVaults = vaultList.length;
-        uint256 resultSize = limit > totalVaults ? totalVaults : limit;
-
-        // Create arrays to sort
-        address[] memory allVaults = new address[](totalVaults);
-        uint256[] memory allCounts = new uint256[](totalVaults);
-
-        // Populate arrays
-        for (uint256 i = 0; i < totalVaults; i++) {
-            address vault = vaultList[i];
-            allVaults[i] = vault;
-            allCounts[i] = vaultInfo[vault].instanceCount;
-        }
-
-        // Simple bubble sort (descending by instance count)
-        for (uint256 i = 0; i < totalVaults; i++) {
-            for (uint256 j = i + 1; j < totalVaults; j++) {
-                if (allCounts[j] > allCounts[i]) {
-                    // Swap counts
-                    uint256 tempCount = allCounts[i];
-                    allCounts[i] = allCounts[j];
-                    allCounts[j] = tempCount;
-
-                    // Swap addresses
-                    address tempAddr = allVaults[i];
-                    allVaults[i] = allVaults[j];
-                    allVaults[j] = tempAddr;
-                }
-            }
-        }
-
-        // Extract top N
-        vaults = new address[](resultSize);
-        instanceCounts = new uint256[](resultSize);
-        names = new string[](resultSize);
-
-        for (uint256 i = 0; i < resultSize; i++) {
-            vaults[i] = allVaults[i];
-            instanceCounts[i] = allCounts[i];
-            names[i] = vaultInfo[allVaults[i]].name;
-        }
-
-        return (vaults, instanceCounts, names);
-    }
-
-    /**
-     * @notice Get vaults sorted by Total Value Locked (TVL)
-     * @dev Queries IAlignmentVault.accumulatedFees() for each vault
-     * @param limit Maximum number of vaults to return
-     * @return vaults Array of vault addresses (sorted by TVL)
-     * @return tvls Array of TVL values for each vault
-     * @return names Array of vault names
-     */
-    function getVaultsByTVL(
-        uint256 limit
-    ) external view returns (
-        address[] memory vaults,
-        uint256[] memory tvls,
-        string[] memory names
-    ) {
-        uint256 totalVaults = vaultList.length;
-        uint256 resultSize = limit > totalVaults ? totalVaults : limit;
-
-        // Create arrays to sort
-        address[] memory allVaults = new address[](totalVaults);
-        uint256[] memory allTVLs = new uint256[](totalVaults);
-
-        // Populate arrays by querying each vault's accumulated fees
-        for (uint256 i = 0; i < totalVaults; i++) {
-            address vault = vaultList[i];
-            allVaults[i] = vault;
-
-            // Query vault's TVL (accumulatedFees)
-            try IAlignmentVault(payable(vault)).accumulatedFees() returns (uint256 fees) {
-                allTVLs[i] = fees;
-            } catch {
-                // If query fails, TVL is 0
-                allTVLs[i] = 0;
-            }
-        }
-
-        // Simple bubble sort (descending by TVL)
-        for (uint256 i = 0; i < totalVaults; i++) {
-            for (uint256 j = i + 1; j < totalVaults; j++) {
-                if (allTVLs[j] > allTVLs[i]) {
-                    // Swap TVLs
-                    uint256 tempTVL = allTVLs[i];
-                    allTVLs[i] = allTVLs[j];
-                    allTVLs[j] = tempTVL;
-
-                    // Swap addresses
-                    address tempAddr = allVaults[i];
-                    allVaults[i] = allVaults[j];
-                    allVaults[j] = tempAddr;
-                }
-            }
-        }
-
-        // Extract top N
-        vaults = new address[](resultSize);
-        tvls = new uint256[](resultSize);
-        names = new string[](resultSize);
-
-        for (uint256 i = 0; i < resultSize; i++) {
-            vaults[i] = allVaults[i];
-            tvls[i] = allTVLs[i];
-            names[i] = vaultInfo[allVaults[i]].name;
-        }
-
-        return (vaults, tvls, names);
     }
 
     // ============ Vault Governance ============
@@ -765,7 +514,6 @@ contract MasterRegistryV1 is UUPSUpgradeable, Ownable, ReentrancyGuard, IMasterR
 
         // Register the vault
         registeredVaults[vaultAddress] = true;
-        vaultList.push(vaultAddress);
 
         vaultInfo[vaultAddress] = IMasterRegistry.VaultInfo({
             vault: vaultAddress,
@@ -773,8 +521,7 @@ contract MasterRegistryV1 is UUPSUpgradeable, Ownable, ReentrancyGuard, IMasterR
             name: title,
             metadataURI: metadataURI,
             active: true,
-            registeredAt: block.timestamp,
-            instanceCount: 0
+            registeredAt: block.timestamp
         });
 
         emit VaultRegistered(vaultAddress, creator, title, 0);
@@ -931,51 +678,6 @@ interface IVaultApprovalGovernance {
         uint256 cumulativeYayRequired,
         uint256 roundCount
     );
-}
-
-interface IVaultRegistry {
-    function registerVault(address vault, string memory name, string memory metadataURI) external payable;
-
-    function registerHook(address hook, address vault, string memory name, string memory metadataURI) external payable;
-
-    function getVaultInfo(address vault) external view returns (
-        address,
-        address,
-        string memory,
-        string memory,
-        bool,
-        uint256,
-        uint256
-    );
-
-    function getHookInfo(address hook) external view returns (
-        address,
-        address,
-        address,
-        string memory,
-        string memory,
-        bool,
-        uint256,
-        uint256
-    );
-
-    function getVaultList() external view returns (address[] memory);
-
-    function getHookList() external view returns (address[] memory);
-
-    function getHooksByVault(address vault) external view returns (address[] memory);
-
-    function isVaultRegistered(address vault) external view returns (bool);
-
-    function isHookRegistered(address hook) external view returns (bool);
-
-    function deactivateVault(address vault) external;
-
-    function deactivateHook(address hook) external;
-
-    function vaultRegistrationFee() external view returns (uint256);
-
-    function hookRegistrationFee() external view returns (uint256);
 }
 
 // Data structures (needed by interface)

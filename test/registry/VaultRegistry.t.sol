@@ -96,7 +96,6 @@ contract VaultRegistryTest is Test {
         assertEq(info.metadataURI, "https://metadata.uri");
         assertTrue(info.active);
         assertEq(info.registeredAt, block.timestamp);
-        assertEq(info.instanceCount, 0);
     }
 
     function test_RegisterVault_WithExcessFeeRefund() public {
@@ -207,19 +206,6 @@ contract VaultRegistryTest is Test {
         );
     }
 
-    function test_RegisterVault_UpdatesVaultList() public {
-        vm.prank(user1);
-        registry.registerVault{value: VAULT_FEE}(
-            address(mockVault1),
-            "Test Vault",
-            "https://metadata.uri"
-        );
-
-        address[] memory vaultList = registry.getVaultList();
-        assertEq(vaultList.length, 1);
-        assertEq(vaultList[0], address(mockVault1));
-    }
-
     // ============ registerHook Tests ============
 
     function test_RegisterHook_Success() public {
@@ -254,7 +240,6 @@ contract VaultRegistryTest is Test {
         assertEq(info.metadataURI, "https://hook.metadata.uri");
         assertTrue(info.active);
         assertEq(info.registeredAt, block.timestamp);
-        assertEq(info.instanceCount, 0);
     }
 
     function test_RegisterHook_WithExcessFeeRefund() public {
@@ -421,48 +406,6 @@ contract VaultRegistryTest is Test {
         );
     }
 
-    function test_RegisterHook_UpdatesHookList() public {
-        vm.prank(user1);
-        registry.registerVault{value: VAULT_FEE}(
-            address(mockVault1),
-            "Test Vault",
-            "https://vault.metadata.uri"
-        );
-
-        vm.prank(user2);
-        registry.registerHook{value: HOOK_FEE}(
-            address(mockHook1),
-            address(mockVault1),
-            "Test Hook",
-            "https://hook.metadata.uri"
-        );
-
-        address[] memory hookList = registry.getHookList();
-        assertEq(hookList.length, 1);
-        assertEq(hookList[0], address(mockHook1));
-    }
-
-    function test_RegisterHook_UpdatesHooksByVault() public {
-        vm.prank(user1);
-        registry.registerVault{value: VAULT_FEE}(
-            address(mockVault1),
-            "Test Vault",
-            "https://vault.metadata.uri"
-        );
-
-        vm.prank(user2);
-        registry.registerHook{value: HOOK_FEE}(
-            address(mockHook1),
-            address(mockVault1),
-            "Test Hook",
-            "https://hook.metadata.uri"
-        );
-
-        address[] memory vaultHooks = registry.getHooksByVault(address(mockVault1));
-        assertEq(vaultHooks.length, 1);
-        assertEq(vaultHooks[0], address(mockHook1));
-    }
-
     // ============ deactivateVault Tests ============
 
     function test_DeactivateVault_Success() public {
@@ -571,7 +514,6 @@ contract VaultRegistryTest is Test {
         assertEq(info.name, "Test Vault");
         assertEq(info.metadataURI, "https://metadata.uri");
         assertTrue(info.active);
-        assertEq(info.instanceCount, 0);
     }
 
     function test_GetVaultInfo_RevertsOnUnregisteredVault() public {
@@ -604,124 +546,11 @@ contract VaultRegistryTest is Test {
         assertEq(info.name, "Test Hook");
         assertEq(info.metadataURI, "https://hook.metadata.uri");
         assertTrue(info.active);
-        assertEq(info.instanceCount, 0);
     }
 
     function test_GetHookInfo_RevertsOnUnregisteredHook() public {
         vm.expectRevert("Hook not registered");
         registry.getHookInfo(address(mockHook1));
-    }
-
-    // ============ getVaultList Tests ============
-
-    function test_GetVaultList_EmptyInitially() public view {
-        address[] memory vaultList = registry.getVaultList();
-        assertEq(vaultList.length, 0);
-    }
-
-    function test_GetVaultList_MultipleVaults() public {
-        vm.prank(user1);
-        registry.registerVault{value: VAULT_FEE}(
-            address(mockVault1),
-            "Test Vault 1",
-            "https://metadata1.uri"
-        );
-
-        vm.prank(user2);
-        registry.registerVault{value: VAULT_FEE}(
-            address(mockVault2),
-            "Test Vault 2",
-            "https://metadata2.uri"
-        );
-
-        address[] memory vaultList = registry.getVaultList();
-        assertEq(vaultList.length, 2);
-        assertEq(vaultList[0], address(mockVault1));
-        assertEq(vaultList[1], address(mockVault2));
-    }
-
-    // ============ getHookList Tests ============
-
-    function test_GetHookList_EmptyInitially() public view {
-        address[] memory hookList = registry.getHookList();
-        assertEq(hookList.length, 0);
-    }
-
-    function test_GetHookList_MultipleHooks() public {
-        vm.prank(user1);
-        registry.registerVault{value: VAULT_FEE}(
-            address(mockVault1),
-            "Test Vault",
-            "https://vault.metadata.uri"
-        );
-
-        vm.prank(user2);
-        registry.registerHook{value: HOOK_FEE}(
-            address(mockHook1),
-            address(mockVault1),
-            "Test Hook 1",
-            "https://hook1.metadata.uri"
-        );
-
-        registry.registerHook{value: HOOK_FEE}(
-            address(mockHook2),
-            address(mockVault1),
-            "Test Hook 2",
-            "https://hook2.metadata.uri"
-        );
-
-        address[] memory hookList = registry.getHookList();
-        assertEq(hookList.length, 2);
-        assertEq(hookList[0], address(mockHook1));
-        assertEq(hookList[1], address(mockHook2));
-    }
-
-    // ============ getHooksByVault Tests ============
-
-    function test_GetHooksByVault_EmptyForNewVault() public {
-        vm.prank(user1);
-        registry.registerVault{value: VAULT_FEE}(
-            address(mockVault1),
-            "Test Vault",
-            "https://vault.metadata.uri"
-        );
-
-        address[] memory vaultHooks = registry.getHooksByVault(address(mockVault1));
-        assertEq(vaultHooks.length, 0);
-    }
-
-    function test_GetHooksByVault_MultipleHooks() public {
-        vm.prank(user1);
-        registry.registerVault{value: VAULT_FEE}(
-            address(mockVault1),
-            "Test Vault",
-            "https://vault.metadata.uri"
-        );
-
-        vm.prank(user2);
-        registry.registerHook{value: HOOK_FEE}(
-            address(mockHook1),
-            address(mockVault1),
-            "Test Hook 1",
-            "https://hook1.metadata.uri"
-        );
-
-        registry.registerHook{value: HOOK_FEE}(
-            address(mockHook2),
-            address(mockVault1),
-            "Test Hook 2",
-            "https://hook2.metadata.uri"
-        );
-
-        address[] memory vaultHooks = registry.getHooksByVault(address(mockVault1));
-        assertEq(vaultHooks.length, 2);
-        assertEq(vaultHooks[0], address(mockHook1));
-        assertEq(vaultHooks[1], address(mockHook2));
-    }
-
-    function test_GetHooksByVault_RevertsOnUnregisteredVault() public {
-        vm.expectRevert("Vault not registered");
-        registry.getHooksByVault(address(mockVault1));
     }
 
     // ============ isVaultRegistered Tests ============
@@ -798,95 +627,6 @@ contract VaultRegistryTest is Test {
         registry.deactivateHook(address(mockHook1));
 
         assertFalse(registry.isHookRegistered(address(mockHook1)));
-    }
-
-    // ============ incrementVaultInstanceCount Tests ============
-
-    function test_IncrementVaultInstanceCount_Success() public {
-        vm.prank(user1);
-        registry.registerVault{value: VAULT_FEE}(
-            address(mockVault1),
-            "Test Vault",
-            "https://metadata.uri"
-        );
-
-        registry.incrementVaultInstanceCount(address(mockVault1));
-
-        VaultRegistry.VaultInfo memory info = registry.getVaultInfo(address(mockVault1));
-        assertEq(info.instanceCount, 1);
-    }
-
-    function test_IncrementVaultInstanceCount_MultipleIncrements() public {
-        vm.prank(user1);
-        registry.registerVault{value: VAULT_FEE}(
-            address(mockVault1),
-            "Test Vault",
-            "https://metadata.uri"
-        );
-
-        registry.incrementVaultInstanceCount(address(mockVault1));
-        registry.incrementVaultInstanceCount(address(mockVault1));
-        registry.incrementVaultInstanceCount(address(mockVault1));
-
-        VaultRegistry.VaultInfo memory info = registry.getVaultInfo(address(mockVault1));
-        assertEq(info.instanceCount, 3);
-    }
-
-    function test_IncrementVaultInstanceCount_RevertsOnUnregistered() public {
-        vm.expectRevert("Vault not registered");
-        registry.incrementVaultInstanceCount(address(mockVault1));
-    }
-
-    // ============ incrementHookInstanceCount Tests ============
-
-    function test_IncrementHookInstanceCount_Success() public {
-        vm.prank(user1);
-        registry.registerVault{value: VAULT_FEE}(
-            address(mockVault1),
-            "Test Vault",
-            "https://vault.metadata.uri"
-        );
-
-        vm.prank(user2);
-        registry.registerHook{value: HOOK_FEE}(
-            address(mockHook1),
-            address(mockVault1),
-            "Test Hook",
-            "https://hook.metadata.uri"
-        );
-
-        registry.incrementHookInstanceCount(address(mockHook1));
-
-        VaultRegistry.HookInfo memory info = registry.getHookInfo(address(mockHook1));
-        assertEq(info.instanceCount, 1);
-    }
-
-    function test_IncrementHookInstanceCount_MultipleIncrements() public {
-        vm.prank(user1);
-        registry.registerVault{value: VAULT_FEE}(
-            address(mockVault1),
-            "Test Vault",
-            "https://vault.metadata.uri"
-        );
-
-        vm.prank(user2);
-        registry.registerHook{value: HOOK_FEE}(
-            address(mockHook1),
-            address(mockVault1),
-            "Test Hook",
-            "https://hook.metadata.uri"
-        );
-
-        registry.incrementHookInstanceCount(address(mockHook1));
-        registry.incrementHookInstanceCount(address(mockHook1));
-
-        VaultRegistry.HookInfo memory info = registry.getHookInfo(address(mockHook1));
-        assertEq(info.instanceCount, 2);
-    }
-
-    function test_IncrementHookInstanceCount_RevertsOnUnregistered() public {
-        vm.expectRevert("Hook not registered");
-        registry.incrementHookInstanceCount(address(mockHook1));
     }
 
     // ============ setVaultRegistrationFee Tests ============
@@ -972,65 +712,6 @@ contract VaultRegistryTest is Test {
         registry.setAnalyticsModule(notContract);
     }
 
-    // ============ getVaultCount Tests ============
-
-    function test_GetVaultCount_ZeroInitially() public view {
-        assertEq(registry.getVaultCount(), 0);
-    }
-
-    function test_GetVaultCount_IncrementsWithRegistration() public {
-        vm.prank(user1);
-        registry.registerVault{value: VAULT_FEE}(
-            address(mockVault1),
-            "Test Vault 1",
-            "https://metadata1.uri"
-        );
-
-        assertEq(registry.getVaultCount(), 1);
-
-        vm.prank(user2);
-        registry.registerVault{value: VAULT_FEE}(
-            address(mockVault2),
-            "Test Vault 2",
-            "https://metadata2.uri"
-        );
-
-        assertEq(registry.getVaultCount(), 2);
-    }
-
-    // ============ getHookCount Tests ============
-
-    function test_GetHookCount_ZeroInitially() public view {
-        assertEq(registry.getHookCount(), 0);
-    }
-
-    function test_GetHookCount_IncrementsWithRegistration() public {
-        vm.prank(user1);
-        registry.registerVault{value: VAULT_FEE}(
-            address(mockVault1),
-            "Test Vault",
-            "https://vault.metadata.uri"
-        );
-
-        vm.prank(user2);
-        registry.registerHook{value: HOOK_FEE}(
-            address(mockHook1),
-            address(mockVault1),
-            "Test Hook 1",
-            "https://hook1.metadata.uri"
-        );
-
-        assertEq(registry.getHookCount(), 1);
-
-        registry.registerHook{value: HOOK_FEE}(
-            address(mockHook2),
-            address(mockVault1),
-            "Test Hook 2",
-            "https://hook2.metadata.uri"
-        );
-
-        assertEq(registry.getHookCount(), 2);
-    }
 }
 
 // ============ Mock Contracts ============

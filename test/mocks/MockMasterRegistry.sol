@@ -130,13 +130,8 @@ contract MockMasterRegistry is IMasterRegistry {
             name: "",
             metadataURI: "",
             active: false,
-            registeredAt: 0,
-            instanceCount: 0
+            registeredAt: 0
         });
-    }
-
-    function getVaultList() external view override returns (address[] memory) {
-        return new address[](0);
     }
 
     function isVaultRegistered(address) external view override returns (bool) {
@@ -169,40 +164,6 @@ contract MockMasterRegistry is IMasterRegistry {
     function isNameTaken(string memory name) external view override returns (bool) {
         bytes32 nameHash = keccak256(abi.encodePacked(_toLowerCase(name)));
         return _nameHashes[nameHash];
-    }
-
-    // Instance enumeration (required by IMasterRegistry)
-    function getTotalInstances() external view override returns (uint256) {
-        return 0;
-    }
-
-    function getInstanceByIndex(uint256) external view override returns (address) {
-        return address(0);
-    }
-
-    function getInstanceAddresses(uint256, uint256) external view override returns (address[] memory) {
-        return new address[](0);
-    }
-
-    // Vault query methods (required by IMasterRegistry)
-    function getTotalVaults() external view override returns (uint256) {
-        return 0;
-    }
-
-    function getVaultsByTVL(uint256) external view override returns (
-        address[] memory vaults,
-        uint256[] memory tvls,
-        string[] memory names
-    ) {
-        return (new address[](0), new uint256[](0), new string[](0));
-    }
-
-    function getVaultsByPopularity(uint256) external view override returns (
-        address[] memory vaults,
-        uint256[] memory instanceCounts,
-        string[] memory names
-    ) {
-        return (new address[](0), new uint256[](0), new string[](0));
     }
 
     // Helper to mark a name as taken (for testing)

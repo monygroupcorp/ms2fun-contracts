@@ -9,7 +9,7 @@ import {GlobalMessageTypes} from "../../src/libraries/GlobalMessageTypes.sol";
 /**
  * @title GlobalMessagingTestBase
  * @notice Base contract for tests using the global messaging system
- * @dev Provides helper functions for setting up and asserting on global messages
+ * @dev Messages are now emitted as events. Use vm.expectEmit for assertions.
  */
 abstract contract GlobalMessagingTestBase is Test {
     GlobalMessageRegistry public globalRegistry;
@@ -34,133 +34,10 @@ abstract contract GlobalMessagingTestBase is Test {
     // └─────────────────────────┘
 
     /**
-     * @notice Assert global message contents
-     */
-    function _assertGlobalMessage(
-        uint256 messageId,
-        address expectedInstance,
-        address expectedSender,
-        uint8 expectedFactoryType,
-        uint8 expectedActionType,
-        uint32 expectedContextId,
-        string memory expectedMessage
-    ) internal {
-        GlobalMessageRegistry.GlobalMessage memory msg = globalRegistry.getMessage(messageId);
-
-        assertEq(msg.instance, expectedInstance, "Wrong instance");
-        assertEq(msg.sender, expectedSender, "Wrong sender");
-        assertEq(msg.message, expectedMessage, "Wrong message");
-
-        (uint32 ts, uint8 factoryType, uint8 actionType, uint32 contextId, uint96 amount) =
-            GlobalMessagePacking.unpack(msg.packedData);
-
-        assertEq(factoryType, expectedFactoryType, "Wrong factory type");
-        assertEq(actionType, expectedActionType, "Wrong action type");
-        assertEq(contextId, expectedContextId, "Wrong context ID");
-        assertTrue(ts > 0, "Invalid timestamp");
-        assertTrue(amount > 0, "Invalid amount");
-    }
-
-    /**
-     * @notice Assert global message with amount check
-     */
-    function _assertGlobalMessageWithAmount(
-        uint256 messageId,
-        address expectedInstance,
-        address expectedSender,
-        uint8 expectedFactoryType,
-        uint8 expectedActionType,
-        uint32 expectedContextId,
-        uint96 expectedAmount,
-        string memory expectedMessage
-    ) internal {
-        GlobalMessageRegistry.GlobalMessage memory msg = globalRegistry.getMessage(messageId);
-
-        assertEq(msg.instance, expectedInstance, "Wrong instance");
-        assertEq(msg.sender, expectedSender, "Wrong sender");
-        assertEq(msg.message, expectedMessage, "Wrong message");
-
-        (uint32 ts, uint8 factoryType, uint8 actionType, uint32 contextId, uint96 amount) =
-            GlobalMessagePacking.unpack(msg.packedData);
-
-        assertEq(factoryType, expectedFactoryType, "Wrong factory type");
-        assertEq(actionType, expectedActionType, "Wrong action type");
-        assertEq(contextId, expectedContextId, "Wrong context ID");
-        assertEq(amount, expectedAmount, "Wrong amount");
-        assertTrue(ts > 0, "Invalid timestamp");
-    }
-
-    /**
      * @notice Assert message count
      */
-    function _assertMessageCount(uint256 expected) internal {
+    function _assertMessageCount(uint256 expected) internal view {
         assertEq(globalRegistry.getMessageCount(), expected, "Wrong global message count");
-    }
-
-    /**
-     * @notice Assert instance message count
-     */
-    function _assertInstanceMessageCount(address instance, uint256 expected) internal {
-        assertEq(
-            globalRegistry.getMessageCountForInstance(instance),
-            expected,
-            "Wrong instance message count"
-        );
-    }
-
-    // ┌─────────────────────────┐
-    // │    Query Helpers        │
-    // └─────────────────────────┘
-
-    /**
-     * @notice Get recent messages
-     */
-    function _getRecentMessages(uint256 count)
-        internal
-        view
-        returns (GlobalMessageRegistry.GlobalMessage[] memory)
-    {
-        return globalRegistry.getRecentMessages(count);
-    }
-
-    /**
-     * @notice Get instance messages
-     */
-    function _getInstanceMessages(address instance, uint256 count)
-        internal
-        view
-        returns (GlobalMessageRegistry.GlobalMessage[] memory)
-    {
-        return globalRegistry.getInstanceMessages(instance, count);
-    }
-
-    /**
-     * @notice Get single message
-     */
-    function _getMessage(uint256 messageId)
-        internal
-        view
-        returns (GlobalMessageRegistry.GlobalMessage memory)
-    {
-        return globalRegistry.getMessage(messageId);
-    }
-
-    /**
-     * @notice Unpack message data
-     */
-    function _unpackMessage(uint256 messageId)
-        internal
-        view
-        returns (
-            uint32 timestamp,
-            uint8 factoryType,
-            uint8 actionType,
-            uint32 contextId,
-            uint96 amount
-        )
-    {
-        GlobalMessageRegistry.GlobalMessage memory msg = globalRegistry.getMessage(messageId);
-        return GlobalMessagePacking.unpack(msg.packedData);
     }
 
     // ┌─────────────────────────┐
@@ -168,16 +45,9 @@ abstract contract GlobalMessagingTestBase is Test {
     // └─────────────────────────┘
 
     /**
-     * @notice Check if message exists
+     * @notice Check if message exists by ID
      */
     function _messageExists(uint256 messageId) internal view returns (bool) {
         return messageId < globalRegistry.getMessageCount();
-    }
-
-    /**
-     * @notice Verify instance has messages
-     */
-    function _hasMessages(address instance) internal view returns (bool) {
-        return globalRegistry.getMessageCountForInstance(instance) > 0;
     }
 }

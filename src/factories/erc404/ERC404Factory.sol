@@ -30,11 +30,6 @@ contract ERC404Factory is Ownable, ReentrancyGuard {
         FeatureUtils.PORTFOLIO
     ];
 
-    // Mapping from ERC404 instance to its vault
-    mapping(address => address) public instanceToVault;
-    // Mapping from ERC404 instance to its hook
-    mapping(address => address) public instanceToHook;
-
     event InstanceCreated(
         address indexed instance,
         address indexed creator,
@@ -121,11 +116,7 @@ contract ERC404Factory is Ownable, ReentrancyGuard {
             styleUri
         ));
 
-        // Track instance mappings
-        instanceToVault[instance] = vault;
-        instanceToHook[instance] = hook;
-
-        // Register with master registry (track vault usage)
+        // Register with master registry
         masterRegistry.registerInstance(
             instance,
             address(this),
@@ -141,24 +132,6 @@ contract ERC404Factory is Ownable, ReentrancyGuard {
         }
 
         emit InstanceCreated(instance, creator, name, symbol, vault, hook);
-    }
-
-    /**
-     * @notice Get vault address for an ERC404 instance
-     * @param instance Address of the ERC404 instance
-     * @return vault Address of the vault, or address(0) if none exists
-     */
-    function getVaultForInstance(address instance) external view returns (address vault) {
-        return instanceToVault[instance];
-    }
-
-    /**
-     * @notice Get hook address for an ERC404 instance
-     * @param instance Address of the ERC404 instance
-     * @return hook Address of the hook, or address(0) if none exists
-     */
-    function getHookForInstance(address instance) external view returns (address hook) {
-        return instanceToHook[instance];
     }
 
     /**

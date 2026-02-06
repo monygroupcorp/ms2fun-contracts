@@ -162,8 +162,7 @@ contract ERC404FactoryTest is Test {
             "" // styleUri
         );
 
-        assertEq(factory.getVaultForInstance(instance), address(mockVault), "Vault should be tracked");
-        assertEq(factory.getHookForInstance(instance), address(mockHook), "Hook should be tracked");
+        // Vault/hook tracking removed - now derived from InstanceCreated events
 
         vm.stopPrank();
     }
@@ -713,52 +712,4 @@ contract ERC404FactoryTest is Test {
     }
 
     // ========================
-    // Vault/Hook Tracking Tests
-    // ========================
-
-    function test_getVaultForInstance() public {
-        vm.deal(creator1, 1 ether);
-        vm.startPrank(creator1);
-
-        address instance = factory.createInstance{value: INSTANCE_CREATION_FEE}(
-            "TestToken",
-            "TEST",
-            "ipfs://metadata",
-            MAX_SUPPLY,
-            LIQUIDITY_RESERVE_PERCENT,
-            defaultCurveParams,
-            defaultTierConfig,
-            creator1,
-            address(mockVault),
-            address(mockHook),
-            "" // styleUri
-        );
-
-        assertEq(factory.getVaultForInstance(instance), address(mockVault), "Should return correct vault");
-
-        vm.stopPrank();
-    }
-
-    function test_getHookForInstance() public {
-        vm.deal(creator1, 1 ether);
-        vm.startPrank(creator1);
-
-        address instance = factory.createInstance{value: INSTANCE_CREATION_FEE}(
-            "TestToken",
-            "TEST",
-            "ipfs://metadata",
-            MAX_SUPPLY,
-            LIQUIDITY_RESERVE_PERCENT,
-            defaultCurveParams,
-            defaultTierConfig,
-            creator1,
-            address(mockVault),
-            address(mockHook),
-            "" // styleUri
-        );
-
-        assertEq(factory.getHookForInstance(instance), address(mockHook), "Should return correct hook");
-
-        vm.stopPrank();
-    }
 }

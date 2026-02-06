@@ -56,12 +56,6 @@ interface IMasterRegistry {
         bool active;
     }
 
-    struct PositionDemand {
-        uint256 lastRentalPrice;
-        uint256 lastRentalTime;
-        uint256 totalRentalsAllTime;
-    }
-
     struct VaultInfo {
         address vault;
         address creator;
@@ -69,7 +63,6 @@ interface IMasterRegistry {
         string metadataURI;
         bool active;
         uint256 registeredAt;
-        uint256 instanceCount; // Number of instances using this vault
     }
 
     struct InstanceInfo {
@@ -211,8 +204,6 @@ interface IMasterRegistry {
 
     function getVaultInfo(address vault) external view returns (VaultInfo memory);
 
-    function getVaultList() external view returns (address[] memory);
-
     function isVaultRegistered(address vault) external view returns (bool);
 
     function deactivateVault(address vault) external;
@@ -229,22 +220,5 @@ interface IMasterRegistry {
     // Namespace Protection
     function isNameTaken(string memory name) external view returns (bool);
 
-    // Instance Enumeration
-    function getTotalInstances() external view returns (uint256);
-    function getInstanceByIndex(uint256 index) external view returns (address);
-    function getInstanceAddresses(uint256 offset, uint256 limit) external view returns (address[] memory);
-
-    // Vault Query Methods
-    function getTotalVaults() external view returns (uint256);
-    function getVaultsByTVL(uint256 limit) external view returns (
-        address[] memory vaults,
-        uint256[] memory tvls,
-        string[] memory names
-    );
-    function getVaultsByPopularity(uint256 limit) external view returns (
-        address[] memory vaults,
-        uint256[] memory instanceCounts,
-        string[] memory names
-    );
 }
 

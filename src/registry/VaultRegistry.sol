@@ -28,7 +28,6 @@ contract VaultRegistry is Ownable {
         string metadataURI;
         bool active;
         uint256 registeredAt;
-        uint256 instanceCount; // For tracking usage
     }
 
     struct HookInfo {
@@ -39,7 +38,6 @@ contract VaultRegistry is Ownable {
         string metadataURI;
         bool active;
         uint256 registeredAt;
-        uint256 instanceCount; // For tracking usage
     }
 
     // Constants
@@ -55,9 +53,6 @@ contract VaultRegistry is Ownable {
     mapping(address => HookInfo) public hooks;
     mapping(address => bool) public registeredVaults;
     mapping(address => bool) public registeredHooks;
-    mapping(address => address[]) public hooksByVault; // vault => hooks[]
-    address[] public vaultList;
-    address[] public hookList;
 
     // Extension points for Phase 2
     address public analyticsModule; // Will track vault performance
@@ -98,7 +93,6 @@ contract VaultRegistry is Ownable {
         require(vault.code.length > 0, "Vault must be a contract");
 
         registeredVaults[vault] = true;
-        vaultList.push(vault);
 
         vaults[vault] = VaultInfo({
             vault: vault,
@@ -106,8 +100,7 @@ contract VaultRegistry is Ownable {
             name: name,
             metadataURI: metadataURI,
             active: true,
-            registeredAt: block.timestamp,
-            instanceCount: 0
+            registeredAt: block.timestamp
         });
 
         // Refund excess
@@ -143,8 +136,6 @@ contract VaultRegistry is Ownable {
         require(hook.code.length > 0, "Hook must be a contract");
 
         registeredHooks[hook] = true;
-        hookList.push(hook);
-        hooksByVault[vault].push(hook);
 
         hooks[hook] = HookInfo({
             hook: hook,
@@ -153,8 +144,7 @@ contract VaultRegistry is Ownable {
             name: name,
             metadataURI: metadataURI,
             active: true,
-            registeredAt: block.timestamp,
-            instanceCount: 0
+            registeredAt: block.timestamp
         });
 
         // Refund excess
@@ -180,28 +170,6 @@ contract VaultRegistry is Ownable {
     function getHookInfo(address hook) external view returns (HookInfo memory) {
         require(registeredHooks[hook], "Hook not registered");
         return hooks[hook];
-    }
-
-    /**
-     * @notice Get all registered vaults
-     */
-    function getVaultList() external view returns (address[] memory) {
-        return vaultList;
-    }
-
-    /**
-     * @notice Get all registered hooks
-     */
-    function getHookList() external view returns (address[] memory) {
-        return hookList;
-    }
-
-    /**
-     * @notice Get hooks associated with a vault
-     */
-    function getHooksByVault(address vault) external view returns (address[] memory) {
-        require(registeredVaults[vault], "Vault not registered");
-        return hooksByVault[vault];
     }
 
     /**
@@ -237,22 +205,6 @@ contract VaultRegistry is Ownable {
     }
 
     /**
-     * @notice Increment vault instance count (called by factory)
-     */
-    function incrementVaultInstanceCount(address vault) external {
-        require(registeredVaults[vault], "Vault not registered");
-        vaults[vault].instanceCount++;
-    }
-
-    /**
-     * @notice Increment hook instance count (called by factory)
-     */
-    function incrementHookInstanceCount(address hook) external {
-        require(registeredHooks[hook], "Hook not registered");
-        hooks[hook].instanceCount++;
-    }
-
-    /**
      * @notice Set vault registration fee (owner only)
      */
     function setVaultRegistrationFee(uint256 newFee) external onlyOwner {
@@ -279,17 +231,4 @@ contract VaultRegistry is Ownable {
         emit AnalyticsModuleSet(newModule);
     }
 
-    /**
-     * @notice Get vault count
-     */
-    function getVaultCount() external view returns (uint256) {
-        return vaultList.length;
-    }
-
-    /**
-     * @notice Get hook count
-     */
-    function getHookCount() external view returns (uint256) {
-        return hookList.length;
-    }
 }

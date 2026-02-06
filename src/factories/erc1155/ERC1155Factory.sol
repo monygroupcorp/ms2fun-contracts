@@ -17,9 +17,6 @@ contract ERC1155Factory is Ownable, ReentrancyGuard {
     address public instanceTemplate;
     uint256 public instanceCreationFee;
 
-    // Mapping from instance to vault
-    mapping(address => address) public instanceToVault;
-
     // Trusted agents that can add editions on behalf of users
     mapping(address => bool) public isAgent;
 
@@ -85,10 +82,7 @@ contract ERC1155Factory is Ownable, ReentrancyGuard {
             address(masterRegistry)
         ));
 
-        // Store vault mapping
-        instanceToVault[instance] = vault;
-
-        // Register with master registry (track vault usage)
+        // Register with master registry
         masterRegistry.registerInstance(
             instance,
             address(this),
@@ -148,15 +142,6 @@ contract ERC1155Factory is Ownable, ReentrancyGuard {
         // For now, we emit the event which can be indexed off-chain
 
         emit EditionAdded(instance, editionId, pieceTitle, basePrice, supply, pricingModel);
-    }
-
-    /**
-     * @notice Get vault address for an instance
-     * @param instance Instance address
-     * @return vault Vault address
-     */
-    function getVaultForInstance(address instance) external view returns (address vault) {
-        return instanceToVault[instance];
     }
 
     /**
