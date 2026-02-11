@@ -5,11 +5,12 @@ import { Ownable } from "solady/auth/Ownable.sol";
 import { ReentrancyGuard } from "solady/utils/ReentrancyGuard.sol";
 import { SafeTransferLib } from "solady/utils/SafeTransferLib.sol";
 import { EditionPricing } from "./libraries/EditionPricing.sol";
-import { UltraAlignmentVault } from "../../vaults/UltraAlignmentVault.sol";
+import { IAlignmentVault } from "../../interfaces/IAlignmentVault.sol";
 import { GlobalMessageRegistry } from "../../registry/GlobalMessageRegistry.sol";
 import { GlobalMessagePacking } from "../../libraries/GlobalMessagePacking.sol";
 import { GlobalMessageTypes } from "../../libraries/GlobalMessageTypes.sol";
 import { IMasterRegistry } from "../../master/interfaces/IMasterRegistry.sol";
+import { Currency } from "v4-core/types/Currency.sol";
 
 /**
  * @title ERC1155Instance
@@ -47,7 +48,7 @@ contract ERC1155Instance is Ownable, ReentrancyGuard {
     string public name;
     address public creator;
     address public factory;
-    UltraAlignmentVault public vault;
+    IAlignmentVault public vault;
     IMasterRegistry public immutable masterRegistry;
     GlobalMessageRegistry private cachedGlobalRegistry; // Lazy-loaded from masterRegistry
 
@@ -131,7 +132,7 @@ contract ERC1155Instance is Ownable, ReentrancyGuard {
         name = _name;
         creator = _creator;
         factory = _factory;
-        vault = UltraAlignmentVault(payable(_vault));
+        vault = IAlignmentVault(payable(_vault));
         masterRegistry = IMasterRegistry(_masterRegistry);
         styleUri = _styleUri;
         nextEditionId = 1;
@@ -357,9 +358,9 @@ contract ERC1155Instance is Ownable, ReentrancyGuard {
         uint256 taxAmount = (amount * 20) / 100;
         uint256 ownerAmount = amount - taxAmount;
 
-        // Send tithe to vault (via receive fallback)
-        // Vault will accumulate fees and track this instance as the benefactor
-        SafeTransferLib.safeTransferETH(address(vault), taxAmount);
+        // Send tithe to vault via explicit attribution path
+        // Uses receiveInstance() so the vault tracks this instance as the benefactor
+        vault.receiveInstance{value: taxAmount}(Currency.wrap(address(0)), taxAmount, address(this));
 
         // Transfer remainder to owner
         SafeTransferLib.safeTransferETH(owner(), ownerAmount);
