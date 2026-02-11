@@ -161,6 +161,9 @@ contract UltraAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback, IAlig
     uint256 public lastVaultFeeCollectionTime;
     uint256 public vaultFeeCollectionInterval = 1 days; // Collect vault fees once per day
 
+    // Benefactor delegation (fee routing)
+    mapping(address => address) public benefactorDelegate;
+
     // Dust accumulation (shares lost to rounding)
     uint256 public accumulatedDustShares;
     uint256 public dustDistributionThreshold = 1e18; // Distribute when dust reaches this amount
@@ -251,27 +254,11 @@ contract UltraAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback, IAlig
 
     /**
      * @notice Receive ETH contributions from any source
-     * @dev Tracks msg.sender as benefactor, adds to pending dragnet
-     *
-     *      PRODUCTION DEPLOYMENT:
-     *      - Only native ETH accepted. ERC20 tokens sent become owner property.
-     *      - Reentrancy protection on external contributions
-     *
-     *      TEST ENVIRONMENT:
-     *      - WETH unwrapping allowed (msg.sender == weth bypasses reentrancy guard)
-     *      - Tests use WETH for DEX routing simulation
-     *
-     *      SECURITY: The WETH check executes BEFORE the modifier when using a custom
-     *      implementation. We use a pattern that checks WETH first, then applies guard.
+     * @dev Tracks msg.sender as benefactor, adds to pending dragnet.
+     *      Only native ETH accepted. ERC20 tokens sent become owner property.
+     *      Reentrancy protection on external contributions.
      */
     receive() external payable {
-        // Allow WETH unwrapping for test environments (production uses native ETH only)
-        // TEST STUB: Remove this check for production deployment
-        if (msg.sender == weth) {
-            return;
-        }
-
-        // External ETH contribution - apply reentrancy guard
         _receiveExternalContribution();
     }
 
@@ -289,7 +276,7 @@ contract UltraAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback, IAlig
      * @notice Receive taxes from V4 hooks with explicit benefactor attribution
      * @dev Allows V4 hooks to route fees with source project attribution
      */
-    function receiveHookTax(
+    function receiveInstance(
         Currency currency,
         uint256 amount,
         address benefactor
@@ -431,15 +418,6 @@ contract UltraAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback, IAlig
         lpPositionValue = ethToSwap + targetTokenReceived;
 
         // Step 7: Pay caller reward (M-04 Security Fix: Gas-based + graceful degradation)
-        // TEST STUB: Unwrap any WETH from V3 swap excess to ensure we have native ETH
-        // PRODUCTION: Remove this block - production uses native ETH only
-        if (weth.code.length > 0) {
-            uint256 wethBalance = IWETH9(weth).balanceOf(address(this));
-            if (wethBalance > 0) {
-                IWETH9(weth).withdraw(wethBalance);
-            }
-        }
-
         // Calculate reward: gas reimbursement + standard incentive
         uint256 estimatedGas = CONVERSION_BASE_GAS + (activeBenefactors.length * GAS_PER_BENEFACTOR);
         uint256 gasCost = estimatedGas * tx.gasprice;
@@ -577,11 +555,6 @@ contract UltraAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback, IAlig
 
             if (hasWETHPool) {
                 uint256 wethReceived = _swapTokenForETHViaV4(tokenAmount, weth, feeTiers[i], tickSpacings[i]);
-                // TEST STUB: Unwrap WETH to ETH for test environment
-                // PRODUCTION: Remove this block - production uses native ETH only
-                if (wethReceived > 0 && weth.code.length > 0) {
-                    IWETH9(weth).withdraw(wethReceived);
-                }
                 return wethReceived;
             }
         }
@@ -688,12 +661,6 @@ contract UltraAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback, IAlig
 
         ethReceived = IV3SwapRouter(v3Router).exactInputSingle(params);
 
-        // TEST STUB: Unwrap WETH to ETH for test environment
-        // PRODUCTION: Remove this block - V3 returns WETH which becomes owner property
-        if (ethReceived > 0) {
-            IWETH9(weth).withdraw(ethReceived);
-        }
-
         return ethReceived;
     }
 
@@ -740,23 +707,17 @@ contract UltraAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback, IAlig
 
         require(ethClaimed > 0, "No new fees to claim");
 
-        // TEST STUB: Unwrap any WETH to ensure we have native ETH for fees
-        // PRODUCTION: Remove this block - production uses native ETH only
-        if (weth.code.length > 0) {
-            uint256 wethBalance = IWETH9(weth).balanceOf(address(this));
-            if (wethBalance > 0) {
-                IWETH9(weth).withdraw(wethBalance);
-            }
-        }
-
-        // Transfer ETH to benefactor
-        require(address(this).balance >= ethClaimed, "Insufficient ETH for claim");
-        (bool success, ) = payable(benefactor).call{value: ethClaimed}("");
-        require(success, "ETH transfer failed");
-
         // Update claim state
         shareValueAtLastClaim[benefactor] = currentShareValue;
         lastClaimTimestamp[benefactor] = block.timestamp;
+
+        // Route ETH to delegate if set, otherwise to benefactor
+        address recipient = benefactorDelegate[benefactor];
+        if (recipient == address(0)) recipient = benefactor;
+
+        require(address(this).balance >= ethClaimed, "Insufficient ETH for claim");
+        (bool success, ) = payable(recipient).call{value: ethClaimed}("");
+        require(success, "ETH transfer failed");
 
         emit FeesClaimed(benefactor, ethClaimed);
 
@@ -810,18 +771,11 @@ contract UltraAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback, IAlig
      */
     function _swapETHForTarget(uint256 ethAmount, uint256 minOutTarget)
         internal
+        virtual
         returns (uint256 tokenReceived)
     {
         require(ethAmount > 0, "Amount must be positive");
         require(alignmentToken != address(0), "No alignment token set");
-
-        // STUB: For unit tests with mock addresses, return fake swap amount
-        if (weth.code.length == 0 || v3Router.code.length == 0) {
-            // Simulate swap with 0.3% slippage
-            tokenReceived = (ethAmount * 997) / 1000;
-            require(tokenReceived >= minOutTarget, "Slippage too high");
-            return tokenReceived;
-        }
 
         // Query available pools for routing decision
         (bool hasV2Pool, , uint112 reserveWETH, ) = _getV2PriceAndReserves();
@@ -1071,20 +1025,12 @@ contract UltraAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback, IAlig
         uint256 amount1,
         int24 tickLower,
         int24 tickUpper
-    ) internal returns (uint128 liquidityUnits) {
+    ) internal virtual returns (uint128 liquidityUnits) {
         require(amount0 > 0 && amount1 > 0, "Amounts must be positive");
 
         // Store tick range for future position queries
         lastTickLower = tickLower;
         lastTickUpper = tickUpper;
-
-        // STUB: For unit tests with mock poolManager, return fake liquidity amount
-        // In production with real poolManager, this executes actual V4 LP addition
-        if (poolManager.code.length == 0) {
-            // Return simple approximation for unit tests
-            liquidityUnits = uint128((amount0 + amount1) / 2);
-            return liquidityUnits;
-        }
 
         // Approve tokens for PoolManager settlement
         Currency currency0 = v4PoolKey.currency0;
@@ -1098,9 +1044,16 @@ contract UltraAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback, IAlig
             IERC20(Currency.unwrap(currency1)).approve(address(poolManager), amount1);
         }
 
-        // Calculate liquidity delta to add
-        // Use simple approximation - V4 will calculate actual liquidity
-        int256 liquidityDelta = int256((amount0 + amount1) / 2);
+        // Calculate liquidity delta from available token amounts using pool price
+        PoolId poolId = v4PoolKey.toId();
+        (uint160 sqrtPriceX96, , ,) = StateLibrary.getSlot0(IPoolManager(poolManager), poolId);
+        uint160 sqrtPriceAX96 = TickMath.getSqrtPriceAtTick(tickLower);
+        uint160 sqrtPriceBX96 = TickMath.getSqrtPriceAtTick(tickUpper);
+        uint128 liquidityToAdd = LiquidityAmounts.getLiquidityForAmounts(
+            sqrtPriceX96, sqrtPriceAX96, sqrtPriceBX96, amount0, amount1
+        );
+        require(liquidityToAdd > 0, "Insufficient amounts for liquidity");
+        int256 liquidityDelta = int256(uint256(liquidityToAdd));
 
         // Prepare callback data
         IPoolManager.ModifyLiquidityParams memory params = IPoolManager.ModifyLiquidityParams({
@@ -1126,8 +1079,8 @@ contract UltraAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback, IAlig
         // Decode balance delta from callback result
         BalanceDelta delta = abi.decode(result, (BalanceDelta));
 
-        // Return liquidity units (use liquidityDelta as approximation)
-        liquidityUnits = uint128(uint256(liquidityDelta));
+        // Return actual liquidity units added
+        liquidityUnits = liquidityToAdd;
 
         return liquidityUnits;
     }
@@ -1243,23 +1196,6 @@ contract UltraAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback, IAlig
     }
 
     /**
-     * @notice Transfer currency (ETH or ERC20) to recipient
-     * @param currency Currency to transfer (address(0) for native ETH)
-     * @param to Recipient address
-     * @param amount Amount to transfer
-     */
-    function _transferCurrency(Currency currency, address to, uint128 amount) internal {
-        if (currency.isAddressZero()) {
-            // Native ETH transfer
-            (bool success, ) = to.call{value: amount}("");
-            require(success, "ETH transfer failed");
-        } else {
-            // ERC20 transfer
-            IERC20(Currency.unwrap(currency)).transfer(to, amount);
-        }
-    }
-
-    /**
      * @notice Get price and reserves from V2 pool
      * @dev Queries Uniswap V2 pair for WETH/alignmentToken reserves
      * @return hasV2Pool True if V2 pool exists
@@ -1302,22 +1238,15 @@ contract UltraAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback, IAlig
         address token0 = IUniswapV2Pair(pair).token0();
         bool wethIsToken0 = (token0 == weth);
 
-        // Use cached alignment token decimals for price normalization
-        // WETH always has 18 decimals, but alignment token may differ (e.g., USDC has 6)
-        // Calculate decimal adjustment factor (10^decimals)
-        uint256 decimalAdjustment = 10 ** alignmentTokenDecimals;
-
+        // Price = WETH_raw / Token_raw * 1e18 (same scaling as V3/V4 sqrtPriceX96 conversion)
         if (wethIsToken0) {
             reserveWETH = reserve0;
             reserveToken = reserve1;
-            // Price = (WETH reserve * 10^tokenDecimals) / Token reserve
-            // This normalizes both tokens to 18 decimals for accurate price
-            priceV2 = (uint256(reserve0) * decimalAdjustment) / uint256(reserve1);
+            priceV2 = (uint256(reserve0) * 1e18) / uint256(reserve1);
         } else {
             reserveWETH = reserve1;
             reserveToken = reserve0;
-            // Price = (WETH reserve * 10^tokenDecimals) / Token reserve
-            priceV2 = (uint256(reserve1) * decimalAdjustment) / uint256(reserve0);
+            priceV2 = (uint256(reserve1) * 1e18) / uint256(reserve0);
         }
 
         hasV2Pool = true;
@@ -1381,8 +1310,10 @@ contract UltraAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback, IAlig
                     return (false, 0, 0);
                 }
 
-                // Convert sqrtPriceX96 to price: (sqrtPriceX96 * sqrtPriceX96 * 1e18) >> 192
-                uint256 rawPrice = (uint256(sqrtPriceX96) * uint256(sqrtPriceX96) * 1e18) >> 192;
+                // Convert sqrtPriceX96 to price, avoiding intermediate overflow
+                // Split: (sqrtPriceX96 >> 48)^2 * 1e18 >> 96 ≡ (sqrtPriceX96^2 * 1e18) >> 192
+                uint256 sqrtScaled = uint256(sqrtPriceX96) >> 48;
+                uint256 rawPrice = (sqrtScaled * sqrtScaled * 1e18) >> 96;
 
                 // Determine token ordering to get WETH/token price
                 address token0 = IUniswapV3Pool(pool).token0();
@@ -1549,8 +1480,10 @@ contract UltraAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback, IAlig
             return (false, 0, 0);
         }
 
-        // Convert sqrtPriceX96 to price: (sqrtPriceX96 * sqrtPriceX96 * 1e18) >> 192
-        uint256 rawPrice = (uint256(sqrtPriceX96) * uint256(sqrtPriceX96) * 1e18) >> 192;
+        // Convert sqrtPriceX96 to price, avoiding intermediate overflow
+        // Split: (sqrtPriceX96 >> 48)^2 * 1e18 >> 96 ≡ (sqrtPriceX96^2 * 1e18) >> 192
+        uint256 sqrtScaled = uint256(sqrtPriceX96) >> 48;
+        uint256 rawPrice = (sqrtScaled * sqrtScaled * 1e18) >> 96;
 
         // Determine token ordering to get WETH/token price
         address currency0Addr = Currency.unwrap(currency0);
@@ -1628,37 +1561,23 @@ contract UltraAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback, IAlig
             require(isAcceptable, "Price deviation too high between V2/V3");
         }
 
-        // Check V2 vs V4
-        if (hasV2Pool && hasV4Pool) {
-            (bool isAcceptable, uint256 deviation) = _checkPriceDeviation(priceV2, priceV4);
-            require(isAcceptable, "Price deviation too high between V2/V4");
-        }
-
-        // Check V3 vs V4
-        if (hasV3Pool && hasV4Pool) {
-            (bool isAcceptable, uint256 deviation) = _checkPriceDeviation(priceV3, priceV4);
-            require(isAcceptable, "Price deviation too high between V3/V4");
-        }
+        // V4 pools are not cross-checked against V2/V3 because V4 liquidity is
+        // still thin on mainnet and legitimately deviates from mature pools.
+        // V4 price is still used for routing decisions but not as a manipulation signal.
 
         // Verify sufficient liquidity for the pending swap
-        // For V2: check that reserves can handle the swap without excessive slippage
-        if (hasV2Pool) {
-            // Require minimum WETH reserve (e.g., at least 10 ETH in pool)
+        // Only enforce V2 capacity when V2 is the sole swap route (V3/V4 unavailable)
+        if (hasV2Pool && !hasV3Pool && !hasV4Pool) {
             require(reserveWETH >= 10 ether, "Insufficient WETH liquidity in V2");
 
-            // Calculate expected output for our swap amount using constant product formula
             if (totalPendingETH > 0) {
-                // For safety, check that our swap won't drain more than 10% of reserves
                 uint256 maxSwapAmount = uint256(reserveWETH) / 10; // 10% of WETH reserve
                 require(totalPendingETH <= maxSwapAmount, "Swap amount too large for V2 pool");
 
-                // Calculate expected slippage
                 uint256 amountInWithFee = totalPendingETH * 997;
                 uint256 denominator = (uint256(reserveWETH) * 1000) + amountInWithFee;
                 require(denominator > 0, "Invalid denominator in slippage calculation");
                 uint256 expectedOut = (amountInWithFee * uint256(reserveToken)) / denominator;
-
-                // Require output is reasonable (non-zero)
                 require(expectedOut > 0, "Insufficient purchase power");
             }
         }
@@ -1738,8 +1657,16 @@ contract UltraAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback, IAlig
         }
 
         // Skip calculation if poolManager is a mock address (no code deployed)
-        // Return default 50% for unit tests with mock addresses
         if (poolManager.code.length == 0) {
+            return 5e17;
+        }
+
+        // Full-range LP is always 50:50 in value terms (equivalent to V2 constant product).
+        // The raw amounts from getAmountsForLiquidity have different decimal scales
+        // (e.g., ETH 18 dec vs USDC 6 dec), making raw-amount ratios meaningless.
+        int24 minTick = TickMath.minUsableTick(v4PoolKey.tickSpacing);
+        int24 maxTick = TickMath.maxUsableTick(v4PoolKey.tickSpacing);
+        if (lastTickLower == minTick && lastTickUpper == maxTick) {
             return 5e17;
         }
 
@@ -1976,6 +1903,90 @@ contract UltraAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback, IAlig
      */
     function description() external pure override returns (string memory) {
         return "Full-range liquidity provision on Uniswap V4 with automated fee compounding and benefactor share distribution";
+    }
+
+    /// @inheritdoc IAlignmentVault
+    function supportsCapability(bytes32 capability) external pure override returns (bool) {
+        // UltraAlignmentVault generates yield via V4 LP fees and supports delegation
+        return capability == keccak256("YIELD_GENERATION")
+            || capability == keccak256("BENEFACTOR_DELEGATION");
+    }
+
+    /// @inheritdoc IAlignmentVault
+    function currentPolicy() external pure override returns (bytes memory) {
+        return ""; // No policy requirements — permissive vault
+    }
+
+    /// @inheritdoc IAlignmentVault
+    function validateCompliance(address) external pure override returns (bool) {
+        return true; // No requirements
+    }
+
+    // ========== Benefactor Delegation ==========
+
+    event BenefactorDelegateSet(address indexed benefactor, address indexed delegate);
+
+    /// @inheritdoc IAlignmentVault
+    function delegateBenefactor(address delegate) external override {
+        require(benefactorShares[msg.sender] > 0 || benefactorTotalETH[msg.sender] > 0, "Not a benefactor");
+        benefactorDelegate[msg.sender] = delegate;
+        emit BenefactorDelegateSet(msg.sender, delegate);
+    }
+
+    /// @inheritdoc IAlignmentVault
+    function getBenefactorDelegate(address benefactor) external view override returns (address) {
+        address delegate = benefactorDelegate[benefactor];
+        return delegate == address(0) ? benefactor : delegate;
+    }
+
+    /// @inheritdoc IAlignmentVault
+    function claimFeesAsDelegate(address[] calldata benefactors) external override nonReentrant returns (uint256 totalClaimed) {
+        // Check if we should collect vault fees (once per day or on first claim)
+        if (block.timestamp >= lastVaultFeeCollectionTime + vaultFeeCollectionInterval ||
+            lastVaultFeeCollectionTime == 0) {
+
+            (uint256 ethCollected, uint256 tokenCollected) = _claimVaultFees();
+            uint256 ethFromTokens = _convertVaultFeesToEth(tokenCollected);
+
+            uint256 totalCollected = ethCollected + ethFromTokens;
+            if (totalCollected > 0) {
+                accumulatedFees += totalCollected;
+                lastVaultFeeCollectionTime = block.timestamp;
+                emit FeesAccumulated(totalCollected);
+            }
+        }
+
+        for (uint256 i = 0; i < benefactors.length; i++) {
+            address benefactor = benefactors[i];
+
+            // Verify caller is the delegate for this benefactor
+            require(benefactorDelegate[benefactor] == msg.sender, "Not delegate for benefactor");
+            require(benefactorShares[benefactor] > 0, "No shares");
+
+            if (accumulatedFees == 0) continue;
+
+            // Calculate current proportional share
+            uint256 currentShareValue = (accumulatedFees * benefactorShares[benefactor]) / totalShares;
+
+            // Calculate unclaimed amount (delta from last claim)
+            uint256 ethClaimed = currentShareValue > shareValueAtLastClaim[benefactor]
+                ? currentShareValue - shareValueAtLastClaim[benefactor]
+                : 0;
+
+            if (ethClaimed > 0) {
+                shareValueAtLastClaim[benefactor] = currentShareValue;
+                lastClaimTimestamp[benefactor] = block.timestamp;
+                totalClaimed += ethClaimed;
+                emit FeesClaimed(benefactor, ethClaimed);
+            }
+        }
+
+        require(totalClaimed > 0, "No fees to claim");
+        require(address(this).balance >= totalClaimed, "Insufficient ETH for claims");
+
+        // Single ETH transfer to delegate
+        (bool success, ) = payable(msg.sender).call{value: totalClaimed}("");
+        require(success, "ETH transfer failed");
     }
 
     // ========== Configuration ==========

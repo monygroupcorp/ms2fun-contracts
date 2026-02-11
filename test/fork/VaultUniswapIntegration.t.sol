@@ -214,13 +214,13 @@ contract VaultUniswapIntegrationTest is ForkTestBase {
         emit log_string("[PASS] Multiple contributions from same benefactor accumulate");
     }
 
-    function test_receiveHookTax_withBenefactor() public {
+    function test_receiveInstance_withBenefactor() public {
         uint256 amount = 1 ether;
         address hookCaller = makeAddr("hookCaller");
 
         vm.deal(hookCaller, amount);
         vm.prank(hookCaller);
-        vault.receiveHookTax{value: amount}(
+        vault.receiveInstance{value: amount}(
             Currency.wrap(vault.weth()), // currency (unused in current implementation)
             amount,
             alice // benefactor attribution
@@ -419,20 +419,17 @@ contract VaultUniswapIntegrationTest is ForkTestBase {
         vault.convertAndAddLiquidity(0);
         uint256 bobShares = vault.benefactorShares(bob);
 
-        // Note: With current stub implementation, shares are based on LP units issued
-        // Since stub uses simple formula (amount0 + amount1) / 2, both rounds issue same LP units
-        // Therefore Alice and Bob get equal shares despite different entry times
-        // In production with real vault value growth, dilution would occur
+        // Both Alice and Bob contributed equal ETH across separate conversion rounds.
+        // On a real fork, liquidity units differ between rounds due to pool state changes
+        // (price movement from round 1's swap, different sqrtPriceX96, etc.)
+        // Key invariants: both have shares, total shares grew after round 2.
 
         uint256 totalShares = vault.totalShares();
-        uint256 alicePercent = (aliceShares * 100) / totalShares;
-        uint256 bobPercent = (bobShares * 100) / totalShares;
+        assertGt(aliceShares, 0, "Alice should have shares from round 1");
+        assertGt(bobShares, 0, "Bob should have shares from round 2");
+        assertEq(aliceShares + bobShares, totalShares, "Total shares should equal sum");
 
-        // With stub, they should have approximately equal shares
-        assertApproxEqAbs(alicePercent, 50, 1, "Alice should have ~50% (stub limitation)");
-        assertApproxEqAbs(bobPercent, 50, 1, "Bob should have ~50% (stub limitation)");
-
-        emit log_string("[PASS] Shares accumulate (dilution requires production vault value tracking)");
+        emit log_string("[PASS] Shares accumulate across multiple conversion rounds");
     }
 
     function test_conversionReward_paidToExecutor() public {

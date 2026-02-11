@@ -11,7 +11,8 @@ import {BalanceDelta} from "v4-core/types/BalanceDelta.sol";
 import {BeforeSwapDelta} from "v4-core/types/BeforeSwapDelta.sol";
 import {Currency, CurrencyLibrary} from "v4-core/types/Currency.sol";
 import {PoolKey} from "v4-core/types/PoolKey.sol";
-import {UltraAlignmentVault} from "../../../vaults/UltraAlignmentVault.sol";
+import {IAlignmentVault} from "../../../interfaces/IAlignmentVault.sol";
+import {IERC20} from "../../../shared/interfaces/IERC20.sol";
 
 /**
  * @title UltraAlignmentV4Hook
@@ -25,7 +26,7 @@ contract UltraAlignmentV4Hook is IHooks, ReentrancyGuard, Ownable {
     using SafeCast for int128;
 
     IPoolManager public immutable poolManager;
-    UltraAlignmentVault public immutable vault;
+    IAlignmentVault public immutable vault;
     address public immutable weth; // WETH address for validation
     
     // Tax rate in basis points (e.g., 100 = 1%)
@@ -43,7 +44,7 @@ contract UltraAlignmentV4Hook is IHooks, ReentrancyGuard, Ownable {
 
     constructor(
         IPoolManager _poolManager,
-        UltraAlignmentVault _vault,
+        IAlignmentVault _vault,
         address _weth,
         address _owner
     ) {
@@ -153,7 +154,7 @@ contract UltraAlignmentV4Hook is IHooks, ReentrancyGuard, Ownable {
 
             // Send tax directly to vault with sender as benefactor
             // Vault will accumulate and track ETH from the instance/benefactor
-            vault.receiveHookTax{value: taxAmount}(taxCurrency, taxAmount, sender);
+            vault.receiveInstance{value: taxAmount}(taxCurrency, taxAmount, sender);
 
             emit SwapTaxed(sender, taxCurrency, taxAmount, sender);
 
@@ -259,8 +260,3 @@ contract UltraAlignmentV4Hook is IHooks, ReentrancyGuard, Ownable {
     }
 }
 
-interface IERC20 {
-    function transfer(address to, uint256 amount) external returns (bool);
-    function transferFrom(address from, address to, uint256 amount) external returns (bool);
-    function balanceOf(address account) external view returns (uint256);
-}

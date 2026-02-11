@@ -92,9 +92,9 @@ contract VaultInterfaceComplianceTest is Test {
         // Use interface reference instead of concrete type
         IAlignmentVault vault = IAlignmentVault(payable(address(mockVault)));
 
-        // Test receiveHookTax
+        // Test receiveInstance
         vm.prank(benefactor1);
-        vault.receiveHookTax{value: 1 ether}(
+        vault.receiveInstance{value: 1 ether}(
             Currency.wrap(address(0)),
             1 ether,
             benefactor1
@@ -147,11 +147,11 @@ contract VaultInterfaceComplianceTest is Test {
     // ========== Functional Tests ==========
 
     /**
-     * @notice Test MockVault receiveHookTax functionality
+     * @notice Test MockVault receiveInstance functionality
      */
     function test_MockVault_ReceiveHookTax() public {
         vm.prank(benefactor1);
-        mockVault.receiveHookTax{value: 5 ether}(
+        mockVault.receiveInstance{value: 5 ether}(
             Currency.wrap(address(0)),
             5 ether,
             benefactor1
@@ -181,7 +181,7 @@ contract VaultInterfaceComplianceTest is Test {
     function test_MockVault_MultiBenefactor() public {
         // Benefactor1 contributes 6 ETH
         vm.prank(benefactor1);
-        mockVault.receiveHookTax{value: 6 ether}(
+        mockVault.receiveInstance{value: 6 ether}(
             Currency.wrap(address(0)),
             6 ether,
             benefactor1
@@ -189,7 +189,7 @@ contract VaultInterfaceComplianceTest is Test {
 
         // Benefactor2 contributes 4 ETH
         vm.prank(benefactor2);
-        mockVault.receiveHookTax{value: 4 ether}(
+        mockVault.receiveInstance{value: 4 ether}(
             Currency.wrap(address(0)),
             4 ether,
             benefactor2
@@ -214,7 +214,7 @@ contract VaultInterfaceComplianceTest is Test {
     function test_MockVault_ClaimAndReclaim() public {
         // Initial contribution
         vm.prank(benefactor1);
-        mockVault.receiveHookTax{value: 10 ether}(
+        mockVault.receiveInstance{value: 10 ether}(
             Currency.wrap(address(0)),
             10 ether,
             benefactor1
@@ -335,6 +335,120 @@ contract VaultInterfaceComplianceTest is Test {
         assertEq(contribution, 0, "Unknown benefactor should have 0 contribution");
     }
 
+    // ========== Capability Discovery Tests ==========
+
+    function test_UltraVault_SupportsYieldGeneration() public {
+        IAlignmentVault v = IAlignmentVault(payable(address(ultraVault)));
+        assertTrue(v.supportsCapability(keccak256("YIELD_GENERATION")));
+    }
+
+    function test_UltraVault_DoesNotSupportGovernance() public {
+        IAlignmentVault v = IAlignmentVault(payable(address(ultraVault)));
+        assertFalse(v.supportsCapability(keccak256("GOVERNANCE")));
+    }
+
+    function test_MockVault_DoesNotSupportYieldGeneration() public {
+        IAlignmentVault v = IAlignmentVault(payable(address(mockVault)));
+        assertFalse(v.supportsCapability(keccak256("YIELD_GENERATION")));
+    }
+
+    function test_UltraVault_AlwaysCompliant() public {
+        IAlignmentVault v = IAlignmentVault(payable(address(ultraVault)));
+        assertTrue(v.validateCompliance(address(0xBEEF)));
+    }
+
+    function test_MockVault_AlwaysCompliant() public {
+        IAlignmentVault v = IAlignmentVault(payable(address(mockVault)));
+        assertTrue(v.validateCompliance(address(0xBEEF)));
+    }
+
+    function test_UltraVault_CurrentPolicy_Empty() public {
+        IAlignmentVault v = IAlignmentVault(payable(address(ultraVault)));
+        bytes memory policy = v.currentPolicy();
+        assertEq(policy.length, 0, "UltraAlignmentVault should have empty policy");
+    }
+
+    function test_MockVault_CurrentPolicy_Empty() public {
+        IAlignmentVault v = IAlignmentVault(payable(address(mockVault)));
+        bytes memory policy = v.currentPolicy();
+        assertEq(policy.length, 0, "MockVault should have empty policy");
+    }
+
+    function test_UltraVault_SupportsBenefactorDelegation() public {
+        IAlignmentVault v = IAlignmentVault(payable(address(ultraVault)));
+        assertTrue(v.supportsCapability(keccak256("BENEFACTOR_DELEGATION")));
+    }
+
+    // ========== Delegation Tests ==========
+
+    function test_UltraVault_DelegateDefault_ReturnsSelf() public {
+        IAlignmentVault v = IAlignmentVault(payable(address(ultraVault)));
+        assertEq(v.getBenefactorDelegate(benefactor1), benefactor1, "Default delegate should be self");
+    }
+
+    function test_MockVault_Delegation_SetAndGet() public {
+        IAlignmentVault v = IAlignmentVault(payable(address(mockVault)));
+        address delegate = makeAddr("delegate");
+
+        // Contribute first to become a benefactor
+        vm.prank(benefactor1);
+        v.receiveInstance{value: 1 ether}(Currency.wrap(address(0)), 1 ether, benefactor1);
+
+        // Set delegation on UltraVault (needs contribution)
+        vm.prank(benefactor1);
+        mockVault.delegateBenefactor(delegate);
+
+        assertEq(v.getBenefactorDelegate(benefactor1), delegate, "Delegate should be set");
+    }
+
+    function test_MockVault_Delegation_RemoveBySettingZero() public {
+        IAlignmentVault v = IAlignmentVault(payable(address(mockVault)));
+        address delegate = makeAddr("delegate");
+
+        // Become benefactor and set delegate
+        vm.prank(benefactor1);
+        v.receiveInstance{value: 1 ether}(Currency.wrap(address(0)), 1 ether, benefactor1);
+        vm.prank(benefactor1);
+        mockVault.delegateBenefactor(delegate);
+
+        // Remove delegation
+        vm.prank(benefactor1);
+        mockVault.delegateBenefactor(address(0));
+
+        assertEq(v.getBenefactorDelegate(benefactor1), benefactor1, "Should return self after removing delegate");
+    }
+
+    function test_MockVault_ClaimFeesAsDelegate() public {
+        IAlignmentVault v = IAlignmentVault(payable(address(mockVault)));
+        address delegate = makeAddr("delegate");
+        vm.deal(delegate, 1 ether);
+
+        // Two benefactors contribute
+        vm.prank(benefactor1);
+        v.receiveInstance{value: 5 ether}(Currency.wrap(address(0)), 5 ether, benefactor1);
+        vm.prank(benefactor2);
+        v.receiveInstance{value: 5 ether}(Currency.wrap(address(0)), 5 ether, benefactor2);
+
+        // Both delegate to same address
+        vm.prank(benefactor1);
+        mockVault.delegateBenefactor(delegate);
+        vm.prank(benefactor2);
+        mockVault.delegateBenefactor(delegate);
+
+        // Delegate batch claims
+        address[] memory benefactors = new address[](2);
+        benefactors[0] = benefactor1;
+        benefactors[1] = benefactor2;
+
+        uint256 delegateBalanceBefore = delegate.balance;
+
+        vm.prank(delegate);
+        uint256 totalClaimed = v.claimFeesAsDelegate(benefactors);
+
+        assertEq(totalClaimed, 10 ether, "Should claim all 10 ETH");
+        assertEq(delegate.balance - delegateBalanceBefore, 10 ether, "Delegate should receive 10 ETH");
+    }
+
     // ========== Event Tests ==========
 
     /**
@@ -345,7 +459,7 @@ contract VaultInterfaceComplianceTest is Test {
         emit IAlignmentVault.ContributionReceived(benefactor1, 1 ether);
 
         vm.prank(benefactor1);
-        mockVault.receiveHookTax{value: 1 ether}(
+        mockVault.receiveInstance{value: 1 ether}(
             Currency.wrap(address(0)),
             1 ether,
             benefactor1
@@ -358,7 +472,7 @@ contract VaultInterfaceComplianceTest is Test {
     function test_Event_FeesClaimed() public {
         // Setup: contribute first
         vm.prank(benefactor1);
-        mockVault.receiveHookTax{value: 1 ether}(
+        mockVault.receiveInstance{value: 1 ether}(
             Currency.wrap(address(0)),
             1 ether,
             benefactor1
@@ -381,7 +495,7 @@ contract VaultInterfaceComplianceTest is Test {
         emit IAlignmentVault.FeesAccumulated(1 ether);
 
         vm.prank(benefactor1);
-        mockVault.receiveHookTax{value: 1 ether}(
+        mockVault.receiveInstance{value: 1 ether}(
             Currency.wrap(address(0)),
             1 ether,
             benefactor1

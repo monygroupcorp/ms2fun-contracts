@@ -16,7 +16,7 @@ import {Currency} from "v4-core/types/Currency.sol";
  * - Instances remain vault-agnostic and interact only via this interface
  *
  * Compliance Requirements:
- * 1. Must accept ETH via receiveHookTax() and receive()
+ * 1. Must accept ETH via receiveInstance() and receive()
  * 2. Must track benefactor contributions and issue shares
  * 3. Must allow benefactors to claim proportional fees
  * 4. Must emit standard events for transparency
@@ -48,7 +48,7 @@ interface IAlignmentVault {
     // ========== Fee Reception ==========
 
     /**
-     * @notice Receive alignment taxes from V4 hooks with explicit benefactor attribution
+     * @notice Receive alignment contributions from project instances and hooks
      * @dev Called by project instances when routing fees to vault
      *      - V4 hooks call this after collecting swap taxes
      *      - ERC1155 instances call this during creator withdrawals
@@ -59,7 +59,7 @@ interface IAlignmentVault {
      * @param amount Amount of tax received (in wei or token units)
      * @param benefactor Address to credit for this contribution (the project instance)
      */
-    function receiveHookTax(
+    function receiveInstance(
         Currency currency,
         uint256 amount,
         address benefactor
@@ -69,7 +69,7 @@ interface IAlignmentVault {
      * @notice Receive native ETH contributions via fallback
      * @dev Must track msg.sender as benefactor when ETH sent directly
      *      Implementation should call _trackBenefactorContribution(msg.sender, msg.value)
-     *      Used when instances send ETH without calling receiveHookTax()
+     *      Used when instances send ETH without calling receiveInstance()
      */
     receive() external payable;
 
@@ -164,4 +164,88 @@ interface IAlignmentVault {
      * @return Total shares across all benefactors (vault-specific units)
      */
     function totalShares() external view returns (uint256);
+
+    // ========== Capability Discovery ==========
+
+    /**
+     * @notice Check if this vault supports a specific capability
+     * @dev Standard capability identifiers (use keccak256 of these strings):
+     *      - "YIELD_GENERATION"       : Vault generates yield from deposits (LP fees, lending, etc.)
+     *      - "GOVERNANCE"             : Vault provides governance/voting functionality
+     *      - "STAKING_ENFORCEMENT"    : Vault requires/enforces staking on instances
+     *      - "SHARE_TRANSFER"         : Vault supports transferring shares between addresses
+     *      - "MULTI_ASSET"            : Vault accepts multiple asset types (not just ETH)
+     *      - "BENEFACTOR_DELEGATION"  : Vault supports benefactor fee delegation
+     *
+     * @param capability keccak256 hash of the capability string
+     * @return True if this vault supports the capability
+     */
+    function supportsCapability(bytes32 capability) external view returns (bool);
+
+    // ========== Policy & Compliance ==========
+
+    /**
+     * @notice Get vault's current policy requirements
+     * @dev Returns encoded policy data specific to vault type.
+     *      Empty bytes means no requirements (permissive vault).
+     *      Frontends decode this for display; instances use validateCompliance() instead.
+     *
+     *      Example policies by vault type:
+     *      - UniswapV4LP: empty bytes (no requirements)
+     *      - Staking vault: abi.encode(minStakeRatio, lockDuration)
+     *      - DAO vault: abi.encode(minVotingPower, quorumThreshold)
+     *
+     * @return Encoded policy data (vault-specific format)
+     */
+    function currentPolicy() external view returns (bytes memory);
+
+    /**
+     * @notice Check if an instance meets this vault's requirements
+     * @dev Generic compliance check — replaces vault-type-specific validation.
+     *      Vaults with no requirements should always return true.
+     *      Called by instances before claiming fees or performing restricted actions.
+     *
+     * @param instance Address of the project instance to validate
+     * @return True if the instance is compliant with vault requirements
+     */
+    function validateCompliance(address instance) external view returns (bool);
+
+    /**
+     * @notice Emitted when vault policy parameters change
+     * @param key Policy parameter identifier (e.g., keccak256("MIN_STAKE_RATIO"))
+     * @param value New value for the parameter (encoded, vault-specific)
+     */
+    event VaultPolicyUpdated(bytes32 indexed key, bytes value);
+
+    // ========== Benefactor Delegation ==========
+
+    /**
+     * @notice Set a delegate to receive claimed fees on behalf of this benefactor
+     * @dev Only callable by the benefactor itself (the instance contract).
+     *      Setting delegate to address(0) removes delegation (fees go to caller).
+     *      The delegate is a fee-routing target, not a share transfer.
+     *
+     * @param delegate Address to receive fees on behalf of caller
+     */
+    function delegateBenefactor(address delegate) external;
+
+    /**
+     * @notice Get the delegate for a benefactor
+     * @dev Returns the benefactor's own address if no delegation is set.
+     *
+     * @param benefactor Address to query
+     * @return Delegate address (or benefactor itself if no delegation)
+     */
+    function getBenefactorDelegate(address benefactor) external view returns (address);
+
+    /**
+     * @notice Batch claim fees for multiple benefactors as their delegate
+     * @dev Caller must be the registered delegate for every benefactor in the array.
+     *      Processes claims for each benefactor and sends one lump-sum ETH transfer
+     *      to the caller (delegate) at the end.
+     *
+     * @param benefactors Array of benefactor addresses to claim for
+     * @return totalClaimed Total ETH claimed across all benefactors
+     */
+    function claimFeesAsDelegate(address[] calldata benefactors) external returns (uint256 totalClaimed);
 }

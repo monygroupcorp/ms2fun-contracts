@@ -534,7 +534,7 @@ contract UltraAlignmentV4HookTest is Test {
         assertEq(mockVault.lastTaxAmount(), tax2, "Second tax calculation with updated rate");
     }
 
-    function test_vaultIntegration_receiveHookTaxCalled() public {
+    function test_vaultIntegration_receiveInstanceCalled() public {
         PoolKey memory key = PoolKey({
             currency0: Currency.wrap(mockWETH),
             currency1: Currency.wrap(mockToken),
@@ -660,7 +660,7 @@ contract UltraAlignmentV4HookTest is Test {
 
         BalanceDelta delta = toBalanceDelta(int128(int256(swapAmount)), int128(-int256(swapAmount)));
 
-        // This should revert because vault.receiveHookTax() reverts
+        // This should revert because vault.receiveInstance() reverts
         // Note: In current implementation, hook WILL revert if vault reverts
         // This is actually correct behavior - we want the swap to fail if tax can't be collected
         vm.prank(address(mockPoolManager));
@@ -828,7 +828,7 @@ contract TestableHook is ReentrancyGuard, Ownable {
             poolManager.take(taxCurrency, address(this), taxAmount);
 
             // Send tax directly to vault
-            vault.receiveHookTax{value: taxAmount}(taxCurrency, taxAmount, sender);
+            vault.receiveInstance{value: taxAmount}(taxCurrency, taxAmount, sender);
 
             emit SwapTaxed(sender, taxCurrency, taxAmount, sender);
 
@@ -875,7 +875,7 @@ contract MockVault {
 
     receive() external payable {}
 
-    function receiveHookTax(
+    function receiveInstance(
         Currency currency,
         uint256 amount,
         address benefactor
@@ -893,7 +893,7 @@ contract MockVault {
 contract MockRevertingVault {
     receive() external payable {}
 
-    function receiveHookTax(
+    function receiveInstance(
         Currency currency,
         uint256 amount,
         address benefactor

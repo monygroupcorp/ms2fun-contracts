@@ -11,7 +11,7 @@ import {Currency} from "v4-core/types/Currency.sol";
  *      Perfect for testing factory/instance integration without complex yield logic
  *
  * Features:
- * - Accepts ETH via receiveHookTax() and receive()
+ * - Accepts ETH via receiveInstance() and receive()
  * - Tracks benefactor contributions
  * - Issues shares 1:1 with ETH (no yield generation)
  * - Allows fee claims (just returns stored ETH)
@@ -20,7 +20,7 @@ import {Currency} from "v4-core/types/Currency.sol";
  * Usage:
  * ```solidity
  * MockVault vault = new MockVault();
- * vault.receiveHookTax{value: 1 ether}(Currency.wrap(address(0)), 1 ether, benefactor);
+ * vault.receiveInstance{value: 1 ether}(Currency.wrap(address(0)), 1 ether, benefactor);
  * uint256 claimable = vault.calculateClaimableAmount(benefactor); // Returns 1 ether
  * uint256 claimed = vault.claimFees(); // Transfers 1 ether to benefactor
  * ```
@@ -55,7 +55,7 @@ contract MockVault is IAlignmentVault {
      * @param amount Amount of tax received
      * @param benefactor Address to credit for this contribution
      */
-    function receiveHookTax(
+    function receiveInstance(
         Currency currency,
         uint256 amount,
         address benefactor
@@ -192,6 +192,73 @@ contract MockVault is IAlignmentVault {
      */
     function description() external pure override returns (string memory) {
         return "Mock vault for testing - stores ETH without yield generation (testing only, do not use in production)";
+    }
+
+    /// @inheritdoc IAlignmentVault
+    function supportsCapability(bytes32) external pure override returns (bool) {
+        return false; // Mock vault has no real capabilities
+    }
+
+    /// @inheritdoc IAlignmentVault
+    function currentPolicy() external pure override returns (bytes memory) {
+        return ""; // No policy requirements
+    }
+
+    /// @inheritdoc IAlignmentVault
+    function validateCompliance(address) external pure override returns (bool) {
+        return true; // Always compliant
+    }
+
+    // ========== Benefactor Delegation ==========
+
+    mapping(address => address) public benefactorDelegate;
+
+    /// @inheritdoc IAlignmentVault
+    function delegateBenefactor(address delegate) external override {
+        benefactorDelegate[msg.sender] = delegate;
+    }
+
+    /// @inheritdoc IAlignmentVault
+    function getBenefactorDelegate(address benefactor) external view override returns (address) {
+        address delegate = benefactorDelegate[benefactor];
+        return delegate == address(0) ? benefactor : delegate;
+    }
+
+    /// @inheritdoc IAlignmentVault
+    function claimFeesAsDelegate(address[] calldata benefactors) external override returns (uint256 totalClaimed) {
+        // Snapshot fees before iteration so all benefactors calculate against same base
+        uint256 snapshotFees = accumulatedFees;
+
+        for (uint256 i = 0; i < benefactors.length; i++) {
+            address benefactor = benefactors[i];
+            require(benefactorDelegate[benefactor] == msg.sender, "Not delegate");
+            require(benefactorShares[benefactor] > 0, "No shares");
+
+            if (snapshotFees == 0) continue;
+
+            uint256 currentShareValue = (snapshotFees * benefactorShares[benefactor]) / totalShares;
+            uint256 ethClaimed = currentShareValue > shareValueAtLastClaim[benefactor]
+                ? currentShareValue - shareValueAtLastClaim[benefactor]
+                : 0;
+
+            if (ethClaimed > 0) {
+                totalClaimed += ethClaimed;
+                emit FeesClaimed(benefactor, ethClaimed);
+            }
+        }
+
+        require(totalClaimed > 0, "No fees to claim");
+        accumulatedFees -= totalClaimed;
+
+        // Update watermarks after deduction
+        for (uint256 i = 0; i < benefactors.length; i++) {
+            uint256 newShareValue = (accumulatedFees * benefactorShares[benefactors[i]]) / totalShares;
+            shareValueAtLastClaim[benefactors[i]] = newShareValue;
+            lastClaimTimestamp[benefactors[i]] = block.timestamp;
+        }
+
+        (bool success, ) = payable(msg.sender).call{value: totalClaimed}("");
+        require(success, "ETH transfer failed");
     }
 
     // Note: accumulatedFees() and totalShares() are public state variables,

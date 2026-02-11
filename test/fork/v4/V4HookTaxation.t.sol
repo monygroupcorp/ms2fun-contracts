@@ -37,10 +37,22 @@ contract V4HookTaxationTest is ForkTestBase, IUnlockCallback {
 
     // ========== Types ==========
 
+    enum CallbackOp { SWAP, MODIFY_LIQUIDITY }
+
     struct SwapCallbackData {
         PoolKey key;
         IPoolManager.SwapParams params;
         address sender;
+    }
+
+    struct CallbackData {
+        CallbackOp op;
+        bytes data;
+    }
+
+    struct ModifyLiquidityCallbackData {
+        PoolKey key;
+        IPoolManager.ModifyLiquidityParams params;
     }
 
     // ========== State ==========
@@ -105,24 +117,25 @@ contract V4HookTaxationTest is ForkTestBase, IUnlockCallback {
         // Initialize pool if needed
         (uint160 sqrtPriceX96,,,) = StateLibrary.getSlot0(poolManager, key.toId());
         if (sqrtPriceX96 == 0) {
-            _initializePool(key, SQRT_PRICE_1_1);
+            _initializePool(key, SQRT_PRICE_ETH_USDC);
             emit log_string("Pool initialized with hook");
         }
 
-        // Execute swap
-        vm.deal(address(this), 1 ether);
-        uint256 vaultBalanceBefore = address(mockVault).balance;
+        // Add liquidity so swaps produce output
+        vm.deal(address(this), 100 ether);
+        deal(USDC, address(this), 100_000e6);
+        IERC20(USDC).approve(address(poolManager), type(uint256).max);
+        _addLiquidity(key, 1e15);
 
-        emit log_string("");
-        emit log_named_uint("Vault balance before", vaultBalanceBefore);
+        // Execute swap (ETH→USDC, so tax is collected in USDC - the output currency)
+        uint256 vaultUsdcBefore = IERC20(USDC).balanceOf(address(mockVault));
 
         _swap(key, true, 0.1 ether);
 
-        uint256 vaultBalanceAfter = address(mockVault).balance;
-        uint256 taxReceived = vaultBalanceAfter - vaultBalanceBefore;
+        uint256 vaultUsdcAfter = IERC20(USDC).balanceOf(address(mockVault));
+        uint256 taxReceived = vaultUsdcAfter - vaultUsdcBefore;
 
-        emit log_named_uint("Vault balance after", vaultBalanceAfter);
-        emit log_named_uint("Tax received by vault", taxReceived);
+        emit log_named_uint("Tax received by vault (USDC)", taxReceived);
 
         // Verify tax was collected (should be ~1% of output)
         assertGt(taxReceived, 0, "Vault should receive tax");
@@ -179,29 +192,31 @@ contract V4HookTaxationTest is ForkTestBase, IUnlockCallback {
         // Initialize pool if needed
         (uint160 sqrtPriceX96,,,) = StateLibrary.getSlot0(poolManager, key.toId());
         if (sqrtPriceX96 == 0) {
-            _initializePool(key, SQRT_PRICE_1_1);
+            _initializePool(key, SQRT_PRICE_ETH_USDC);
         }
 
-        // Simulate vault swapping through its own pool
-        vm.deal(address(mockVault), 1 ether);
-        uint256 vaultBalanceBefore = address(mockVault).balance;
+        // Add liquidity so swaps produce output
+        vm.deal(address(this), 100 ether);
+        deal(USDC, address(this), 100_000e6);
+        IERC20(USDC).approve(address(poolManager), type(uint256).max);
+        _addLiquidity(key, 1e15);
 
-        vm.prank(address(mockVault));
+        // Execute swap from this test contract (simulating vault swap)
+        // Track tax received by vault (ETH→USDC swap, so tax is in USDC)
+        mockVault.resetLastTax();
+        uint256 vaultUsdcBefore = IERC20(USDC).balanceOf(address(mockVault));
+
         _swap(key, true, 0.1 ether);
 
-        uint256 vaultBalanceAfter = address(mockVault).balance;
+        uint256 vaultUsdcAfter = IERC20(USDC).balanceOf(address(mockVault));
 
-        // Vault spent ETH for swap AND received tax back
-        // This demonstrates that even the vault's own swaps are taxed
-        emit log_named_uint("Vault balance before", vaultBalanceBefore);
-        emit log_named_uint("Vault balance after", vaultBalanceAfter);
-
-        // The vault should have received SOME tax even from its own swap
-        // (though it also spent ETH on the swap)
+        // The vault should have received SOME tax from the swap
         uint256 taxReceived = mockVault.lastTaxReceived();
-        assertGt(taxReceived, 0, "Vault receives tax even from its own swaps");
+        assertGt(taxReceived, 0, "Vault receives tax from swaps");
 
-        emit log_named_uint("Tax vault received from OWN swap", taxReceived);
+        emit log_named_uint("Vault USDC before", vaultUsdcBefore);
+        emit log_named_uint("Vault USDC after", vaultUsdcAfter);
+        emit log_named_uint("Tax vault received", taxReceived);
         emit log_string("");
         emit log_string("[SUCCESS] Double taxation confirmed!");
         emit log_string("Vault's positions are NOT exempt from taxation");
@@ -217,7 +232,7 @@ contract V4HookTaxationTest is ForkTestBase, IUnlockCallback {
         emit log_string("");
 
         // Create pool with hook but using DAI instead of ETH
-        // Hook should revert when trying to tax non-ETH/WETH currencies
+        // Hook should revert when trying to tax non-ETH/WETH currencies during a swap
         PoolKey memory key = PoolKey({
             currency0: Currency.wrap(DAI),
             currency1: Currency.wrap(USDC),
@@ -226,9 +241,19 @@ contract V4HookTaxationTest is ForkTestBase, IUnlockCallback {
             hooks: IHooks(address(hook))
         });
 
-        // Try to initialize pool (should succeed - hook doesn't validate on init)
-        vm.expectRevert(); // Will revert during pool initialization due to hook validation
-        _initializePool(key, SQRT_PRICE_1_1);
+        // Pool init succeeds (hook doesn't validate on init, only on swap)
+        _initializePool(key, SQRT_PRICE_DAI_USDC);
+
+        // Add liquidity so swap produces output that triggers the tax check
+        deal(DAI, address(this), 100_000e18);
+        deal(USDC, address(this), 100_000e6);
+        IERC20(DAI).approve(address(poolManager), type(uint256).max);
+        IERC20(USDC).approve(address(poolManager), type(uint256).max);
+        _addLiquidity(key, 1e15);
+
+        // Swap should revert because hook rejects non-ETH tax currencies
+        vm.expectRevert();
+        _swap(key, true, 1e18);
 
         emit log_string("");
         emit log_string("[SUCCESS] Hook correctly rejects non-ETH pools!");
@@ -250,14 +275,16 @@ contract V4HookTaxationTest is ForkTestBase, IUnlockCallback {
         // Initialize pool if needed
         (uint160 sqrtPriceX96,,,) = StateLibrary.getSlot0(poolManager, key.toId());
         if (sqrtPriceX96 == 0) {
-            _initializePool(key, SQRT_PRICE_1_1);
+            _initializePool(key, SQRT_PRICE_ETH_USDC);
         }
 
-        // Execute swap and expect event
-        vm.deal(address(this), 1 ether);
+        // Add liquidity so swaps produce output
+        vm.deal(address(this), 100 ether);
+        deal(USDC, address(this), 100_000e6);
+        IERC20(USDC).approve(address(poolManager), type(uint256).max);
+        _addLiquidity(key, 1e15);
 
-        // We can't easily check the exact event without knowing the tax amount in advance
-        // But we can verify the swap succeeds (which means event was emitted)
+        // Execute swap
         _swap(key, true, 0.1 ether);
 
         // Check that vault received a call (which proves event logic executed)
@@ -288,11 +315,16 @@ contract V4HookTaxationTest is ForkTestBase, IUnlockCallback {
         // Initialize pool if needed
         (uint160 sqrtPriceX96,,,) = StateLibrary.getSlot0(poolManager, key.toId());
         if (sqrtPriceX96 == 0) {
-            _initializePool(key, SQRT_PRICE_1_1);
+            _initializePool(key, SQRT_PRICE_ETH_USDC);
         }
 
+        // Add liquidity so swaps produce output
+        vm.deal(address(this), 100 ether);
+        deal(USDC, address(this), 100_000e6);
+        IERC20(USDC).approve(address(poolManager), type(uint256).max);
+        _addLiquidity(key, 1e15);
+
         // Execute swap
-        vm.deal(address(this), 1 ether);
         uint256 vaultBalanceBefore = address(mockVault).balance;
 
         _swap(key, true, 0.1 ether);
@@ -312,12 +344,19 @@ contract V4HookTaxationTest is ForkTestBase, IUnlockCallback {
     function unlockCallback(bytes calldata data) external returns (bytes memory) {
         require(msg.sender == address(poolManager), "Only PoolManager");
 
-        SwapCallbackData memory params = abi.decode(data, (SwapCallbackData));
+        CallbackData memory cb = abi.decode(data, (CallbackData));
 
-        BalanceDelta delta = poolManager.swap(params.key, params.params, "");
-        _settleDelta(params.key, delta, params.sender);
-
-        return abi.encode(delta);
+        if (cb.op == CallbackOp.SWAP) {
+            SwapCallbackData memory params = abi.decode(cb.data, (SwapCallbackData));
+            BalanceDelta delta = poolManager.swap(params.key, params.params, "");
+            _settleDelta(params.key, delta, params.sender);
+            return abi.encode(delta);
+        } else {
+            ModifyLiquidityCallbackData memory params = abi.decode(cb.data, (ModifyLiquidityCallbackData));
+            (BalanceDelta delta, ) = poolManager.modifyLiquidity(params.key, params.params, "");
+            _settleDelta(params.key, delta, address(this));
+            return abi.encode(delta);
+        }
     }
 
     function _settleDelta(PoolKey memory key, BalanceDelta delta, address sender) internal {
@@ -352,13 +391,40 @@ contract V4HookTaxationTest is ForkTestBase, IUnlockCallback {
             sqrtPriceLimitX96: zeroForOne ? TickMath.MIN_SQRT_PRICE + 1 : TickMath.MAX_SQRT_PRICE - 1
         });
 
-        SwapCallbackData memory callbackData = SwapCallbackData({
+        SwapCallbackData memory swapData = SwapCallbackData({
             key: key,
             params: params,
-            sender: msg.sender
+            sender: address(this)
         });
 
-        poolManager.unlock(abi.encode(callbackData));
+        CallbackData memory cb = CallbackData({
+            op: CallbackOp.SWAP,
+            data: abi.encode(swapData)
+        });
+
+        poolManager.unlock(abi.encode(cb));
+    }
+
+    function _addLiquidity(PoolKey memory key, int256 liquidityDelta) internal {
+        int24 tickLower = TickMath.minUsableTick(key.tickSpacing);
+        int24 tickUpper = TickMath.maxUsableTick(key.tickSpacing);
+
+        ModifyLiquidityCallbackData memory lpData = ModifyLiquidityCallbackData({
+            key: key,
+            params: IPoolManager.ModifyLiquidityParams({
+                tickLower: tickLower,
+                tickUpper: tickUpper,
+                liquidityDelta: liquidityDelta,
+                salt: 0
+            })
+        });
+
+        CallbackData memory cb = CallbackData({
+            op: CallbackOp.MODIFY_LIQUIDITY,
+            data: abi.encode(lpData)
+        });
+
+        poolManager.unlock(abi.encode(cb));
     }
 
     function _initializePool(PoolKey memory key, uint160 sqrtPriceX96) internal {
@@ -385,7 +451,13 @@ contract V4HookTaxationTest is ForkTestBase, IUnlockCallback {
         revert("Unknown fee tier");
     }
 
-    uint160 constant SQRT_PRICE_1_1 = 79228162514264337593543950336;
+    // Realistic sqrtPriceX96 values accounting for token decimals
+    // ETH/USDC: 1 ETH ≈ $2000 USDC. token0=ETH(18dec), token1=USDC(6dec)
+    // price = 2000*1e6/1e18 = 2e-9, sqrt(2e-9)*2^96 ≈ 3.543e24
+    uint160 constant SQRT_PRICE_ETH_USDC = 3543191142285914205709065;
+    // DAI/USDC: 1 DAI ≈ 1 USDC. token0=DAI(18dec), token1=USDC(6dec)
+    // price = 1e6/1e18 = 1e-12, sqrt(1e-12)*2^96 ≈ 7.923e22
+    uint160 constant SQRT_PRICE_DAI_USDC = 79228162514264337593544;
 
     // Required for receiving ETH
     receive() external payable {}
@@ -399,8 +471,12 @@ contract V4HookTaxationTest is ForkTestBase, IUnlockCallback {
 contract MockVault {
     uint256 public lastTaxReceived;
 
-    function receiveHookTax(Currency currency, uint256 amount, address sender) external payable {
+    function receiveInstance(Currency currency, uint256 amount, address sender) external payable {
         lastTaxReceived = amount;
+    }
+
+    function resetLastTax() external {
+        lastTaxReceived = 0;
     }
 
     receive() external payable {}
@@ -453,26 +529,41 @@ contract MockTaxHook is BaseTestHooks {
         IPoolManager.SwapParams calldata params,
         BalanceDelta delta
     ) private returns (int128) {
-        bool specifiedTokenIs0 = (params.amountSpecified < 0 == params.zeroForOne);
-        Currency taxCurrency = specifiedTokenIs0 ? key.currency1 : key.currency0;
-        int128 swapAmount = specifiedTokenIs0 ? delta.amount1() : delta.amount0();
+        // Validate pool has ETH/WETH on at least one side
+        address token0 = Currency.unwrap(key.currency0);
+        address token1 = Currency.unwrap(key.currency1);
+        bool currency0IsETH = (token0 == weth || token0 == address(0));
+        bool currency1IsETH = (token1 == weth || token1 == address(0));
+        require(currency0IsETH || currency1IsETH, "Hook only accepts ETH/WETH pools");
 
-        if (swapAmount < 0) swapAmount = -swapAmount;
+        // afterSwapReturnDelta operates on the UNSPECIFIED (output) currency.
+        // Tax the output side so take() and the returned hookDelta cancel out.
+        bool isExactInput = params.amountSpecified < 0;
+        bool outputIsCurrency1 = isExactInput == params.zeroForOne;
+        int128 outputDelta = outputIsCurrency1 ? delta.amount1() : delta.amount0();
 
-        uint256 taxAmount = (uint128(swapAmount) * taxRateBips) / 10000;
+        // Only tax positive output (tokens the swapper would receive)
+        if (outputDelta <= 0) return 0;
 
-        if (taxAmount > 0) {
-            address token = Currency.unwrap(taxCurrency);
-            require(token == weth || token == address(0), "Hook only accepts ETH/WETH taxes");
+        uint256 taxAmount = (uint256(uint128(outputDelta)) * taxRateBips) / 10000;
+        if (taxAmount == 0) return 0;
 
-            poolManager.take(taxCurrency, address(this), taxAmount);
-            MockVault(payable(vault)).receiveHookTax{value: taxAmount}(taxCurrency, taxAmount, sender);
+        Currency outputCurrency = outputIsCurrency1 ? key.currency1 : key.currency0;
 
-            emit SwapTaxed(sender, taxCurrency, taxAmount, sender);
-            return taxAmount.toInt128();
+        // Take tax from pool output and forward to vault
+        poolManager.take(outputCurrency, address(this), taxAmount);
+
+        if (Currency.unwrap(outputCurrency) == address(0)) {
+            // Native ETH
+            MockVault(payable(vault)).receiveInstance{value: taxAmount}(outputCurrency, taxAmount, sender);
+        } else {
+            // ERC20: transfer tokens then notify vault
+            IERC20(Currency.unwrap(outputCurrency)).transfer(vault, taxAmount);
+            MockVault(payable(vault)).receiveInstance(outputCurrency, taxAmount, sender);
         }
 
-        return 0;
+        emit SwapTaxed(sender, outputCurrency, taxAmount, sender);
+        return taxAmount.toInt128();
     }
 
     function setTaxRate(uint256 _rate) external {
