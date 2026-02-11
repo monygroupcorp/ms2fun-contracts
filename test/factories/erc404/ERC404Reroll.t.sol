@@ -73,6 +73,7 @@ contract ERC404RerollTest is Test {
             mockWETH,
             address(this), // Factory must match msg.sender (deployer)
             mockMasterRegistry,
+            address(0xBEEF), // vault
             owner,
             "" // styleUri
         );

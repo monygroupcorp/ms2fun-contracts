@@ -6,7 +6,7 @@ import {ReentrancyGuard} from "solady/utils/ReentrancyGuard.sol";
 import {SafeTransferLib} from "solady/utils/SafeTransferLib.sol";
 import {IMasterRegistry} from "../../master/interfaces/IMasterRegistry.sol";
 import {FeatureUtils} from "../../master/libraries/FeatureUtils.sol";
-import {UltraAlignmentVault} from "../../vaults/UltraAlignmentVault.sol";
+import {IAlignmentVault} from "../../interfaces/IAlignmentVault.sol";
 import {ERC404BondingInstance} from "./ERC404BondingInstance.sol";
 
 /**
@@ -38,6 +38,8 @@ contract ERC404Factory is Ownable, ReentrancyGuard {
         address indexed vault,
         address hook
     );
+    event InstanceCreationFeeUpdated(uint256 newFee);
+    event VaultCapabilityWarning(address indexed vault, bytes32 indexed capability);
 
     constructor(
         address _masterRegistry,
@@ -99,6 +101,16 @@ contract ERC404Factory is Ownable, ReentrancyGuard {
         require(hook != address(0), "Hook required for ultraalignment");
         require(hook.code.length > 0, "Hook must be a contract");
 
+        // Soft capability checks — emit warnings, never revert
+        // try/catch in case vault doesn't implement supportsCapability
+        try IAlignmentVault(payable(vault)).supportsCapability(keccak256("YIELD_GENERATION")) returns (bool supported) {
+            if (!supported) {
+                emit VaultCapabilityWarning(vault, keccak256("YIELD_GENERATION"));
+            }
+        } catch {
+            emit VaultCapabilityWarning(vault, keccak256("YIELD_GENERATION"));
+        }
+
         // Deploy new bonding instance WITH hook address (enforced alignment)
         instance = address(new ERC404BondingInstance(
             name,
@@ -112,6 +124,7 @@ contract ERC404Factory is Ownable, ReentrancyGuard {
             weth,
             address(this),
             address(masterRegistry),
+            vault,
             creator,
             styleUri
         ));
@@ -146,60 +159,6 @@ contract ERC404Factory is Ownable, ReentrancyGuard {
      */
     function setInstanceCreationFee(uint256 _fee) external onlyOwner {
         instanceCreationFee = _fee;
+        emit InstanceCreationFeeUpdated(_fee);
     }
 }
-
-/**
- * @title ERC404Instance
- * @notice Template ERC404 token instance
- * @dev Simplified implementation - full ERC404 would be more complex
- */
-contract ERC404Instance {
-    string public name;
-    string public symbol;
-    uint8 public constant decimals = 18;
-    uint256 public totalSupply;
-    address public creator;
-    address public factory;
-
-    mapping(address => uint256) public balanceOf;
-    mapping(address => mapping(address => uint256)) public allowance;
-
-    constructor(
-        string memory _name,
-        string memory _symbol,
-        string memory /* metadataURI */,
-        uint256 _initialSupply,
-        address _creator,
-        address _factory
-    ) {
-        name = _name;
-        symbol = _symbol;
-        creator = _creator;
-        factory = _factory;
-        totalSupply = _initialSupply;
-        balanceOf[_creator] = _initialSupply;
-    }
-
-    function transfer(address to, uint256 amount) external returns (bool) {
-        require(balanceOf[msg.sender] >= amount, "Insufficient balance");
-        balanceOf[msg.sender] -= amount;
-        balanceOf[to] += amount;
-        return true;
-    }
-
-    function approve(address spender, uint256 amount) external returns (bool) {
-        allowance[msg.sender][spender] = amount;
-        return true;
-    }
-
-    function transferFrom(address from, address to, uint256 amount) external returns (bool) {
-        require(balanceOf[from] >= amount, "Insufficient balance");
-        require(allowance[from][msg.sender] >= amount, "Insufficient allowance");
-        balanceOf[from] -= amount;
-        balanceOf[to] += amount;
-        allowance[from][msg.sender] -= amount;
-        return true;
-    }
-}
-

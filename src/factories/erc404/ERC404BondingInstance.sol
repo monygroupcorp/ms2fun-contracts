@@ -18,19 +18,16 @@ import { TickMath } from "v4-core/libraries/TickMath.sol";
 import { StateLibrary } from "v4-core/libraries/StateLibrary.sol";
 import { PoolId } from "v4-core/types/PoolId.sol";
 import { CurrencySettler } from "../../libraries/v4/CurrencySettler.sol";
-import { UltraAlignmentVault } from "../../vaults/UltraAlignmentVault.sol";
+import { IAlignmentVault } from "../../interfaces/IAlignmentVault.sol";
 import { GlobalMessageRegistry } from "../../registry/GlobalMessageRegistry.sol";
 import { GlobalMessagePacking } from "../../libraries/GlobalMessagePacking.sol";
 import { GlobalMessageTypes } from "../../libraries/GlobalMessageTypes.sol";
 import { IMasterRegistry } from "../../master/interfaces/IMasterRegistry.sol";
+import { IERC20 } from "../../shared/interfaces/IERC20.sol";
 
 interface IWETH {
     function deposit() external payable;
     function transfer(address to, uint256 value) external returns (bool);
-    function approve(address spender, uint256 amount) external returns (bool);
-}
-
-interface IERC20 {
     function approve(address spender, uint256 amount) external returns (bool);
 }
 
@@ -86,7 +83,7 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IUnlockCallba
     IHooks public v4Hook; // Can be set after deployment
     address public immutable factory;
     address public immutable weth;
-    UltraAlignmentVault public vault; // Can be set after deployment for staking support
+    IAlignmentVault public immutable vault;
     IMasterRegistry public immutable masterRegistry;
     GlobalMessageRegistry private cachedGlobalRegistry; // Lazy-loaded from masterRegistry
 
@@ -148,6 +145,7 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IUnlockCallba
         address _weth,
         address _factory,
         address _masterRegistry,
+        address _vault,
         address _owner,
         string memory _styleUri
     ) {
@@ -188,6 +186,8 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IUnlockCallba
         weth = _weth;
         factory = _factory;
         masterRegistry = IMasterRegistry(_masterRegistry);
+        require(_vault != address(0), "Invalid vault");
+        vault = IAlignmentVault(payable(_vault));
         styleUri = _styleUri;
 
         // Initialize password hash mapping
@@ -255,17 +255,6 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IUnlockCallba
         require(_hook != address(0), "Invalid hook");
         require(address(v4Hook) == address(0), "Hook already set");
         v4Hook = IHooks(_hook);
-    }
-
-    /**
-     * @notice Set vault for staking support
-     * @dev Can be called after deployment to enable holder staking
-     * @param _vault Vault address
-     */
-    function setVault(address payable _vault) external onlyOwner {
-        require(_vault != address(0), "Invalid vault");
-        require(address(vault) == address(0), "Vault already set");
-        vault = UltraAlignmentVault(_vault);
     }
 
     // ┌─────────────────────────┐
@@ -994,7 +983,7 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IUnlockCallba
         require(stakedBalance[msg.sender] >= amount, "Insufficient staked balance");
 
         // Auto-claim pending rewards before unstaking
-        if (address(vault) != address(0) && totalStaked > 0) {
+        if (totalStaked > 0) {
             // Step 1: Update global fee counter by querying vault for TOTAL cumulative fees
             uint256 vaultTotalFees = vault.calculateClaimableAmount(address(this));
 
@@ -1058,6 +1047,7 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IUnlockCallba
         require(stakingEnabled, "Staking not enabled");
         require(stakedBalance[msg.sender] > 0, "No staked balance");
         require(totalStaked > 0, "No stakers");
+        require(vault.validateCompliance(address(this)), "Vault requirements not met");
 
         // Step 1: Claim fees from vault (transfers ETH to this contract)
         uint256 deltaReceived = vault.claimFees();

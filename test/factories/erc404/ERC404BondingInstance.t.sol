@@ -82,6 +82,7 @@ contract ERC404BondingInstanceTest is Test {
             mockWETH,
             owner, // Factory must match msg.sender (pranked as owner)
             mockMasterRegistry, // MasterRegistry
+            address(0xBEEF), // vault
             owner,
             "" // styleUri
         );
