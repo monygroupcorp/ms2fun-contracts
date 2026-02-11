@@ -6,6 +6,7 @@ import {Ownable} from "solady/auth/Ownable.sol";
 import {ReentrancyGuard} from "solady/utils/ReentrancyGuard.sol";
 import {IMasterRegistry} from "./interfaces/IMasterRegistry.sol";
 import {MetadataUtils} from "../shared/libraries/MetadataUtils.sol";
+import {IFactoryInstance} from "../interfaces/IFactoryInstance.sol";
 import {VaultRegistry} from "../registry/VaultRegistry.sol";
 import {FactoryApprovalGovernance} from "../governance/FactoryApprovalGovernance.sol";
 import {VaultApprovalGovernance} from "../governance/VaultApprovalGovernance.sol";
@@ -290,6 +291,12 @@ contract MasterRegistryV1 is UUPSUpgradeable, Ownable, ReentrancyGuard, IMasterR
         require(creator != address(0), "Invalid creator");
         require(MetadataUtils.isValidName(name), "Invalid name");
         require(MetadataUtils.isValidURI(metadataURI), "Invalid metadata URI");
+
+        // Protocol enforcement: verify instance has an immutable vault matching factory's declaration
+        address instanceVault = IFactoryInstance(instance).vault();
+        require(instanceVault != address(0), "Instance has no vault");
+        require(instanceVault == vault, "Vault mismatch");
+        require(instanceVault.code.length > 0, "Vault not deployed");
 
         bytes32 nameHash = MetadataUtils.toNameHash(name);
         require(!nameHashes[nameHash], "Name already taken");
