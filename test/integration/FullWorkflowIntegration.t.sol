@@ -7,6 +7,7 @@ import {MasterRegistry} from "../../src/master/MasterRegistry.sol";
 import {FeaturedQueueManager} from "../../src/master/FeaturedQueueManager.sol";
 import {MockEXECToken} from "../mocks/MockEXECToken.sol";
 import {MockFactory} from "../mocks/MockFactory.sol";
+import {MockInstance} from "../mocks/MockInstance.sol";
 import {IMasterRegistry} from "../../src/master/interfaces/IMasterRegistry.sol";
 import {TestHelpers} from "../helpers/TestHelpers.sol";
 
@@ -29,6 +30,7 @@ contract FullWorkflowIntegrationTest is Test {
     address public voter2;
     address public creator;
     address public purchaser;
+    address public mockVault;
 
     uint256 constant APPLICATION_FEE = 0.1 ether;
     uint256 constant INITIAL_EXEC_SUPPLY = 100000e18;
@@ -59,7 +61,15 @@ contract FullWorkflowIntegrationTest is Test {
         queueManager.initialize(proxy, owner);
         MasterRegistryV1(proxy).setFeaturedQueueManager(address(queueManager));
 
+        // Deploy a contract to serve as the mock vault (just needs code at address)
+        mockVault = address(new MockInstance(address(0)));
+
         erc404Factory = new MockFactory(proxy);
+    }
+
+    /// @dev Deploy a MockInstance pointing to mockVault
+    function _newInstance() internal returns (address) {
+        return address(new MockInstance(mockVault));
     }
 
     function test_FullWorkflow_ApplicationToFeaturedPromotion() public {
@@ -80,7 +90,7 @@ contract FullWorkflowIntegrationTest is Test {
         assertEq(IMasterRegistry(proxy).getTotalFactories(), 1);
 
         // Step 2: Register instance
-        address instance = address(0xAAA);
+        address instance = _newInstance();
         vm.prank(address(erc404Factory));
         IMasterRegistry(proxy).registerInstance(
             instance,
@@ -88,7 +98,7 @@ contract FullWorkflowIntegrationTest is Test {
             creator,
             "my-token",
             "https://example.com/token.json",
-            address(0) // vault
+            mockVault
         );
 
         // Step 3: Rent featured position (queue-based)
@@ -143,8 +153,8 @@ contract FullWorkflowIntegrationTest is Test {
         assertEq(IMasterRegistry(proxy).getTotalFactories(), 2);
 
         // Create instances from both factories
-        address instance1 = address(0xAAA);
-        address instance2 = address(0xBBB);
+        address instance1 = _newInstance();
+        address instance2 = _newInstance();
 
         vm.prank(address(erc404Factory));
         IMasterRegistry(proxy).registerInstance(
@@ -153,7 +163,7 @@ contract FullWorkflowIntegrationTest is Test {
             creator,
             "token-1",
             "https://example.com/token1.json",
-            address(0) // vault
+            mockVault
         );
 
         vm.prank(address(factory2));
@@ -163,11 +173,11 @@ contract FullWorkflowIntegrationTest is Test {
             creator,
             "token-2",
             "https://example.com/token2.json",
-            address(0) // vault
+            mockVault
         );
 
         // Verify instances registered (by checking name uniqueness)
-        address duplicateInstance = address(0xCCC);
+        address duplicateInstance = _newInstance();
         vm.prank(address(erc404Factory));
         vm.expectRevert("Name already taken");
         IMasterRegistry(proxy).registerInstance(
@@ -176,7 +186,7 @@ contract FullWorkflowIntegrationTest is Test {
             creator,
             "token-1", // Duplicate name
             "https://example.com/duplicate.json",
-            address(0) // vault
+            mockVault
         );
     }
 
@@ -194,7 +204,7 @@ contract FullWorkflowIntegrationTest is Test {
             "https://example.com/factory.json"
         );
 
-        address instance = address(0xAAA);
+        address instance = _newInstance();
         vm.prank(address(erc404Factory));
         IMasterRegistry(proxy).registerInstance(
             instance,
@@ -202,36 +212,38 @@ contract FullWorkflowIntegrationTest is Test {
             creator,
             "test-token",
             "https://example.com/token.json",
-            address(0) // vault
+            mockVault
         );
 
         // Rent multiple positions and verify price changes
         uint256 duration = 7 days;
         uint256[] memory prices = new uint256[](3);
+        address[] memory instanceAddrs = new address[](3);
+        instanceAddrs[0] = instance;
 
         for (uint256 i = 0; i < 3; i++) {
             // Each subsequent rental will be for the next position (1, 2, 3)
             uint256 position = i + 1;
             prices[i] = queueManager.calculateRentalCost(position, duration);
 
-            address instanceAddr = address(uint160(0xAAA + i));
             if (i > 0) {
                 // Register additional instances for different promotions
+                instanceAddrs[i] = _newInstance();
                 vm.prank(address(erc404Factory));
                 IMasterRegistry(proxy).registerInstance(
-                    instanceAddr,
+                    instanceAddrs[i],
                     address(erc404Factory),
                     creator,
                     string(abi.encodePacked("token-", vm.toString(i))),
                     string(abi.encodePacked("https://example.com/token", vm.toString(i), ".json")),
-                    address(0) // vault
+                    mockVault
                 );
             }
 
             vm.deal(purchaser, prices[i] * 2);
             vm.prank(purchaser);
             queueManager.rentFeaturedPosition{value: prices[i]}(
-                instanceAddr,
+                instanceAddrs[i],
                 position,
                 duration
             );

@@ -6,6 +6,7 @@ import {MasterRegistryV1} from "../../src/master/MasterRegistryV1.sol";
 import {MasterRegistry} from "../../src/master/MasterRegistry.sol";
 import {MockEXECToken} from "../mocks/MockEXECToken.sol";
 import {MockFactory} from "../mocks/MockFactory.sol";
+import {MockInstance} from "../mocks/MockInstance.sol";
 import {IMasterRegistry} from "../../src/master/interfaces/IMasterRegistry.sol";
 import {TestHelpers} from "../helpers/TestHelpers.sol";
 
@@ -27,6 +28,7 @@ contract FactoryInstanceIndexingTest is Test {
     address public voter1;
     address public creator1;
     address public creator2;
+    address public mockVault;
 
     uint256 constant APPLICATION_FEE = 0.1 ether;
     uint256 constant INITIAL_EXEC_SUPPLY = 100000e18;
@@ -51,8 +53,16 @@ contract FactoryInstanceIndexingTest is Test {
         proxyWrapper = new MasterRegistry(address(implementation), initData);
         proxy = TestHelpers.getProxyAddress(proxyWrapper);
 
+        // Deploy a contract to serve as the mock vault (just needs code at address)
+        mockVault = address(new MockInstance(address(0)));
+
         erc404Factory = new MockFactory(proxy);
         erc1155Factory = new MockFactory(proxy);
+    }
+
+    /// @dev Deploy a MockInstance pointing to mockVault
+    function _newInstance() internal returns (address) {
+        return address(new MockInstance(mockVault));
     }
 
     function test_FactoryIndexing_MultipleFactories() public {
@@ -97,13 +107,14 @@ contract FactoryInstanceIndexingTest is Test {
         features[1] = keccak256("LIQUIDITY_POOL");
         features[2] = keccak256("CHAT");
 
-        MasterRegistryV1(proxy).registerFactoryWithFeatures(
+        MasterRegistryV1(proxy).registerFactoryWithFeaturesAndCreator(
             address(erc404Factory),
             "ERC404",
             "featured-factory",
             "Featured Factory",
             "https://example.com/featured.json",
-            features
+            features,
+            applicant1
         );
 
         // Retrieve and verify metadata
@@ -132,7 +143,7 @@ contract FactoryInstanceIndexingTest is Test {
         // Register multiple instances
         address[] memory instances = new address[](5);
         for (uint256 i = 0; i < 5; i++) {
-            instances[i] = address(uint160(0x1000 + i));
+            instances[i] = _newInstance();
             vm.prank(address(erc404Factory));
             IMasterRegistry(proxy).registerInstance(
                 instances[i],
@@ -140,14 +151,14 @@ contract FactoryInstanceIndexingTest is Test {
                 i % 2 == 0 ? creator1 : creator2,
                 string(abi.encodePacked("instance-", vm.toString(i))),
                 string(abi.encodePacked("https://example.com/instance", vm.toString(i), ".json")),
-                address(0) // vault
+                mockVault
             );
         }
 
         // Verify all instances registered (checking name uniqueness)
         for (uint256 i = 0; i < 5; i++) {
             // Try to register duplicate name - should fail
-            address duplicateInstance = address(uint160(0x2000 + i));
+            address duplicateInstance = _newInstance();
             vm.prank(address(erc404Factory));
             vm.expectRevert("Name already taken");
             IMasterRegistry(proxy).registerInstance(
@@ -156,7 +167,7 @@ contract FactoryInstanceIndexingTest is Test {
                 creator1,
                 string(abi.encodePacked("instance-", vm.toString(i))), // Same name
                 "https://example.com/duplicate.json",
-                address(0) // vault
+                mockVault
             );
         }
     }
@@ -172,7 +183,7 @@ contract FactoryInstanceIndexingTest is Test {
         );
 
         // Register instance with metadata
-        address instance = address(0xAAA);
+        address instance = _newInstance();
         string memory instanceName = "my-token";
         string memory metadataURI = "https://example.com/my-token.json";
 
@@ -183,12 +194,12 @@ contract FactoryInstanceIndexingTest is Test {
             creator1,
             instanceName,
             metadataURI,
-            address(0) // vault
+            mockVault
         );
 
         // Note: We would need a getter function in MasterRegistryV1 to retrieve instance info
         // For now, we verify registration succeeded by checking name uniqueness
-        address duplicateInstance = address(0xBBB);
+        address duplicateInstance = _newInstance();
         vm.prank(address(erc404Factory));
         vm.expectRevert("Name already taken");
         IMasterRegistry(proxy).registerInstance(
@@ -197,7 +208,7 @@ contract FactoryInstanceIndexingTest is Test {
             creator2,
             instanceName, // Same name should fail
             "https://example.com/duplicate.json",
-            address(0) // vault
+            mockVault
         );
     }
 
@@ -220,8 +231,8 @@ contract FactoryInstanceIndexingTest is Test {
         );
 
         // Register instances from different factories
-        address erc404Instance = address(0xAAA);
-        address erc1155Instance = address(0xBBB);
+        address erc404Instance = _newInstance();
+        address erc1155Instance = _newInstance();
 
         vm.prank(address(erc404Factory));
         IMasterRegistry(proxy).registerInstance(
@@ -230,7 +241,7 @@ contract FactoryInstanceIndexingTest is Test {
             creator1,
             "erc404-token",
             "https://example.com/erc404-token.json",
-            address(0) // vault
+            mockVault
         );
 
         vm.prank(address(erc1155Factory));
@@ -240,7 +251,7 @@ contract FactoryInstanceIndexingTest is Test {
             creator2,
             "erc1155-token",
             "https://example.com/erc1155-token.json",
-            address(0) // vault
+            mockVault
         );
 
         // Verify factories are separate
@@ -264,7 +275,7 @@ contract FactoryInstanceIndexingTest is Test {
         );
 
         // Register instance with lowercase name
-        address instance1 = address(0xAAA);
+        address instance1 = _newInstance();
         vm.prank(address(erc404Factory));
         IMasterRegistry(proxy).registerInstance(
             instance1,
@@ -272,11 +283,11 @@ contract FactoryInstanceIndexingTest is Test {
             creator1,
             "test-token",
             "https://example.com/token.json",
-            address(0) // vault
+            mockVault
         );
 
         // Try to register with uppercase name (should fail - case insensitive)
-        address instance2 = address(0xBBB);
+        address instance2 = _newInstance();
         vm.prank(address(erc404Factory));
         vm.expectRevert("Name already taken");
         IMasterRegistry(proxy).registerInstance(
@@ -285,7 +296,7 @@ contract FactoryInstanceIndexingTest is Test {
             creator2,
             "TEST-TOKEN", // Uppercase version
             "https://example.com/token2.json",
-            address(0) // vault
+            mockVault
         );
     }
 

@@ -6,6 +6,7 @@ import {MasterRegistryV1} from "../../src/master/MasterRegistryV1.sol";
 import {FeaturedQueueManager} from "../../src/master/FeaturedQueueManager.sol";
 import {IMasterRegistry} from "../../src/master/interfaces/IMasterRegistry.sol";
 import {MockEXECToken} from "../mocks/MockEXECToken.sol";
+import {MockInstance} from "../mocks/MockInstance.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 
 /**
@@ -27,12 +28,13 @@ contract MasterRegistryQueueTest is Test {
     address public charlie = address(0x5);
     address public dave = address(0x6);
 
-    // Test instances
-    address public instance1 = address(0x101);
-    address public instance2 = address(0x102);
-    address public instance3 = address(0x103);
-    address public instance4 = address(0x104);
-    address public instance5 = address(0x105);
+    // Test instances (deployed in setUp)
+    address public instance1;
+    address public instance2;
+    address public instance3;
+    address public instance4;
+    address public instance5;
+    address public mockVault;
 
     // Events
     event PositionRented(
@@ -82,7 +84,22 @@ contract MasterRegistryQueueTest is Test {
     // Receive function to accept cleanup rewards
     receive() external payable {}
 
+    /// @dev Deploy a MockInstance pointing to mockVault
+    function _newInstance() internal returns (address) {
+        return address(new MockInstance(mockVault));
+    }
+
     function setUp() public {
+        // Deploy a contract to serve as the mock vault (just needs code at address)
+        mockVault = address(new MockInstance(address(0)));
+
+        // Deploy MockInstance contracts for the 5 test instances
+        instance1 = _newInstance();
+        instance2 = _newInstance();
+        instance3 = _newInstance();
+        instance4 = _newInstance();
+        instance5 = _newInstance();
+
         vm.startPrank(owner);
 
         // Deploy EXEC token
@@ -118,11 +135,11 @@ contract MasterRegistryQueueTest is Test {
 
         // Register test instances
         vm.startPrank(factory);
-        registry.registerInstance(instance1, factory, alice, "Instance1", "https://uri1", address(0));
-        registry.registerInstance(instance2, factory, bob, "Instance2", "https://uri2", address(0));
-        registry.registerInstance(instance3, factory, charlie, "Instance3", "https://uri3", address(0));
-        registry.registerInstance(instance4, factory, dave, "Instance4", "https://uri4", address(0));
-        registry.registerInstance(instance5, factory, alice, "Instance5", "https://uri5", address(0));
+        registry.registerInstance(instance1, factory, alice, "Instance1", "https://uri1", mockVault);
+        registry.registerInstance(instance2, factory, bob, "Instance2", "https://uri2", mockVault);
+        registry.registerInstance(instance3, factory, charlie, "Instance3", "https://uri3", mockVault);
+        registry.registerInstance(instance4, factory, dave, "Instance4", "https://uri4", mockVault);
+        registry.registerInstance(instance5, factory, alice, "Instance5", "https://uri5", mockVault);
         vm.stopPrank();
 
         // Fund test accounts
@@ -131,8 +148,8 @@ contract MasterRegistryQueueTest is Test {
         vm.deal(charlie, 100 ether);
         vm.deal(dave, 100 ether);
 
-        // Fund registry for cleanup rewards
-        vm.deal(address(registry), 10 ether);
+        // Fund queueManager for cleanup rewards
+        vm.deal(address(queueManager), 10 ether);
     }
 
     // ========== Rental Price Tests ==========
@@ -145,11 +162,11 @@ contract MasterRegistryQueueTest is Test {
     function test_getPositionRentalPrice_utilizationIncreasesPrice() public {
         // Rent 50 positions (50% utilization)
         for (uint256 i = 1; i <= 50; i++) {
-            address testInstance = address(uint160(0x1000 + i));
+            address testInstance = _newInstance();
 
             // Register instance
             vm.prank(factory);
-            registry.registerInstance(testInstance, factory, alice, _validName(i), "https://uri", address(0));
+            registry.registerInstance(testInstance, factory, alice, _validName(i), "https://uri", mockVault);
 
             // Rent position
             vm.prank(alice);
@@ -570,11 +587,11 @@ contract MasterRegistryQueueTest is Test {
     function test_multipleRentals_queueGrowth() public {
         // Rent 10 positions
         for (uint256 i = 0; i < 10; i++) {
-            address testInstance = address(uint160(0x2000 + i));
+            address testInstance = _newInstance();
             address renter = address(uint160(0x3000 + i));
 
             vm.prank(factory);
-            registry.registerInstance(testInstance, factory, renter, _validName(100 + i), "https://uri", address(0));
+            registry.registerInstance(testInstance, factory, renter, _validName(100 + i), "https://uri", mockVault);
 
             vm.deal(renter, 10 ether);
             vm.prank(renter);
@@ -614,11 +631,11 @@ contract MasterRegistryQueueTest is Test {
 
         // Rent 25 positions (25% full)
         for (uint256 i = 0; i < 25; i++) {
-            address testInstance = address(uint160(0x4000 + i));
+            address testInstance = _newInstance();
             address renter = address(uint160(0x5000 + i));
 
             vm.prank(factory);
-            registry.registerInstance(testInstance, factory, renter, _validName(200 + i), "https://uri", address(0));
+            registry.registerInstance(testInstance, factory, renter, _validName(200 + i), "https://uri", mockVault);
 
             vm.deal(renter, 10 ether);
             vm.prank(renter);
