@@ -7,6 +7,7 @@ import {FeaturedQueueManager} from "../../src/master/FeaturedQueueManager.sol";
 import {IMasterRegistry} from "../../src/master/interfaces/IMasterRegistry.sol";
 import {MockEXECToken} from "../mocks/MockEXECToken.sol";
 import {MockInstance} from "../mocks/MockInstance.sol";
+import {MockFactory} from "../mocks/MockFactory.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 
 /**
@@ -22,7 +23,7 @@ contract MasterRegistryQueueTest is Test {
     MockEXECToken public execToken;
 
     address public owner = address(0x1);
-    address public factory = address(0x2);
+    address public factory;
     address public alice = address(0x3);
     address public bob = address(0x4);
     address public charlie = address(0x5);
@@ -101,6 +102,9 @@ contract MasterRegistryQueueTest is Test {
         instance5 = _newInstance();
 
         vm.startPrank(owner);
+
+        // Deploy MockFactory (implements IFactory for MasterRegistry enforcement)
+        factory = address(new MockFactory(address(0xC1EA), owner));
 
         // Deploy EXEC token
         execToken = new MockEXECToken(100000e18);
@@ -623,6 +627,124 @@ contract MasterRegistryQueueTest is Test {
         assertEq(first3[2], instance3, "Third should be instance3");
     }
 
+    // ========== Protocol Treasury Tests ==========
+
+    function test_setProtocolTreasury_success() public {
+        vm.prank(owner);
+        queueManager.setProtocolTreasury(address(0xBEEF));
+        assertEq(queueManager.protocolTreasury(), address(0xBEEF));
+    }
+
+    function test_setProtocolTreasury_revertNonOwner() public {
+        vm.prank(alice);
+        vm.expectRevert();
+        queueManager.setProtocolTreasury(address(0xBEEF));
+    }
+
+    function test_setProtocolTreasury_revertZeroAddress() public {
+        vm.prank(owner);
+        vm.expectRevert("Invalid treasury");
+        queueManager.setProtocolTreasury(address(0));
+    }
+
+    function test_withdrawProtocolFees_protectsRenewalDeposits() public {
+        // Rent a position so there's rental revenue
+        vm.prank(alice);
+        uint256 rentalCost = queueManager.calculateRentalCost(1, 7 days);
+        queueManager.rentFeaturedPosition{value: rentalCost}(instance1, 1, 7 days);
+
+        // Deposit for auto-renewal
+        vm.prank(alice);
+        queueManager.depositForAutoRenewal{value: 1 ether}(instance1);
+
+        // Set treasury
+        vm.startPrank(owner);
+        queueManager.setProtocolTreasury(address(0xBEEF));
+
+        uint256 totalBalance = address(queueManager).balance;
+        uint256 deposits = queueManager.totalRenewalDeposits();
+        uint256 expectedWithdrawable = totalBalance - deposits;
+
+        uint256 treasuryBefore = address(0xBEEF).balance;
+        queueManager.withdrawProtocolFees();
+        uint256 treasuryAfter = address(0xBEEF).balance;
+
+        assertEq(treasuryAfter - treasuryBefore, expectedWithdrawable, "Should only withdraw non-deposit balance");
+        assertEq(queueManager.totalRenewalDeposits(), deposits, "Deposits should be unchanged");
+        vm.stopPrank();
+    }
+
+    function test_totalRenewalDeposits_trackedCorrectly() public {
+        // Rent a position
+        vm.prank(alice);
+        queueManager.rentFeaturedPosition{value: queueManager.calculateRentalCost(1, 7 days)}(instance1, 1, 7 days);
+
+        assertEq(queueManager.totalRenewalDeposits(), 0, "Initial deposits should be 0");
+
+        // Deposit
+        vm.prank(alice);
+        queueManager.depositForAutoRenewal{value: 1 ether}(instance1);
+        assertEq(queueManager.totalRenewalDeposits(), 1 ether, "Deposits should track deposit");
+
+        // Withdraw
+        vm.prank(alice);
+        queueManager.withdrawRenewalDeposit(instance1);
+        assertEq(queueManager.totalRenewalDeposits(), 0, "Deposits should track withdrawal");
+    }
+
+    function test_totalRenewalDeposits_trackedOnAutoRenewal() public {
+        // Rent and deposit for auto-renewal
+        vm.startPrank(alice);
+        queueManager.rentFeaturedPosition{value: queueManager.calculateRentalCost(1, 7 days)}(instance1, 1, 7 days);
+        queueManager.depositForAutoRenewal{value: 1 ether}(instance1);
+        vm.stopPrank();
+
+        uint256 depositsBefore = queueManager.totalRenewalDeposits();
+        assertEq(depositsBefore, 1 ether);
+
+        // Wait for expiration and trigger cleanup (auto-renewal)
+        vm.warp(block.timestamp + 8 days);
+        queueManager.cleanupExpiredRentals(10);
+
+        uint256 depositsAfter = queueManager.totalRenewalDeposits();
+        assertLt(depositsAfter, depositsBefore, "Auto-renewal should reduce total deposits");
+    }
+
+    // ========== MasterRegistry Enforcement Tests ==========
+
+    function test_registerInstance_requiresProtocolTreasury() public {
+        // Deploy a mock instance that has vault but no protocolTreasury function
+        // We'll use a minimal contract with only vault()
+        NoTreasuryMock noTreasuryInstance = new NoTreasuryMock(mockVault);
+
+        vm.prank(factory);
+        vm.expectRevert(); // Will revert when trying to call protocolTreasury()
+        registry.registerInstance(
+            address(noTreasuryInstance),
+            factory,
+            alice,
+            "NoTreasury",
+            "https://uri",
+            mockVault
+        );
+    }
+
+    function test_registerInstance_protocolTreasuryMustBeNonZero() public {
+        // Deploy a mock instance that has vault and protocolTreasury=address(0)
+        ZeroTreasuryMock zeroTreasuryInstance = new ZeroTreasuryMock(mockVault);
+
+        vm.prank(factory);
+        vm.expectRevert("Instance has no treasury");
+        registry.registerInstance(
+            address(zeroTreasuryInstance),
+            factory,
+            alice,
+            "ZeroTreasury",
+            "https://uri",
+            mockVault
+        );
+    }
+
     function test_queueUtilization_metrics() public {
         // Empty queue
         (uint256 util0, uint256 price0, uint256 len0,) = queueManager.getQueueUtilization();
@@ -648,5 +770,21 @@ contract MasterRegistryQueueTest is Test {
         assertEq(max25, 100, "Max should be 100");
         assertEq(util25, 2500, "Utilization should be 2500 bps (25%)");
         assertGt(price25, price0, "Price should increase with utilization");
+    }
+}
+
+/// @notice Mock with vault() but no protocolTreasury() — will revert on call
+contract NoTreasuryMock {
+    address public vault;
+    constructor(address _vault) { vault = _vault; }
+}
+
+/// @notice Mock with vault() and protocolTreasury() returning address(0)
+contract ZeroTreasuryMock {
+    address public vault;
+    address public protocolTreasury;
+    constructor(address _vault) {
+        vault = _vault;
+        protocolTreasury = address(0);
     }
 }

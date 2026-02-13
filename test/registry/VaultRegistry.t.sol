@@ -22,8 +22,6 @@ contract VaultRegistryTest is Test {
     MockVault public mockVault2;
     MockHook public mockHook1;
     MockHook public mockHook2;
-    MockAnalytics public mockAnalytics;
-
     // Constants
     uint256 constant VAULT_FEE = 0.05 ether;
     uint256 constant HOOK_FEE = 0.02 ether;
@@ -33,7 +31,6 @@ contract VaultRegistryTest is Test {
     event HookRegistered(address indexed hook, address indexed creator, address indexed vault, string name, uint256 fee);
     event VaultDeactivated(address indexed vault);
     event HookDeactivated(address indexed hook);
-    event AnalyticsModuleSet(address indexed newModule);
     event VaultFeeUpdated(uint256 newFee);
     event HookFeeUpdated(uint256 newFee);
 
@@ -50,8 +47,6 @@ contract VaultRegistryTest is Test {
         mockVault2 = new MockVault();
         mockHook1 = new MockHook();
         mockHook2 = new MockHook();
-        mockAnalytics = new MockAnalytics();
-
         // Fund test accounts
         vm.deal(user1, 10 ether);
         vm.deal(user2, 10 ether);
@@ -677,41 +672,6 @@ contract VaultRegistryTest is Test {
         registry.setHookRegistrationFee(0);
     }
 
-    // ============ setAnalyticsModule Tests ============
-
-    function test_SetAnalyticsModule_Success() public {
-        vm.expectEmit(true, false, false, false);
-        emit AnalyticsModuleSet(address(mockAnalytics));
-
-        registry.setAnalyticsModule(address(mockAnalytics));
-
-        assertEq(registry.analyticsModule(), address(mockAnalytics));
-    }
-
-    function test_SetAnalyticsModule_CanSetToZero() public {
-        registry.setAnalyticsModule(address(mockAnalytics));
-
-        vm.expectEmit(true, false, false, false);
-        emit AnalyticsModuleSet(address(0));
-
-        registry.setAnalyticsModule(address(0));
-
-        assertEq(registry.analyticsModule(), address(0));
-    }
-
-    function test_SetAnalyticsModule_RevertsOnNonOwner() public {
-        vm.prank(user1);
-        vm.expectRevert();
-        registry.setAnalyticsModule(address(mockAnalytics));
-    }
-
-    function test_SetAnalyticsModule_RevertsOnNonContract() public {
-        address notContract = makeAddr("notContract");
-
-        vm.expectRevert("Invalid module");
-        registry.setAnalyticsModule(notContract);
-    }
-
 }
 
 // ============ Mock Contracts ============
@@ -730,9 +690,3 @@ contract MockHook {
     string public name = "Mock Hook";
 }
 
-/**
- * @notice Mock analytics contract for testing
- */
-contract MockAnalytics {
-    string public name = "Mock Analytics";
-}

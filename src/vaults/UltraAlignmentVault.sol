@@ -161,6 +161,16 @@ contract UltraAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback, IAlig
     uint256 public lastVaultFeeCollectionTime;
     uint256 public vaultFeeCollectionInterval = 1 days; // Collect vault fees once per day
 
+    // Protocol yield cut (revenue from LP fees)
+    uint256 public protocolYieldCutBps = 500; // 5% of LP yield
+    address public protocolTreasury;
+    uint256 public accumulatedProtocolFees; // Pending protocol fees
+
+    // Vault creator incentives (creator's share comes from protocol's cut)
+    address public vaultCreator;
+    uint256 public creatorYieldCutBps; // e.g., 100 = 1% (must be <= protocolYieldCutBps)
+    uint256 public accumulatedCreatorFees;
+
     // Benefactor delegation (fee routing)
     mapping(address => address) public benefactorDelegate;
 
@@ -213,6 +223,16 @@ contract UltraAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback, IAlig
     event ConversionRewardRejected(address indexed caller, uint256 rewardAmount);
     event InsufficientRewardBalance(address indexed caller, uint256 rewardAmount, uint256 contractBalance);
 
+    // Protocol yield cut events
+    event ProtocolYieldCollected(uint256 amount);
+    event ProtocolYieldCutUpdated(uint256 newBps);
+    event ProtocolTreasuryUpdated(address indexed newTreasury);
+    event ProtocolFeesWithdrawn(uint256 amount);
+
+    // Vault creator events
+    event VaultCreatorFeesWithdrawn(uint256 amount);
+    event VaultCreatorYieldCollected(uint256 amount);
+
     // ========== Constructor ==========
 
     constructor(
@@ -222,7 +242,9 @@ contract UltraAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback, IAlig
         address _v2Router,
         address _v2Factory,
         address _v3Factory,
-        address _alignmentToken
+        address _alignmentToken,
+        address _vaultCreator,
+        uint256 _creatorYieldCutBps
     ) {
         _initializeOwner(msg.sender);
         require(_weth != address(0), "Invalid WETH");
@@ -232,6 +254,7 @@ contract UltraAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback, IAlig
         require(_v2Factory != address(0), "Invalid V2 factory");
         require(_v3Factory != address(0), "Invalid V3 factory");
         require(_alignmentToken != address(0), "Invalid alignment token");
+        require(_creatorYieldCutBps <= 500, "Creator cut exceeds protocol yield cut");
 
         weth = _weth;
         poolManager = _poolManager;
@@ -240,6 +263,8 @@ contract UltraAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback, IAlig
         v2Factory = _v2Factory;
         v3Factory = _v3Factory;
         alignmentToken = _alignmentToken;
+        vaultCreator = _vaultCreator;
+        creatorYieldCutBps = _creatorYieldCutBps;
 
         // Query and cache alignment token decimals for price calculations
         // Default to 18 decimals (standard) if query fails
@@ -683,12 +708,26 @@ contract UltraAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback, IAlig
             // Convert alignment tokens to ETH
             uint256 ethFromTokens = _convertVaultFeesToEth(tokenCollected);
 
-            // Update accumulated fees
+            // Update accumulated fees with protocol + creator yield cuts
             uint256 totalCollected = ethCollected + ethFromTokens;
             if (totalCollected > 0) {
-                accumulatedFees += totalCollected;
+                uint256 totalCut = (totalCollected * protocolYieldCutBps) / 10000;
+                uint256 creatorCut = (totalCollected * creatorYieldCutBps) / 10000;
+                uint256 protocolCut = totalCut - creatorCut;
+                uint256 benefactorAmount = totalCollected - totalCut;
+
+                accumulatedFees += benefactorAmount;
+                accumulatedProtocolFees += protocolCut;
+                accumulatedCreatorFees += creatorCut;
+
                 lastVaultFeeCollectionTime = block.timestamp;
-                emit FeesAccumulated(totalCollected);
+                emit FeesAccumulated(benefactorAmount);
+                if (protocolCut > 0) {
+                    emit ProtocolYieldCollected(protocolCut);
+                }
+                if (creatorCut > 0) {
+                    emit VaultCreatorYieldCollected(creatorCut);
+                }
             }
         }
 
@@ -1950,9 +1989,23 @@ contract UltraAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback, IAlig
 
             uint256 totalCollected = ethCollected + ethFromTokens;
             if (totalCollected > 0) {
-                accumulatedFees += totalCollected;
+                uint256 totalCut = (totalCollected * protocolYieldCutBps) / 10000;
+                uint256 creatorCut = (totalCollected * creatorYieldCutBps) / 10000;
+                uint256 protocolCut = totalCut - creatorCut;
+                uint256 benefactorAmount = totalCollected - totalCut;
+
+                accumulatedFees += benefactorAmount;
+                accumulatedProtocolFees += protocolCut;
+                accumulatedCreatorFees += creatorCut;
+
                 lastVaultFeeCollectionTime = block.timestamp;
-                emit FeesAccumulated(totalCollected);
+                emit FeesAccumulated(benefactorAmount);
+                if (protocolCut > 0) {
+                    emit ProtocolYieldCollected(protocolCut);
+                }
+                if (creatorCut > 0) {
+                    emit VaultCreatorYieldCollected(creatorCut);
+                }
             }
         }
 
@@ -1987,6 +2040,22 @@ contract UltraAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback, IAlig
         // Single ETH transfer to delegate
         (bool success, ) = payable(msg.sender).call{value: totalClaimed}("");
         require(success, "ETH transfer failed");
+    }
+
+    // ========== Vault Creator Fees ==========
+
+    function withdrawCreatorFees() external {
+        require(msg.sender == vaultCreator, "Only vault creator");
+        uint256 amount = accumulatedCreatorFees;
+        require(amount > 0, "No creator fees");
+        accumulatedCreatorFees = 0;
+        (bool success, ) = payable(vaultCreator).call{value: amount}("");
+        require(success, "ETH transfer failed");
+        emit VaultCreatorFeesWithdrawn(amount);
+    }
+
+    function creator() external view returns (address) {
+        return vaultCreator;
     }
 
     // ========== Configuration ==========
@@ -2043,5 +2112,41 @@ contract UltraAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback, IAlig
         require(msg.value > 0, "Amount must be positive");
         accumulatedFees += msg.value;
         emit FeesAccumulated(msg.value);
+    }
+
+    // ========== Protocol Yield Cut ==========
+
+    /**
+     * @notice Set the protocol yield cut in basis points
+     * @param _bps New yield cut (max 1500 = 15%)
+     */
+    function setProtocolYieldCutBps(uint256 _bps) external onlyOwner {
+        require(_bps <= 1500, "Max 15%");
+        protocolYieldCutBps = _bps;
+        emit ProtocolYieldCutUpdated(_bps);
+    }
+
+    /**
+     * @notice Set the protocol treasury address for yield cut withdrawals
+     * @param _treasury New treasury address
+     */
+    function setProtocolTreasury(address _treasury) external onlyOwner {
+        require(_treasury != address(0), "Invalid treasury");
+        protocolTreasury = _treasury;
+        emit ProtocolTreasuryUpdated(_treasury);
+    }
+
+    /**
+     * @notice Withdraw accumulated protocol fees to treasury
+     * @dev Permissionless — anyone can trigger withdrawal to treasury
+     */
+    function withdrawProtocolFees() external {
+        require(protocolTreasury != address(0), "Treasury not set");
+        uint256 amount = accumulatedProtocolFees;
+        require(amount > 0, "No fees");
+        accumulatedProtocolFees = 0;
+        (bool success, ) = payable(protocolTreasury).call{value: amount}("");
+        require(success, "ETH transfer failed");
+        emit ProtocolFeesWithdrawn(amount);
     }
 }

@@ -39,7 +39,9 @@ contract VaultInterfaceComplianceTest is Test {
             MOCK_V2_ROUTER,
             MOCK_V2_FACTORY,
             MOCK_V3_FACTORY,
-            MOCK_ALIGNMENT_TOKEN
+            MOCK_ALIGNMENT_TOKEN,
+            address(0xC1EA),
+            100
         );
 
         // Deploy MockVault

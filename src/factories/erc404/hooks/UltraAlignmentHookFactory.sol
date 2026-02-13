@@ -5,7 +5,7 @@ import {Ownable} from "solady/auth/Ownable.sol";
 import {ReentrancyGuard} from "solady/utils/ReentrancyGuard.sol";
 import {IPoolManager} from "v4-core/interfaces/IPoolManager.sol";
 import {UltraAlignmentV4Hook} from "./UltraAlignmentV4Hook.sol";
-import {UltraAlignmentVault} from "../../../vaults/UltraAlignmentVault.sol";
+import {IAlignmentVault} from "../../../interfaces/IAlignmentVault.sol";
 
 /**
  * @title UltraAlignmentHookFactory
@@ -28,6 +28,7 @@ contract UltraAlignmentHookFactory is Ownable, ReentrancyGuard {
 
     event FactoryAuthorized(address indexed factory);
     event FactoryDeauthorized(address indexed factory);
+    event HookCreationFeeUpdated(uint256 newFee);
 
     constructor(address _hookTemplate) {
         _initializeOwner(msg.sender);
@@ -62,7 +63,7 @@ contract UltraAlignmentHookFactory is Ownable, ReentrancyGuard {
         // Deploy new hook instance using CREATE2 for deterministic address
         hook = address(new UltraAlignmentV4Hook{salt: salt}(
             IPoolManager(poolManager),
-            UltraAlignmentVault(payable(vault)),
+            IAlignmentVault(payable(vault)),
             wethAddr,
             creator
         ));
@@ -112,6 +113,7 @@ contract UltraAlignmentHookFactory is Ownable, ReentrancyGuard {
      */
     function setHookCreationFee(uint256 _fee) external onlyOwner {
         hookCreationFee = _fee;
+        emit HookCreationFeeUpdated(_fee);
     }
 
     /**

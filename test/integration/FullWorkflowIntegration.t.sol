@@ -64,7 +64,8 @@ contract FullWorkflowIntegrationTest is Test {
         // Deploy a contract to serve as the mock vault (just needs code at address)
         mockVault = address(new MockInstance(address(0)));
 
-        erc404Factory = new MockFactory(proxy);
+        erc404Factory = new MockFactory(owner, owner);
+        erc404Factory.setMasterRegistry(proxy);
     }
 
     /// @dev Deploy a MockInstance pointing to mockVault
@@ -140,7 +141,8 @@ contract FullWorkflowIntegrationTest is Test {
         );
 
         // Register second factory
-        MockFactory factory2 = new MockFactory(address(proxy));
+        MockFactory factory2 = new MockFactory(owner, owner);
+        factory2.setMasterRegistry(address(proxy));
         MasterRegistryV1(proxy).registerFactory(
             address(factory2),
             "ERC1155",
@@ -264,7 +266,8 @@ contract FullWorkflowIntegrationTest is Test {
         ];
 
         for (uint256 i = 0; i < validURIs.length; i++) {
-            MockFactory newFactory = new MockFactory(address(proxy));
+            MockFactory newFactory = new MockFactory(owner, owner);
+            newFactory.setMasterRegistry(address(proxy));
 
             MasterRegistryV1(proxy).registerFactory(
                 address(newFactory),

@@ -3,6 +3,7 @@ pragma solidity ^0.8.20;
 
 import "forge-std/Test.sol";
 import "../../src/vaults/UltraAlignmentVault.sol";
+import {TestableUltraAlignmentVault} from "../helpers/TestableUltraAlignmentVault.sol";
 import "../../src/master/MasterRegistryV1.sol";
 import {PoolKey} from "v4-core/types/PoolKey.sol";
 import {Currency} from "v4-core/types/Currency.sol";
@@ -137,21 +138,20 @@ contract M04_GriefingAttackTests is Test {
         mockV3Factory = makeAddr("v3Factory");
         mockWeth = makeAddr("weth");
 
-        // Leave mocks as EOAs (no code) - vault has test stubs that check code.length == 0
-        // This allows vault to skip pool queries and use default behavior for testing
-
         // Deploy real ERC20 token for alignment token
         alignmentToken = new MockEXECToken(1000000e18);
 
-        // Deploy vault
-        vault = new UltraAlignmentVault(
+        // Deploy vault (using testable version with mock swap/LP overrides)
+        vault = new TestableUltraAlignmentVault(
             mockWeth,
             mockPoolManager,
             mockV3Router,
             mockV2Router,
             mockV2Factory,
             mockV3Factory,
-            address(alignmentToken)
+            address(alignmentToken),
+            address(0xC1EA),
+            100
         );
 
         // Set V4 pool key for conversion tests
@@ -290,14 +290,16 @@ contract M04_GriefingAttackTests is Test {
 
     function test_InsufficientBalance_OperationStillSucceeds() public {
         // Setup vault with NO ETH for rewards
-        UltraAlignmentVault poorVault = new UltraAlignmentVault(
+        UltraAlignmentVault poorVault = new TestableUltraAlignmentVault(
             mockWeth,
             mockPoolManager,
             mockV3Router,
             mockV2Router,
             mockV2Factory,
             mockV3Factory,
-            address(alignmentToken)
+            address(alignmentToken),
+            address(0xC1EA),
+            100
         );
 
         // Set V4 pool key
@@ -317,7 +319,7 @@ contract M04_GriefingAttackTests is Test {
         assertTrue(s1);
 
         // Drain vault balance to simulate insufficient reward funds
-        // Note: With mock addresses, test stubs don't consume ETH during swap/LP operations
+        // Note: TestableUltraAlignmentVault mock overrides don't consume ETH during swap/LP
         // So we manually drain the vault to test insufficient balance scenario
         vm.deal(address(poorVault), 0);
 

@@ -57,7 +57,9 @@ contract UltraAlignmentHookFactoryTest is Test {
             address(0x6666666666666666666666666666666666666666),  // V2 router
             address(0x7777777777777777777777777777777777777777),  // V2 factory
             address(0x8888888888888888888888888888888888888888),  // V3 factory
-            address(token)
+            address(token),
+            address(0xC1EA),
+            100
         );
 
         // Set V4 pool key

@@ -7,6 +7,9 @@ out/
 cache/
 broadcast/
 
+# Prompt artifacts
+docs/plans/*
+
 # Environment variables
 .env
 .env.local

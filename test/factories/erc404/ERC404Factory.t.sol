@@ -5,6 +5,7 @@ import {Test, console} from "forge-std/Test.sol";
 import {ERC404Factory} from "../../../src/factories/erc404/ERC404Factory.sol";
 import {ERC404BondingInstance} from "../../../src/factories/erc404/ERC404BondingInstance.sol";
 import {MockMasterRegistry} from "../../mocks/MockMasterRegistry.sol";
+import {PromotionBadges} from "../../../src/promotion/PromotionBadges.sol";
 
 /**
  * @title MockVault
@@ -86,7 +87,10 @@ contract ERC404FactoryTest is Test {
             address(mockRegistry),
             mockInstanceTemplate,
             mockV4PoolManager,
-            mockWETH
+            mockWETH,
+            address(0xC1EA),
+            2000,
+            40
         );
 
         // Setup default bonding curve parameters
@@ -329,7 +333,10 @@ contract ERC404FactoryTest is Test {
             address(mockRegistry),
             mockInstanceTemplate,
             address(0),  // Zero pool manager
-            mockWETH
+            mockWETH,
+            address(0xC1EA),
+            2000,
+            40
         );
 
         vm.stopPrank();
@@ -363,7 +370,10 @@ contract ERC404FactoryTest is Test {
             address(mockRegistry),
             mockInstanceTemplate,
             mockV4PoolManager,
-            address(0)  // Zero WETH
+            address(0),  // Zero WETH
+            address(0xC1EA),
+            2000,
+            40
         );
 
         vm.stopPrank();
@@ -712,4 +722,566 @@ contract ERC404FactoryTest is Test {
     }
 
     // ========================
+    // Protocol Treasury Tests
+    // ========================
+
+    function test_SetProtocolTreasury() public {
+        vm.startPrank(owner);
+        factory.setProtocolTreasury(address(0xBEEF));
+        assertEq(factory.protocolTreasury(), address(0xBEEF));
+        vm.stopPrank();
+    }
+
+    function test_SetProtocolTreasury_RevertNonOwner() public {
+        vm.startPrank(nonOwner);
+        vm.expectRevert();
+        factory.setProtocolTreasury(address(0xBEEF));
+        vm.stopPrank();
+    }
+
+    function test_SetProtocolTreasury_RevertZeroAddress() public {
+        vm.startPrank(owner);
+        vm.expectRevert("Invalid treasury");
+        factory.setProtocolTreasury(address(0));
+        vm.stopPrank();
+    }
+
+    function test_WithdrawProtocolFees() public {
+        // Create an instance to accumulate creation fees
+        vm.deal(creator1, 1 ether);
+        vm.startPrank(creator1);
+        factory.createInstance{value: INSTANCE_CREATION_FEE}(
+            "FeeToken",
+            "FEE",
+            "ipfs://metadata",
+            MAX_SUPPLY,
+            LIQUIDITY_RESERVE_PERCENT,
+            defaultCurveParams,
+            defaultTierConfig,
+            creator1,
+            address(mockVault),
+            address(mockHook),
+            ""
+        );
+        vm.stopPrank();
+
+        // Set treasury and withdraw
+        address treasury = address(0xBEEF);
+        vm.startPrank(owner);
+        factory.setProtocolTreasury(treasury);
+
+        uint256 factoryBalance = address(factory).balance;
+        assertEq(factoryBalance, INSTANCE_CREATION_FEE);
+
+        // With 20% creator fee, protocol gets 80%
+        uint256 expectedProtocolFees = (INSTANCE_CREATION_FEE * 8000) / 10000;
+        factory.withdrawProtocolFees();
+        assertEq(factory.accumulatedProtocolFees(), 0);
+        assertEq(treasury.balance, expectedProtocolFees);
+        vm.stopPrank();
+    }
+
+    function test_WithdrawProtocolFees_RevertNoTreasury() public {
+        vm.startPrank(owner);
+        vm.expectRevert("Treasury not set");
+        factory.withdrawProtocolFees();
+        vm.stopPrank();
+    }
+
+    function test_WithdrawProtocolFees_RevertNoBalance() public {
+        vm.startPrank(owner);
+        factory.setProtocolTreasury(address(0xBEEF));
+        vm.expectRevert("No protocol fees");
+        factory.withdrawProtocolFees();
+        vm.stopPrank();
+    }
+
+    // ========================
+    // Bonding Fee BPS Tests
+    // ========================
+
+    function test_SetBondingFeeBps() public {
+        vm.startPrank(owner);
+        factory.setBondingFeeBps(200);
+        assertEq(factory.bondingFeeBps(), 200);
+        vm.stopPrank();
+    }
+
+    function test_SetBondingFeeBps_RevertExceedsCap() public {
+        vm.startPrank(owner);
+        vm.expectRevert("Max 3%");
+        factory.setBondingFeeBps(301);
+        vm.stopPrank();
+    }
+
+    function test_SetBondingFeeBps_RevertNonOwner() public {
+        vm.startPrank(nonOwner);
+        vm.expectRevert();
+        factory.setBondingFeeBps(200);
+        vm.stopPrank();
+    }
+
+    function test_BondingFeeBps_DefaultValue() public {
+        assertEq(factory.bondingFeeBps(), 100);
+    }
+
+    // ========================
+    // Graduation Fee BPS Tests
+    // ========================
+
+    function test_GraduationFeeBps_DefaultValue() public {
+        assertEq(factory.graduationFeeBps(), 200);
+    }
+
+    function test_SetGraduationFeeBps() public {
+        vm.startPrank(owner);
+        factory.setGraduationFeeBps(300);
+        assertEq(factory.graduationFeeBps(), 300);
+        vm.stopPrank();
+    }
+
+    function test_SetGraduationFeeBps_EmitsEvent() public {
+        vm.startPrank(owner);
+        vm.expectEmit(false, false, false, true);
+        emit ERC404Factory.GraduationFeeUpdated(400);
+        factory.setGraduationFeeBps(400);
+        vm.stopPrank();
+    }
+
+    function test_SetGraduationFeeBps_RevertExceedsCap() public {
+        vm.startPrank(owner);
+        vm.expectRevert("Max 5%");
+        factory.setGraduationFeeBps(501);
+        vm.stopPrank();
+    }
+
+    function test_SetGraduationFeeBps_BoundaryAt500() public {
+        vm.startPrank(owner);
+        factory.setGraduationFeeBps(500);
+        assertEq(factory.graduationFeeBps(), 500);
+        vm.stopPrank();
+    }
+
+    function test_SetGraduationFeeBps_ZeroAllowed() public {
+        vm.startPrank(owner);
+        factory.setGraduationFeeBps(0);
+        assertEq(factory.graduationFeeBps(), 0);
+        vm.stopPrank();
+    }
+
+    function test_SetGraduationFeeBps_RevertNonOwner() public {
+        vm.startPrank(nonOwner);
+        vm.expectRevert();
+        factory.setGraduationFeeBps(300);
+        vm.stopPrank();
+    }
+
+    function test_GraduationFeeBps_PassedToInstance() public {
+        vm.startPrank(owner);
+        factory.setGraduationFeeBps(350);
+        vm.stopPrank();
+
+        vm.deal(creator1, 1 ether);
+        vm.startPrank(creator1);
+        address instance = factory.createInstance{value: INSTANCE_CREATION_FEE}(
+            "GradFeeToken",
+            "GFT",
+            "ipfs://metadata",
+            MAX_SUPPLY,
+            LIQUIDITY_RESERVE_PERCENT,
+            defaultCurveParams,
+            defaultTierConfig,
+            creator1,
+            address(mockVault),
+            address(mockHook),
+            ""
+        );
+        vm.stopPrank();
+
+        assertEq(ERC404BondingInstance(payable(instance)).graduationFeeBps(), 350, "Instance should store factory's graduation fee");
+    }
+
+    // ========================
+    // POL BPS Tests
+    // ========================
+
+    function test_PolBps_DefaultValue() public {
+        assertEq(factory.polBps(), 100);
+    }
+
+    function test_SetPolBps() public {
+        vm.startPrank(owner);
+        factory.setPolBps(200);
+        assertEq(factory.polBps(), 200);
+        vm.stopPrank();
+    }
+
+    function test_SetPolBps_EmitsEvent() public {
+        vm.startPrank(owner);
+        vm.expectEmit(false, false, false, true);
+        emit ERC404Factory.POLConfigUpdated(250);
+        factory.setPolBps(250);
+        vm.stopPrank();
+    }
+
+    function test_SetPolBps_RevertExceedsCap() public {
+        vm.startPrank(owner);
+        vm.expectRevert("Max 3%");
+        factory.setPolBps(301);
+        vm.stopPrank();
+    }
+
+    function test_SetPolBps_BoundaryAt300() public {
+        vm.startPrank(owner);
+        factory.setPolBps(300);
+        assertEq(factory.polBps(), 300);
+        vm.stopPrank();
+    }
+
+    function test_SetPolBps_ZeroAllowed() public {
+        vm.startPrank(owner);
+        factory.setPolBps(0);
+        assertEq(factory.polBps(), 0);
+        vm.stopPrank();
+    }
+
+    function test_SetPolBps_RevertNonOwner() public {
+        vm.startPrank(nonOwner);
+        vm.expectRevert();
+        factory.setPolBps(200);
+        vm.stopPrank();
+    }
+
+    function test_PolBps_PassedToInstance() public {
+        vm.startPrank(owner);
+        factory.setPolBps(250);
+        vm.stopPrank();
+
+        vm.deal(creator1, 1 ether);
+        vm.startPrank(creator1);
+        address instance = factory.createInstance{value: INSTANCE_CREATION_FEE}(
+            "POLToken",
+            "POL",
+            "ipfs://metadata",
+            MAX_SUPPLY,
+            LIQUIDITY_RESERVE_PERCENT,
+            defaultCurveParams,
+            defaultTierConfig,
+            creator1,
+            address(mockVault),
+            address(mockHook),
+            ""
+        );
+        vm.stopPrank();
+
+        assertEq(ERC404BondingInstance(payable(instance)).polBps(), 250, "Instance should store factory's POL bps");
+    }
+
+    // ========================
+    // Tiered Creation Tests
+    // ========================
+
+    function test_setTierConfig() public {
+        vm.startPrank(owner);
+
+        ERC404Factory.TierConfig memory config = ERC404Factory.TierConfig({
+            fee: 0.05 ether,
+            featuredDuration: 7 days,
+            featuredPosition: 10,
+            badge: PromotionBadges.BadgeType.NONE,
+            badgeDuration: 0
+        });
+
+        factory.setTierConfig(ERC404Factory.CreationTier.PREMIUM, config);
+
+        (uint256 fee, uint256 featuredDuration, uint256 featuredPosition, PromotionBadges.BadgeType badge, uint256 badgeDuration) =
+            factory.tierConfigs(ERC404Factory.CreationTier.PREMIUM);
+
+        assertEq(fee, 0.05 ether);
+        assertEq(featuredDuration, 7 days);
+        assertEq(featuredPosition, 10);
+        assertEq(uint256(badge), uint256(PromotionBadges.BadgeType.NONE));
+        assertEq(badgeDuration, 0);
+
+        vm.stopPrank();
+    }
+
+    function test_setTierConfig_revertZeroFee() public {
+        vm.startPrank(owner);
+
+        ERC404Factory.TierConfig memory config = ERC404Factory.TierConfig({
+            fee: 0,
+            featuredDuration: 0,
+            featuredPosition: 0,
+            badge: PromotionBadges.BadgeType.NONE,
+            badgeDuration: 0
+        });
+
+        vm.expectRevert("Fee must be positive");
+        factory.setTierConfig(ERC404Factory.CreationTier.PREMIUM, config);
+
+        vm.stopPrank();
+    }
+
+    function test_setTierConfig_revertNonOwner() public {
+        vm.startPrank(nonOwner);
+
+        ERC404Factory.TierConfig memory config = ERC404Factory.TierConfig({
+            fee: 0.05 ether,
+            featuredDuration: 0,
+            featuredPosition: 0,
+            badge: PromotionBadges.BadgeType.NONE,
+            badgeDuration: 0
+        });
+
+        vm.expectRevert();
+        factory.setTierConfig(ERC404Factory.CreationTier.PREMIUM, config);
+
+        vm.stopPrank();
+    }
+
+    function test_createInstance_standardTierBackwardCompat() public {
+        // Old createInstance signature should still work (STANDARD tier)
+        vm.deal(creator1, 1 ether);
+        vm.startPrank(creator1);
+
+        address instance = factory.createInstance{value: INSTANCE_CREATION_FEE}(
+            "StandardToken",
+            "STD",
+            "ipfs://metadata",
+            MAX_SUPPLY,
+            LIQUIDITY_RESERVE_PERCENT,
+            defaultCurveParams,
+            defaultTierConfig,
+            creator1,
+            address(mockVault),
+            address(mockHook),
+            ""
+        );
+
+        assertTrue(instance != address(0), "Standard tier should create instance");
+
+        vm.stopPrank();
+    }
+
+    function test_createInstance_premiumTier() public {
+        // Configure PREMIUM tier
+        vm.startPrank(owner);
+        factory.setTierConfig(
+            ERC404Factory.CreationTier.PREMIUM,
+            ERC404Factory.TierConfig({
+                fee: 0.05 ether,
+                featuredDuration: 0, // No queue placement for this test
+                featuredPosition: 0,
+                badge: PromotionBadges.BadgeType.NONE,
+                badgeDuration: 0
+            })
+        );
+        vm.stopPrank();
+
+        vm.deal(creator1, 1 ether);
+        vm.startPrank(creator1);
+
+        address instance = factory.createInstance{value: 0.05 ether}(
+            "PremiumToken",
+            "PREM",
+            "ipfs://metadata",
+            MAX_SUPPLY,
+            LIQUIDITY_RESERVE_PERCENT,
+            defaultCurveParams,
+            defaultTierConfig,
+            creator1,
+            address(mockVault),
+            address(mockHook),
+            "",
+            ERC404Factory.CreationTier.PREMIUM
+        );
+
+        assertTrue(instance != address(0), "Premium tier should create instance");
+        assertEq(address(factory).balance, 0.05 ether, "Factory should hold premium fee");
+
+        vm.stopPrank();
+    }
+
+    function test_createInstance_premiumTier_insufficientFee() public {
+        vm.startPrank(owner);
+        factory.setTierConfig(
+            ERC404Factory.CreationTier.PREMIUM,
+            ERC404Factory.TierConfig({
+                fee: 0.05 ether,
+                featuredDuration: 0,
+                featuredPosition: 0,
+                badge: PromotionBadges.BadgeType.NONE,
+                badgeDuration: 0
+            })
+        );
+        vm.stopPrank();
+
+        vm.deal(creator1, 1 ether);
+        vm.startPrank(creator1);
+
+        vm.expectRevert("Insufficient fee");
+        factory.createInstance{value: 0.01 ether}(
+            "PremiumToken",
+            "PREM",
+            "ipfs://metadata",
+            MAX_SUPPLY,
+            LIQUIDITY_RESERVE_PERCENT,
+            defaultCurveParams,
+            defaultTierConfig,
+            creator1,
+            address(mockVault),
+            address(mockHook),
+            "",
+            ERC404Factory.CreationTier.PREMIUM
+        );
+
+        vm.stopPrank();
+    }
+
+    function test_createInstance_tierNotConfigured() public {
+        vm.deal(creator1, 1 ether);
+        vm.startPrank(creator1);
+
+        vm.expectRevert("Tier not configured");
+        factory.createInstance{value: 0.1 ether}(
+            "LaunchToken",
+            "LNCH",
+            "ipfs://metadata",
+            MAX_SUPPLY,
+            LIQUIDITY_RESERVE_PERCENT,
+            defaultCurveParams,
+            defaultTierConfig,
+            creator1,
+            address(mockVault),
+            address(mockHook),
+            "",
+            ERC404Factory.CreationTier.LAUNCH
+        );
+
+        vm.stopPrank();
+    }
+
+    function test_createInstance_premiumTier_refundsExcess() public {
+        vm.startPrank(owner);
+        factory.setTierConfig(
+            ERC404Factory.CreationTier.PREMIUM,
+            ERC404Factory.TierConfig({
+                fee: 0.05 ether,
+                featuredDuration: 0,
+                featuredPosition: 0,
+                badge: PromotionBadges.BadgeType.NONE,
+                badgeDuration: 0
+            })
+        );
+        vm.stopPrank();
+
+        uint256 sent = 0.5 ether;
+        vm.deal(creator1, sent);
+        uint256 balanceBefore = creator1.balance;
+
+        vm.startPrank(creator1);
+        factory.createInstance{value: sent}(
+            "RefundToken",
+            "RFND",
+            "ipfs://metadata",
+            MAX_SUPPLY,
+            LIQUIDITY_RESERVE_PERCENT,
+            defaultCurveParams,
+            defaultTierConfig,
+            creator1,
+            address(mockVault),
+            address(mockHook),
+            "",
+            ERC404Factory.CreationTier.PREMIUM
+        );
+        vm.stopPrank();
+
+        assertEq(creator1.balance, balanceBefore - 0.05 ether, "Excess should be refunded for premium tier");
+    }
+
+    function test_createInstance_gracefulDegradation_noQueueOrBadges() public {
+        // Configure LAUNCH tier with perks but don't set queue/badge contracts
+        vm.startPrank(owner);
+        factory.setTierConfig(
+            ERC404Factory.CreationTier.LAUNCH,
+            ERC404Factory.TierConfig({
+                fee: 0.1 ether,
+                featuredDuration: 14 days,
+                featuredPosition: 5,
+                badge: PromotionBadges.BadgeType.HIGHLIGHT,
+                badgeDuration: 14 days
+            })
+        );
+        // Note: promotionBadges and featuredQueueManager are address(0)
+        vm.stopPrank();
+
+        vm.deal(creator1, 1 ether);
+        vm.startPrank(creator1);
+
+        // Should succeed — perks are skipped when contracts not set
+        address instance = factory.createInstance{value: 0.1 ether}(
+            "LaunchToken",
+            "LNCH",
+            "ipfs://metadata",
+            MAX_SUPPLY,
+            LIQUIDITY_RESERVE_PERCENT,
+            defaultCurveParams,
+            defaultTierConfig,
+            creator1,
+            address(mockVault),
+            address(mockHook),
+            "",
+            ERC404Factory.CreationTier.LAUNCH
+        );
+
+        assertTrue(instance != address(0), "Should create instance even without perk contracts");
+
+        vm.stopPrank();
+    }
+
+    function test_createInstance_launchTier_withBadgeAssignment() public {
+        // Deploy real PromotionBadges
+        vm.startPrank(owner);
+        PromotionBadges badges = new PromotionBadges(address(0xBEEF));
+        badges.setAuthorizedFactory(address(factory), true);
+        factory.setPromotionBadges(address(badges));
+
+        factory.setTierConfig(
+            ERC404Factory.CreationTier.LAUNCH,
+            ERC404Factory.TierConfig({
+                fee: 0.1 ether,
+                featuredDuration: 0, // No queue for this test
+                featuredPosition: 0,
+                badge: PromotionBadges.BadgeType.HIGHLIGHT,
+                badgeDuration: 14 days
+            })
+        );
+        vm.stopPrank();
+
+        vm.deal(creator1, 1 ether);
+        vm.startPrank(creator1);
+
+        address instance = factory.createInstance{value: 0.1 ether}(
+            "BadgeToken",
+            "BDG",
+            "ipfs://metadata",
+            MAX_SUPPLY,
+            LIQUIDITY_RESERVE_PERCENT,
+            defaultCurveParams,
+            defaultTierConfig,
+            creator1,
+            address(mockVault),
+            address(mockHook),
+            "",
+            ERC404Factory.CreationTier.LAUNCH
+        );
+
+        vm.stopPrank();
+
+        // Verify badge was assigned
+        (PromotionBadges.BadgeType badgeType, uint256 expiresAt) = badges.getActiveBadge(instance);
+        assertEq(uint256(badgeType), uint256(PromotionBadges.BadgeType.HIGHLIGHT));
+        assertEq(expiresAt, block.timestamp + 14 days);
+    }
 }

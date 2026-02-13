@@ -7,6 +7,7 @@ import {ReentrancyGuard} from "solady/utils/ReentrancyGuard.sol";
 import {IMasterRegistry} from "./interfaces/IMasterRegistry.sol";
 import {MetadataUtils} from "../shared/libraries/MetadataUtils.sol";
 import {IFactoryInstance} from "../interfaces/IFactoryInstance.sol";
+import {IFactory} from "../interfaces/IFactory.sol";
 import {VaultRegistry} from "../registry/VaultRegistry.sol";
 import {FactoryApprovalGovernance} from "../governance/FactoryApprovalGovernance.sol";
 import {VaultApprovalGovernance} from "../governance/VaultApprovalGovernance.sol";
@@ -248,6 +249,15 @@ contract MasterRegistryV1 is UUPSUpgradeable, Ownable, ReentrancyGuard, IMasterR
         require(MetadataUtils.isValidName(title), "Invalid title");
         require(MetadataUtils.isValidURI(metadataURI), "Invalid metadata URI");
 
+        // Protocol enforcement: verify factory implements IFactory with creator and protocol roles
+        address factoryCreator = IFactory(factoryAddress).creator();
+        require(factoryCreator != address(0), "Factory has no creator");
+        address factoryProtocol = IFactory(factoryAddress).protocol();
+        require(factoryProtocol != address(0), "Factory has no protocol");
+
+        // Use factory's on-chain creator (authoritative source)
+        creator = factoryCreator;
+
         uint256 factoryId = nextFactoryId++;
         factoryIdToAddress[factoryId] = factoryAddress;
 
@@ -297,6 +307,10 @@ contract MasterRegistryV1 is UUPSUpgradeable, Ownable, ReentrancyGuard, IMasterR
         require(instanceVault != address(0), "Instance has no vault");
         require(instanceVault == vault, "Vault mismatch");
         require(instanceVault.code.length > 0, "Vault not deployed");
+
+        // Protocol enforcement: verify instance has a protocol treasury
+        address instanceTreasury = IFactoryInstance(instance).protocolTreasury();
+        require(instanceTreasury != address(0), "Instance has no treasury");
 
         bytes32 nameHash = MetadataUtils.toNameHash(name);
         require(!nameHashes[nameHash], "Name already taken");

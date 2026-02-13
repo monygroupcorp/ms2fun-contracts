@@ -75,7 +75,13 @@ contract ERC404RerollTest is Test {
             mockMasterRegistry,
             address(0xBEEF), // vault
             owner,
-            "" // styleUri
+            "", // styleUri
+            address(0xFEE), // protocolTreasury
+            100, // bondingFeeBps (1%)
+            200, // graduationFeeBps (2%)
+            100, // polBps (1%)
+            address(0xC1EA), // factoryCreator
+            40 // creatorGraduationFeeBps (0.4%)
         );
 
         // Fund users with ETH

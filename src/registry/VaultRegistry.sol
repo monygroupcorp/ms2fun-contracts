@@ -54,15 +54,11 @@ contract VaultRegistry is Ownable {
     mapping(address => bool) public registeredVaults;
     mapping(address => bool) public registeredHooks;
 
-    // Extension points for Phase 2
-    address public analyticsModule; // Will track vault performance
-
     // Events
     event VaultRegistered(address indexed vault, address indexed creator, string name, uint256 fee);
     event HookRegistered(address indexed hook, address indexed creator, address indexed vault, string name, uint256 fee);
     event VaultDeactivated(address indexed vault);
     event HookDeactivated(address indexed hook);
-    event AnalyticsModuleSet(address indexed newModule);
     event VaultFeeUpdated(uint256 newFee);
     event HookFeeUpdated(uint256 newFee);
 
@@ -220,15 +216,6 @@ contract VaultRegistry is Ownable {
         require(newFee > 0, "Fee must be positive");
         hookRegistrationFee = newFee;
         emit HookFeeUpdated(newFee);
-    }
-
-    /**
-     * @notice Set analytics module (Phase 2)
-     */
-    function setAnalyticsModule(address newModule) external onlyOwner {
-        require(newModule == address(0) || newModule.code.length > 0, "Invalid module");
-        analyticsModule = newModule;
-        emit AnalyticsModuleSet(newModule);
     }
 
 }

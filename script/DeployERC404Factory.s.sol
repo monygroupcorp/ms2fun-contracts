@@ -11,10 +11,13 @@ contract DeployERC404Factory is Script {
         address instanceTemplate = vm.envAddress("INSTANCE_TEMPLATE");
         address v4PoolManager = vm.envAddress("V4_POOL_MANAGER");
         address weth = vm.envAddress("WETH");
+        address creator = vm.envAddress("CREATOR");
+        uint256 creatorFeeBps = vm.envUint("CREATOR_FEE_BPS");
+        uint256 creatorGraduationFeeBps = vm.envUint("CREATOR_GRADUATION_FEE_BPS");
 
         vm.startBroadcast(deployerPrivateKey);
 
-        ERC404Factory factory = new ERC404Factory(masterRegistry, instanceTemplate, v4PoolManager, weth);
+        ERC404Factory factory = new ERC404Factory(masterRegistry, instanceTemplate, v4PoolManager, weth, creator, creatorFeeBps, creatorGraduationFeeBps);
         console.log("ERC404Factory deployed at:", address(factory));
 
         vm.stopBroadcast();

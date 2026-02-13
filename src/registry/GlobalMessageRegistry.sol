@@ -2,6 +2,7 @@
 pragma solidity ^0.8.24;
 
 import { Ownable } from "solady/auth/Ownable.sol";
+import { SafeTransferLib } from "solady/utils/SafeTransferLib.sol";
 import { GlobalMessagePacking } from "../libraries/GlobalMessagePacking.sol";
 import { IMasterRegistry } from "../master/interfaces/IMasterRegistry.sol";
 
@@ -111,6 +112,13 @@ contract GlobalMessageRegistry is Ownable {
         require(_masterRegistry != address(0), "Invalid master registry");
         masterRegistry = IMasterRegistry(_masterRegistry);
         emit MasterRegistrySet(_masterRegistry);
+    }
+
+    /// @notice Withdraw any ETH sent to this contract (e.g., via selfdestruct)
+    function withdrawETH() external onlyOwner {
+        uint256 balance = address(this).balance;
+        require(balance > 0, "No ETH to withdraw");
+        SafeTransferLib.safeTransferETH(msg.sender, balance);
     }
 
     /**

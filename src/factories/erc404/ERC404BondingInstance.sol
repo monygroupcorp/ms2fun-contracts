@@ -31,6 +31,16 @@ interface IWETH {
     function approve(address spender, uint256 amount) external returns (bool);
 }
 
+interface IProtocolTreasuryPOL {
+    function receivePOL(
+        PoolKey calldata poolKey,
+        int24 tickLower,
+        int24 tickUpper,
+        uint256 amount0,
+        uint256 amount1
+    ) external;
+}
+
 /**
  * @title ERC404BondingInstance
  * @notice ERC404 token with bonding curve, password-protected tiers, and V4 liquidity deployment
@@ -87,6 +97,16 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IUnlockCallba
     IMasterRegistry public immutable masterRegistry;
     GlobalMessageRegistry private cachedGlobalRegistry; // Lazy-loaded from masterRegistry
 
+    // Protocol revenue
+    address public immutable protocolTreasury;
+    uint256 public immutable bondingFeeBps;
+    uint256 public immutable graduationFeeBps;
+    uint256 public immutable polBps;
+
+    // Creator incentives (factory creator's share of graduation fee)
+    address public immutable factoryCreator;
+    uint256 public immutable creatorGraduationFeeBps;
+
     // Customization
     string public styleUri;
 
@@ -128,6 +148,10 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IUnlockCallba
     event Staked(address indexed user, uint256 amount, uint256 newStakedBalance, uint256 newTotalStaked);
     event Unstaked(address indexed user, uint256 amount, uint256 newStakedBalance, uint256 newTotalStaked);
     event StakerRewardsClaimed(address indexed user, uint256 rewardAmount, uint256 newTrackingPoint);
+    event BondingFeePaid(address indexed buyer, uint256 feeAmount);
+    event GraduationFeePaid(address indexed treasury, uint256 amount);
+    event CreatorGraduationFeePaid(address indexed factoryCreator, uint256 amount);
+    event ProtocolLiquidityDeployed(address indexed treasury, uint256 tokenAmount, uint256 ethAmount);
 
     // ┌─────────────────────────┐
     // │      Constructor        │
@@ -147,7 +171,13 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IUnlockCallba
         address _masterRegistry,
         address _vault,
         address _owner,
-        string memory _styleUri
+        string memory _styleUri,
+        address _protocolTreasury,
+        uint256 _bondingFeeBps,
+        uint256 _graduationFeeBps,
+        uint256 _polBps,
+        address _factoryCreator,
+        uint256 _creatorGraduationFeeBps
     ) {
         require(_maxSupply > 0, "Invalid max supply");
         require(_liquidityReservePercent < 100, "Invalid reserve percent");
@@ -189,6 +219,12 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IUnlockCallba
         require(_vault != address(0), "Invalid vault");
         vault = IAlignmentVault(payable(_vault));
         styleUri = _styleUri;
+        protocolTreasury = _protocolTreasury;
+        bondingFeeBps = _bondingFeeBps;
+        graduationFeeBps = _graduationFeeBps;
+        polBps = _polBps;
+        factoryCreator = _factoryCreator;
+        creatorGraduationFeeBps = _creatorGraduationFeeBps;
 
         // Initialize password hash mapping
         for (uint256 i = 0; i < _tierConfig.passwordHashes.length; i++) {
@@ -380,8 +416,10 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IUnlockCallba
         }
 
         uint256 totalCost = calculateCost(amount);
-        require(maxCost >= totalCost, "MaxCost exceeded");
-        require(msg.value >= totalCost, "Low ETH value");
+        uint256 bondingFee = (totalCost * bondingFeeBps) / 10000;
+        uint256 totalWithFee = totalCost + bondingFee;
+        require(maxCost >= totalWithFee, "MaxCost exceeded");
+        require(msg.value >= totalWithFee, "Low ETH value");
 
         // Handle skipNFT
         bool originalSkipNFT = mintNFT ? getSkipNFT(msg.sender) : false;
@@ -402,6 +440,12 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IUnlockCallba
         // Transfer tokens
         _transfer(address(this), msg.sender, amount);
         reserve += totalCost;
+
+        // Route bonding fee to protocol treasury
+        if (bondingFee > 0 && protocolTreasury != address(0)) {
+            SafeTransferLib.safeTransferETH(protocolTreasury, bondingFee);
+            emit BondingFeePaid(msg.sender, bondingFee);
+        }
 
         // Update purchase volume for volume cap mode
         if (tierConfig.tierType == TierType.VOLUME_CAP) {
@@ -429,11 +473,11 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IUnlockCallba
         }
 
         // Refund excess ETH
-        if (msg.value > totalCost) {
-            SafeTransferLib.safeTransferETH(msg.sender, msg.value - totalCost);
+        if (msg.value > totalWithFee) {
+            SafeTransferLib.safeTransferETH(msg.sender, msg.value - totalWithFee);
         }
 
-        emit BondingSale(msg.sender, amount, totalCost, true);
+        emit BondingSale(msg.sender, amount, totalWithFee, true);
     }
 
     /**
@@ -1265,6 +1309,42 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IUnlockCallba
         uint256 originalTokenAmount = amountToken;
         uint256 originalETHAmount = amountETH;
 
+        // Take graduation fee from deployment ETH before pool creation
+        uint256 ethForPool = amountETH;
+        if (graduationFeeBps > 0 && protocolTreasury != address(0)) {
+            uint256 graduationFee = (ethForPool * graduationFeeBps) / 10000;
+            ethForPool -= graduationFee;
+            amountETH = ethForPool;
+
+            // Split graduation fee between protocol and factory creator
+            uint256 creatorGradCut = 0;
+            if (creatorGraduationFeeBps > 0 && factoryCreator != address(0)) {
+                creatorGradCut = (originalETHAmount * creatorGraduationFeeBps) / 10000;
+                if (creatorGradCut > graduationFee) creatorGradCut = graduationFee;
+            }
+            uint256 protocolGradCut = graduationFee - creatorGradCut;
+
+            if (protocolGradCut > 0) {
+                SafeTransferLib.safeTransferETH(protocolTreasury, protocolGradCut);
+            }
+            if (creatorGradCut > 0) {
+                SafeTransferLib.safeTransferETH(factoryCreator, creatorGradCut);
+                emit CreatorGraduationFeePaid(factoryCreator, creatorGradCut);
+            }
+            emit GraduationFeePaid(protocolTreasury, protocolGradCut);
+        }
+
+        // Reserve POL amounts (after graduation fee, before main deployment)
+        uint256 polETHReserve = 0;
+        uint256 polTokenReserve = 0;
+        if (polBps > 0 && protocolTreasury != address(0)) {
+            polETHReserve = (ethForPool * polBps) / 10000;
+            polTokenReserve = (amountToken * polBps) / 10000;
+            ethForPool -= polETHReserve;
+            amountToken -= polTokenReserve;
+            amountETH = ethForPool;
+        }
+
         // Create pool key and determine currency ordering
         PoolKey memory poolKey;
         bool token0IsThis;
@@ -1288,13 +1368,13 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IUnlockCallba
         }
 
         // Wrap ETH to WETH if needed
-        if (originalETHAmount > 0) {
-            IWETH(weth).deposit{value: originalETHAmount}();
+        if (ethForPool > 0) {
+            IWETH(weth).deposit{value: ethForPool}();
         }
 
         // Approve pool manager to spend WETH if needed
         if (!token0IsThis) {
-            IERC20(weth).approve(address(v4PoolManager), originalETHAmount);
+            IERC20(weth).approve(address(v4PoolManager), ethForPool);
         }
 
         // Initialize pool with initial price
@@ -1326,6 +1406,11 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IUnlockCallba
             v4PoolManager.unlock(abi.encode(deployParams));
         }
 
+        // Deploy protocol-owned liquidity to treasury
+        if (polETHReserve > 0 && polTokenReserve > 0) {
+            _deployProtocolLiquidity(poolKey, tickLower, tickUpper, polTokenReserve, polETHReserve, token0IsThis);
+        }
+
         // Store pool address and update reserve
         liquidityPool = address(v4PoolManager);
         reserve -= originalTokenAmount;
@@ -1335,7 +1420,7 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IUnlockCallba
             SafeTransferLib.safeTransferETH(msg.sender, msg.value - originalETHAmount);
         }
 
-        emit LiquidityDeployed(liquidityPool, originalTokenAmount, originalETHAmount);
+        emit LiquidityDeployed(liquidityPool, originalTokenAmount, ethForPool);
     }
 
     /**
@@ -1394,6 +1479,42 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IUnlockCallba
         }
 
         return abi.encode(delta);
+    }
+
+    function _deployProtocolLiquidity(
+        PoolKey memory poolKey,
+        int24 tickLower,
+        int24 tickUpper,
+        uint256 polTokenAmount,
+        uint256 polETHAmount,
+        bool token0IsThis
+    ) internal {
+        // Wrap POL ETH to WETH
+        IWETH(weth).deposit{value: polETHAmount}();
+
+        // Transfer WETH to treasury
+        IWETH(weth).transfer(protocolTreasury, polETHAmount);
+
+        // Transfer project tokens to treasury
+        _transfer(address(this), protocolTreasury, polTokenAmount);
+
+        // Determine amounts in currency order
+        uint256 polAmount0;
+        uint256 polAmount1;
+        if (token0IsThis) {
+            polAmount0 = polTokenAmount;
+            polAmount1 = polETHAmount;
+        } else {
+            polAmount0 = polETHAmount;
+            polAmount1 = polTokenAmount;
+        }
+
+        // Treasury deploys its own V4 position
+        IProtocolTreasuryPOL(protocolTreasury).receivePOL(
+            poolKey, tickLower, tickUpper, polAmount0, polAmount1
+        );
+
+        emit ProtocolLiquidityDeployed(protocolTreasury, polTokenAmount, polETHAmount);
     }
 
     // ┌─────────────────────────┐

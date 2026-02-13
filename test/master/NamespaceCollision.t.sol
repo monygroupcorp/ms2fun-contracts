@@ -82,7 +82,9 @@ contract NamespaceCollisionTest is Test {
             address(0x6666666666666666666666666666666666666666), // V2 router
             address(0x7777777777777777777777777777777777777777), // V2 factory
             address(0x8888888888888888888888888888888888888888), // V3 factory
-            address(execToken)
+            address(execToken),
+            address(0xC1EA),  // vault creator
+            100               // creator yield cut (1%)
         );
 
         // Set V4 pool key
@@ -103,14 +105,23 @@ contract NamespaceCollisionTest is Test {
             address(registry),
             mockInstanceTemplate,
             mockV4PoolManager,
-            mockWETH
+            mockWETH,
+            address(0xC1EA),
+            2000,
+            40
         );
 
         // Deploy ERC1155Factory
         erc1155Factory = new ERC1155Factory(
             address(registry),
-            mockInstanceTemplate
+            mockInstanceTemplate,
+            address(0xC1EA),
+            2000
         );
+
+        // Set protocol treasury on both factories
+        erc404Factory.setProtocolTreasury(address(0xFEE));
+        erc1155Factory.setProtocolTreasury(address(0xFEE));
 
         // Register both factories with MasterRegistry (as dictator)
         // Note: titles must be alphanumeric, hyphens, underscores only (no spaces)

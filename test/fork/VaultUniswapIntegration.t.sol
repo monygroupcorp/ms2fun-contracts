@@ -40,7 +40,9 @@ contract VaultUniswapIntegrationTest is ForkTestBase {
             UNISWAP_V2_ROUTER,
             UNISWAP_V2_FACTORY,
             UNISWAP_V3_FACTORY,
-            alignmentToken
+            alignmentToken,
+            address(0xC1EA),
+            100
         );
 
         // Set V4 pool key - H-02: Hook requires native ETH (address(0)), not WETH
@@ -113,7 +115,9 @@ contract VaultUniswapIntegrationTest is ForkTestBase {
             UNISWAP_V2_ROUTER,
             UNISWAP_V2_FACTORY,
             UNISWAP_V3_FACTORY,
-            alignmentToken
+            alignmentToken,
+            address(0xC1EA),
+            100
         );
 
         // Verify initial state

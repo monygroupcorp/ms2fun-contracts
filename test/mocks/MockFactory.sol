@@ -2,22 +2,31 @@
 pragma solidity ^0.8.20;
 
 import {IMasterRegistry} from "../../src/master/interfaces/IMasterRegistry.sol";
+import {IFactory} from "../../src/interfaces/IFactory.sol";
 
 /**
  * @title MockFactory
- * @notice Mock factory contract for testing
+ * @notice Mock factory contract for testing — implements IFactory so MasterRegistry accepts it
  */
-contract MockFactory {
+contract MockFactory is IFactory {
     IMasterRegistry public masterRegistry;
     address public instanceTemplate;
+    address public creator;
+    address public protocol;
 
-    constructor(address _masterRegistry) {
+    constructor(address _creator, address _protocol) {
+        creator = _creator;
+        protocol = _protocol;
+    }
+
+    /// @notice Convenience constructor variant that also sets a registry
+    function setMasterRegistry(address _masterRegistry) external {
         masterRegistry = IMasterRegistry(_masterRegistry);
     }
 
     function registerInstance(
         address instance,
-        address creator,
+        address _creator,
         string memory name,
         string memory metadataURI,
         address vault,
@@ -26,11 +35,10 @@ contract MockFactory {
         masterRegistry.registerInstance(
             instance,
             address(this),
-            creator,
+            _creator,
             name,
             metadataURI,
             vault
         );
     }
 }
-

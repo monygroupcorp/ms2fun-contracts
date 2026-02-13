@@ -56,8 +56,10 @@ contract FactoryInstanceIndexingTest is Test {
         // Deploy a contract to serve as the mock vault (just needs code at address)
         mockVault = address(new MockInstance(address(0)));
 
-        erc404Factory = new MockFactory(proxy);
-        erc1155Factory = new MockFactory(proxy);
+        erc404Factory = new MockFactory(owner, owner);
+        erc404Factory.setMasterRegistry(proxy);
+        erc1155Factory = new MockFactory(owner, owner);
+        erc1155Factory.setMasterRegistry(proxy);
     }
 
     /// @dev Deploy a MockInstance pointing to mockVault
@@ -125,7 +127,7 @@ contract FactoryInstanceIndexingTest is Test {
         assertEq(info.displayTitle, "Featured Factory");
         assertEq(info.metadataURI, "https://example.com/featured.json");
         assertEq(info.features.length, 3);
-        assertEq(info.creator, applicant1);
+        assertEq(info.creator, owner); // Creator is always sourced from IFactory.creator()
         assertTrue(info.active);
         assertGt(info.registeredAt, 0);
     }

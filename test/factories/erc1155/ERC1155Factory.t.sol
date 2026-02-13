@@ -13,6 +13,7 @@ import {IHooks} from "v4-core/interfaces/IHooks.sol";
 import {GlobalMessagingTestBase} from "../../base/GlobalMessagingTestBase.sol";
 import {GlobalMessageTypes} from "../../../src/libraries/GlobalMessageTypes.sol";
 import {GlobalMessageRegistry} from "../../../src/registry/GlobalMessageRegistry.sol";
+import {PromotionBadges} from "../../../src/promotion/PromotionBadges.sol";
 
 /**
  * @title ERC1155FactoryTest
@@ -44,7 +45,9 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
             address(0x6666666666666666666666666666666666666666),  // V2 router
             address(0x7777777777777777777777777777777777777777),  // V2 factory
             address(0x8888888888888888888888888888888888888888),  // V3 factory
-            address(token)                                        // alignment target
+            address(token),                                       // alignment target
+            address(0xC1EA),                                      // vault creator
+            100                                                   // creator yield cut (1%)
         );
 
         // Set V4 pool key
@@ -66,7 +69,7 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
         _setUpGlobalMessaging(mockRegistry);
 
         // Deploy factory
-        factory = new ERC1155Factory(mockRegistry, mockInstanceTemplate);
+        factory = new ERC1155Factory(mockRegistry, mockInstanceTemplate, address(0xC1EA), 2000);
 
         // Authorize creator as an agent for addEdition calls
         factory.setAgent(creator, true);
@@ -766,9 +769,100 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
         assertFalse(isSoldOut);
     }
 
+    // ========================
+    // Protocol Treasury Tests
+    // ========================
+
+    function test_SetProtocolTreasury() public {
+        vm.startPrank(owner);
+        factory.setProtocolTreasury(address(0xBEEF));
+        assertEq(factory.protocolTreasury(), address(0xBEEF));
+        vm.stopPrank();
+    }
+
+    function test_SetProtocolTreasury_RevertNonOwner() public {
+        vm.startPrank(creator);
+        vm.expectRevert();
+        factory.setProtocolTreasury(address(0xBEEF));
+        vm.stopPrank();
+    }
+
+    function test_SetProtocolTreasury_RevertZeroAddress() public {
+        vm.startPrank(owner);
+        vm.expectRevert("Invalid treasury");
+        factory.setProtocolTreasury(address(0));
+        vm.stopPrank();
+    }
+
+    function test_WithdrawProtocolFees() public {
+        // Create an instance to accumulate creation fees
+        vm.deal(creator, 1 ether);
+        vm.startPrank(creator);
+        factory.createInstance{value: 0.01 ether}(
+            "Fee Collection",
+            "ipfs://test",
+            creator,
+            address(vault),
+            ""
+        );
+        vm.stopPrank();
+
+        address treasury = address(0xBEEF);
+        vm.startPrank(owner);
+        factory.setProtocolTreasury(treasury);
+
+        uint256 factoryBalance = address(factory).balance;
+        assertEq(factoryBalance, 0.01 ether);
+
+        // With 20% creator fee, protocol gets 80% = 0.008 ether
+        factory.withdrawProtocolFees();
+        assertEq(factory.accumulatedProtocolFees(), 0);
+        assertEq(treasury.balance, 0.008 ether);
+        // Creator fees remain in factory
+        assertEq(factory.accumulatedCreatorFees(), 0.002 ether);
+        vm.stopPrank();
+    }
+
+    function test_WithdrawProtocolFees_RevertNoTreasury() public {
+        vm.startPrank(owner);
+        vm.expectRevert("Treasury not set");
+        factory.withdrawProtocolFees();
+        vm.stopPrank();
+    }
+
+    function test_WithdrawProtocolFees_RevertNoBalance() public {
+        vm.startPrank(owner);
+        factory.setProtocolTreasury(address(0xBEEF));
+        vm.expectRevert("No protocol fees");
+        factory.withdrawProtocolFees();
+        vm.stopPrank();
+    }
+
+    function test_InstanceHasProtocolTreasury() public {
+        vm.startPrank(owner);
+        factory.setProtocolTreasury(address(0xBEEF));
+        vm.stopPrank();
+
+        vm.deal(creator, 1 ether);
+        vm.startPrank(creator);
+        address instance = factory.createInstance{value: 0.01 ether}(
+            "Treasury Test",
+            "ipfs://test",
+            creator,
+            address(vault),
+            ""
+        );
+        vm.stopPrank();
+
+        ERC1155Instance instanceContract = ERC1155Instance(instance);
+        assertEq(instanceContract.protocolTreasury(), address(0xBEEF));
+    }
+
+    // ========================
+
     function test_EditionExists() public {
         vm.deal(creator, 1 ether);
-        
+
         vm.startPrank(creator);
         address instance = factory.createInstance{value: 0.01 ether}(
             "Test Collection",
@@ -777,7 +871,7 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
             address(vault),
             "" // styleUri
         );
-        
+
         factory.addEdition(
             instance,
             "Piece 1",
@@ -787,13 +881,275 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
             ERC1155Instance.PricingModel.LIMITED_FIXED,
             0
         );
-        
+
         ERC1155Instance instanceContract = ERC1155Instance(instance);
-        
+
         assertTrue(instanceContract.editionExists(1));
         assertFalse(instanceContract.editionExists(999));
-        
+
         vm.stopPrank();
+    }
+
+    // ========================
+    // Tiered Creation Tests
+    // ========================
+
+    function test_setTierConfig() public {
+        vm.startPrank(owner);
+
+        ERC1155Factory.TierConfig memory config = ERC1155Factory.TierConfig({
+            fee: 0.05 ether,
+            featuredDuration: 7 days,
+            featuredPosition: 10,
+            badge: PromotionBadges.BadgeType.NONE,
+            badgeDuration: 0
+        });
+
+        factory.setTierConfig(ERC1155Factory.CreationTier.PREMIUM, config);
+
+        (uint256 fee, uint256 featuredDuration, uint256 featuredPosition, PromotionBadges.BadgeType badge, uint256 badgeDuration) =
+            factory.tierConfigs(ERC1155Factory.CreationTier.PREMIUM);
+
+        assertEq(fee, 0.05 ether);
+        assertEq(featuredDuration, 7 days);
+        assertEq(featuredPosition, 10);
+        assertEq(uint256(badge), uint256(PromotionBadges.BadgeType.NONE));
+        assertEq(badgeDuration, 0);
+
+        vm.stopPrank();
+    }
+
+    function test_setTierConfig_revertZeroFee() public {
+        vm.startPrank(owner);
+
+        ERC1155Factory.TierConfig memory config = ERC1155Factory.TierConfig({
+            fee: 0,
+            featuredDuration: 0,
+            featuredPosition: 0,
+            badge: PromotionBadges.BadgeType.NONE,
+            badgeDuration: 0
+        });
+
+        vm.expectRevert("Fee must be positive");
+        factory.setTierConfig(ERC1155Factory.CreationTier.PREMIUM, config);
+
+        vm.stopPrank();
+    }
+
+    function test_setTierConfig_revertNonOwner() public {
+        vm.startPrank(creator);
+
+        ERC1155Factory.TierConfig memory config = ERC1155Factory.TierConfig({
+            fee: 0.05 ether,
+            featuredDuration: 0,
+            featuredPosition: 0,
+            badge: PromotionBadges.BadgeType.NONE,
+            badgeDuration: 0
+        });
+
+        vm.expectRevert();
+        factory.setTierConfig(ERC1155Factory.CreationTier.PREMIUM, config);
+
+        vm.stopPrank();
+    }
+
+    function test_createInstance_standardTierBackwardCompat() public {
+        // Old createInstance signature should still work
+        vm.deal(creator, 1 ether);
+        vm.startPrank(creator);
+
+        address instance = factory.createInstance{value: 0.01 ether}(
+            "Standard Collection",
+            "ipfs://test",
+            creator,
+            address(vault),
+            ""
+        );
+
+        assertTrue(instance != address(0), "Standard tier should create instance");
+
+        vm.stopPrank();
+    }
+
+    function test_createInstance_premiumTier() public {
+        vm.startPrank(owner);
+        factory.setTierConfig(
+            ERC1155Factory.CreationTier.PREMIUM,
+            ERC1155Factory.TierConfig({
+                fee: 0.05 ether,
+                featuredDuration: 0,
+                featuredPosition: 0,
+                badge: PromotionBadges.BadgeType.NONE,
+                badgeDuration: 0
+            })
+        );
+        vm.stopPrank();
+
+        vm.deal(creator, 1 ether);
+        vm.startPrank(creator);
+
+        address instance = factory.createInstance{value: 0.05 ether}(
+            "Premium Collection",
+            "ipfs://test",
+            creator,
+            address(vault),
+            "",
+            ERC1155Factory.CreationTier.PREMIUM
+        );
+
+        assertTrue(instance != address(0), "Premium tier should create instance");
+        assertEq(address(factory).balance, 0.05 ether, "Factory should hold premium fee");
+
+        vm.stopPrank();
+    }
+
+    function test_createInstance_premiumTier_insufficientFee() public {
+        vm.startPrank(owner);
+        factory.setTierConfig(
+            ERC1155Factory.CreationTier.PREMIUM,
+            ERC1155Factory.TierConfig({
+                fee: 0.05 ether,
+                featuredDuration: 0,
+                featuredPosition: 0,
+                badge: PromotionBadges.BadgeType.NONE,
+                badgeDuration: 0
+            })
+        );
+        vm.stopPrank();
+
+        vm.deal(creator, 1 ether);
+        vm.startPrank(creator);
+
+        vm.expectRevert("Insufficient fee");
+        factory.createInstance{value: 0.01 ether}(
+            "Premium Collection",
+            "ipfs://test",
+            creator,
+            address(vault),
+            "",
+            ERC1155Factory.CreationTier.PREMIUM
+        );
+
+        vm.stopPrank();
+    }
+
+    function test_createInstance_tierNotConfigured() public {
+        vm.deal(creator, 1 ether);
+        vm.startPrank(creator);
+
+        vm.expectRevert("Tier not configured");
+        factory.createInstance{value: 0.1 ether}(
+            "Launch Collection",
+            "ipfs://test",
+            creator,
+            address(vault),
+            "",
+            ERC1155Factory.CreationTier.LAUNCH
+        );
+
+        vm.stopPrank();
+    }
+
+    function test_createInstance_premiumTier_refundsExcess() public {
+        vm.startPrank(owner);
+        factory.setTierConfig(
+            ERC1155Factory.CreationTier.PREMIUM,
+            ERC1155Factory.TierConfig({
+                fee: 0.05 ether,
+                featuredDuration: 0,
+                featuredPosition: 0,
+                badge: PromotionBadges.BadgeType.NONE,
+                badgeDuration: 0
+            })
+        );
+        vm.stopPrank();
+
+        uint256 sent = 0.5 ether;
+        vm.deal(creator, sent);
+        uint256 balanceBefore = creator.balance;
+
+        vm.startPrank(creator);
+        factory.createInstance{value: sent}(
+            "Refund Collection",
+            "ipfs://test",
+            creator,
+            address(vault),
+            "",
+            ERC1155Factory.CreationTier.PREMIUM
+        );
+        vm.stopPrank();
+
+        assertEq(creator.balance, balanceBefore - 0.05 ether, "Excess should be refunded");
+    }
+
+    function test_createInstance_gracefulDegradation_noQueueOrBadges() public {
+        vm.startPrank(owner);
+        factory.setTierConfig(
+            ERC1155Factory.CreationTier.LAUNCH,
+            ERC1155Factory.TierConfig({
+                fee: 0.1 ether,
+                featuredDuration: 14 days,
+                featuredPosition: 5,
+                badge: PromotionBadges.BadgeType.HIGHLIGHT,
+                badgeDuration: 14 days
+            })
+        );
+        vm.stopPrank();
+
+        vm.deal(creator, 1 ether);
+        vm.startPrank(creator);
+
+        // Should succeed — perks are skipped when contracts not set
+        address instance = factory.createInstance{value: 0.1 ether}(
+            "Launch Collection",
+            "ipfs://test",
+            creator,
+            address(vault),
+            "",
+            ERC1155Factory.CreationTier.LAUNCH
+        );
+
+        assertTrue(instance != address(0), "Should create instance even without perk contracts");
+
+        vm.stopPrank();
+    }
+
+    function test_createInstance_launchTier_withBadgeAssignment() public {
+        vm.startPrank(owner);
+        PromotionBadges badges = new PromotionBadges(address(0xBEEF));
+        badges.setAuthorizedFactory(address(factory), true);
+        factory.setPromotionBadges(address(badges));
+
+        factory.setTierConfig(
+            ERC1155Factory.CreationTier.LAUNCH,
+            ERC1155Factory.TierConfig({
+                fee: 0.1 ether,
+                featuredDuration: 0,
+                featuredPosition: 0,
+                badge: PromotionBadges.BadgeType.HIGHLIGHT,
+                badgeDuration: 14 days
+            })
+        );
+        vm.stopPrank();
+
+        vm.deal(creator, 1 ether);
+        vm.startPrank(creator);
+
+        address instance = factory.createInstance{value: 0.1 ether}(
+            "Badge Collection",
+            "ipfs://test",
+            creator,
+            address(vault),
+            "",
+            ERC1155Factory.CreationTier.LAUNCH
+        );
+
+        vm.stopPrank();
+
+        // Verify badge was assigned
+        (PromotionBadges.BadgeType badgeType, uint256 expiresAt) = badges.getActiveBadge(instance);
+        assertEq(uint256(badgeType), uint256(PromotionBadges.BadgeType.HIGHLIGHT));
+        assertEq(expiresAt, block.timestamp + 14 days);
     }
 }
 

@@ -50,6 +50,7 @@ contract ERC1155Instance is Ownable, ReentrancyGuard {
     address public factory;
     IAlignmentVault public vault;
     IMasterRegistry public immutable masterRegistry;
+    address public immutable protocolTreasury;
     GlobalMessageRegistry private cachedGlobalRegistry; // Lazy-loaded from masterRegistry
 
     // Customization
@@ -120,7 +121,8 @@ contract ERC1155Instance is Ownable, ReentrancyGuard {
         address _factory,
         address _vault,
         string memory _styleUri,
-        address _masterRegistry
+        address _masterRegistry,
+        address _protocolTreasury
     ) {
         require(bytes(_name).length > 0, "Invalid name");
         require(_creator != address(0), "Invalid creator");
@@ -134,6 +136,7 @@ contract ERC1155Instance is Ownable, ReentrancyGuard {
         factory = _factory;
         vault = IAlignmentVault(payable(_vault));
         masterRegistry = IMasterRegistry(_masterRegistry);
+        protocolTreasury = _protocolTreasury;
         styleUri = _styleUri;
         nextEditionId = 1;
     }

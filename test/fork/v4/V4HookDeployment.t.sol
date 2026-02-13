@@ -105,7 +105,9 @@ contract V4HookDeploymentTest is ForkTestBase {
             UNISWAP_V2_ROUTER,
             UNISWAP_V2_FACTORY,
             UNISWAP_V3_FACTORY,
-            USDC  // Using USDC as alignment token for test
+            USDC,  // Using USDC as alignment token for test
+            address(0xC1EA),
+            100
         );
 
         // Deploy real hook factory

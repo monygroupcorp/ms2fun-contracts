@@ -4,6 +4,7 @@ pragma solidity ^0.8.20;
 import {UUPSUpgradeable} from "solady/utils/UUPSUpgradeable.sol";
 import {Ownable} from "solady/auth/Ownable.sol";
 import {ReentrancyGuard} from "solady/utils/ReentrancyGuard.sol";
+import {IERC20} from "../shared/interfaces/IERC20.sol";
 
 /**
  * @title VaultApprovalGovernance
@@ -103,6 +104,9 @@ contract VaultApprovalGovernance is UUPSUpgradeable, Ownable, ReentrancyGuard {
     // ============ State Variables ============
 
     address public masterRegistry;
+    /// @notice EXEC token used for deposit-based governance voting
+    /// @dev MUST be standard ERC20 (no ERC777 callbacks - would create reentrancy in voteWithDeposit).
+    ///      Quorum calculations assume 6 decimals (MIN_QUORUM = 500_000_000 = 500 EXEC).
     address public execToken;
     uint256 public applicationFee;
     bool private _initialized;
@@ -817,12 +821,6 @@ contract VaultApprovalGovernance is UUPSUpgradeable, Ownable, ReentrancyGuard {
 }
 
 // ============ Interfaces ============
-
-interface IERC20 {
-    function balanceOf(address account) external view returns (uint256);
-    function transfer(address to, uint256 amount) external returns (bool);
-    function transferFrom(address from, address to, uint256 amount) external returns (bool);
-}
 
 interface IMasterRegistry {
     function registerApprovedVault(

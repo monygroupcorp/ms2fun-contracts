@@ -5,6 +5,7 @@ import {UUPSUpgradeable} from "solady/utils/UUPSUpgradeable.sol";
 import {Ownable} from "solady/auth/Ownable.sol";
 import {ReentrancyGuard} from "solady/utils/ReentrancyGuard.sol";
 import {IMasterRegistry} from "./interfaces/IMasterRegistry.sol";
+import {SafeTransferLib} from "solady/utils/SafeTransferLib.sol";
 
 /**
  * @title FeaturedQueueManager
@@ -47,6 +48,13 @@ contract FeaturedQueueManager is UUPSUpgradeable, Ownable, ReentrancyGuard {
     uint256 public maxQueueSize = 100;
     uint256 public visibleThreshold = 20;               // Frontend shows top N
 
+    // Protocol revenue
+    address public protocolTreasury;
+    uint256 public totalRenewalDeposits;
+
+    // Authorized factories for privileged placement
+    mapping(address => bool) public authorizedFactories;
+
     // Events
     event PositionRented(address indexed instance, address indexed renter, uint256 position, uint256 cost, uint256 duration, uint256 expiresAt);
     event PositionRenewed(address indexed instance, uint256 position, uint256 additionalDuration, uint256 cost, uint256 newExpiration);
@@ -60,6 +68,11 @@ contract FeaturedQueueManager is UUPSUpgradeable, Ownable, ReentrancyGuard {
     event CleanupRewardRejected(address indexed caller, uint256 rewardAmount);
     event InsufficientCleanupRewardBalance(address indexed caller, uint256 rewardAmount, uint256 contractBalance);
     event MasterRegistrySet(address indexed newRegistry);
+    event StandardCleanupRewardUpdated(uint256 newReward);
+    event ProtocolTreasuryUpdated(address indexed oldTreasury, address indexed newTreasury);
+    event ProtocolFeesWithdrawn(address indexed treasury, uint256 amount);
+    event AuthorizedFactoryUpdated(address indexed factory, bool authorized);
+    event PositionRentedFor(address indexed instance, address indexed factory, uint256 position, uint256 duration, uint256 expiresAt);
 
     // Constructor
     constructor() {
@@ -265,6 +278,7 @@ contract FeaturedQueueManager is UUPSUpgradeable, Ownable, ReentrancyGuard {
         );
 
         renewalDeposits[instance] += msg.value;
+        totalRenewalDeposits += msg.value;
         emit AutoRenewalDeposited(instance, msg.sender, msg.value);
     }
 
@@ -288,6 +302,7 @@ contract FeaturedQueueManager is UUPSUpgradeable, Ownable, ReentrancyGuard {
         uint256 deposit = renewalDeposits[instance];
         require(deposit > 0, "No deposit to withdraw");
 
+        totalRenewalDeposits -= deposit;
         renewalDeposits[instance] = 0;
 
         (bool success, ) = payable(msg.sender).call{value: deposit}("");
@@ -571,6 +586,7 @@ contract FeaturedQueueManager is UUPSUpgradeable, Ownable, ReentrancyGuard {
         if (deposit < renewalCost) return false;
 
         renewalDeposits[instance] -= renewalCost;
+        totalRenewalDeposits -= renewalCost;
 
         uint256 index = position - 1;
         IMasterRegistry.RentalSlot storage slot = featuredQueue[index];
@@ -596,6 +612,52 @@ contract FeaturedQueueManager is UUPSUpgradeable, Ownable, ReentrancyGuard {
     function setStandardCleanupReward(uint256 newReward) external onlyOwner {
         require(newReward <= 0.05 ether, "Reward too high (max 0.05 ETH)");
         standardCleanupReward = newReward;
+        emit StandardCleanupRewardUpdated(newReward);
+    }
+
+    function setProtocolTreasury(address _treasury) external onlyOwner {
+        require(_treasury != address(0), "Invalid treasury");
+        address old = protocolTreasury;
+        protocolTreasury = _treasury;
+        emit ProtocolTreasuryUpdated(old, _treasury);
+    }
+
+    function withdrawProtocolFees() external onlyOwner {
+        require(protocolTreasury != address(0), "Treasury not set");
+        uint256 withdrawable = address(this).balance - totalRenewalDeposits;
+        require(withdrawable > 0, "No fees to withdraw");
+        SafeTransferLib.safeTransferETH(protocolTreasury, withdrawable);
+        emit ProtocolFeesWithdrawn(protocolTreasury, withdrawable);
+    }
+
+    /**
+     * @notice Authorize or deauthorize a factory for privileged placement
+     */
+    function setAuthorizedFactory(address factory, bool authorized) external onlyOwner {
+        authorizedFactories[factory] = authorized;
+        emit AuthorizedFactoryUpdated(factory, authorized);
+    }
+
+    /**
+     * @notice Privileged placement for authorized factories (no payment required)
+     * @param instance Instance to place in queue
+     * @param position 1-indexed position
+     * @param duration Duration in seconds
+     */
+    function rentFeaturedPositionFor(
+        address instance,
+        uint256 position,
+        uint256 duration
+    ) external {
+        require(authorizedFactories[msg.sender], "Not authorized factory");
+        require(position > 0, "Invalid position");
+        require(duration > 0, "Invalid duration");
+        require(instancePosition[instance] == 0, "Already in queue");
+
+        uint256 expiresAt = block.timestamp + duration;
+        _insertAtPositionWithShift(instance, position, 0, expiresAt);
+
+        emit PositionRentedFor(instance, msg.sender, position, duration, expiresAt);
     }
 
     // UUPS Upgrade Authorization
