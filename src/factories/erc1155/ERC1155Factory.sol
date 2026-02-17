@@ -70,6 +70,7 @@ contract ERC1155Factory is Ownable, ReentrancyGuard, IFactory {
     event CreatorFeesWithdrawn(address indexed creator, uint256 amount);
     event TierConfigUpdated(CreationTier tier, uint256 fee);
     event InstanceCreatedWithTier(address indexed instance, CreationTier tier, uint256 fee);
+    event AgentUpdated(address indexed agent, bool authorized);
 
     constructor(
         address _masterRegistry,
@@ -267,6 +268,7 @@ contract ERC1155Factory is Ownable, ReentrancyGuard, IFactory {
      */
     function setAgent(address agent, bool authorized) external onlyOwner {
         isAgent[agent] = authorized;
+        emit AgentUpdated(agent, authorized);
     }
 
     function setProtocolTreasury(address _treasury) external onlyOwner {

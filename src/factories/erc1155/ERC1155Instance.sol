@@ -292,11 +292,13 @@ contract ERC1155Instance is Ownable, ReentrancyGuard {
      * @param editionId Edition ID
      * @param amount Number of tokens to mint
      * @param message Optional message to store (empty string skips registry call, saves gas)
+     * @param maxCost Maximum acceptable total cost (0 = no limit, uses msg.value as implicit cap)
      */
     function mint(
         uint256 editionId,
         uint256 amount,
-        string calldata message
+        string calldata message,
+        uint256 maxCost
     ) external payable nonReentrant {
         Edition storage edition = editions[editionId];
         require(edition.id != 0, "Edition not found");
@@ -309,6 +311,7 @@ contract ERC1155Instance is Ownable, ReentrancyGuard {
 
         // Calculate cost
         uint256 totalCost = calculateMintCost(editionId, amount);
+        require(maxCost == 0 || totalCost <= maxCost, "Exceeds maxCost");
         require(msg.value >= totalCost, "Insufficient payment");
 
         // Update edition state

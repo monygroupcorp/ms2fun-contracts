@@ -38,7 +38,7 @@ contract CreatorFeesSplitTest is Test {
 
     address public owner = address(this);
     address public factoryCreator = address(0xC1EA);
-    address public vaultCreator = address(0xDC1EA);
+    address public vaultFactoryCreator = address(0xDC1EA);
     address public instanceCreator = address(0x2);
     address public treasury = address(0xBEEF);
 
@@ -63,7 +63,7 @@ contract CreatorFeesSplitTest is Test {
             address(0x7777777777777777777777777777777777777777),
             address(0x8888888888888888888888888888888888888888),
             address(token),
-            vaultCreator,
+            vaultFactoryCreator,
             CREATOR_YIELD_CUT_BPS
         );
 
@@ -93,6 +93,7 @@ contract CreatorFeesSplitTest is Test {
             mockInstanceTemplate,
             mockV4PoolManager,
             mockWETH,
+            owner,              // protocol
             factoryCreator,
             CREATOR_FEE_BPS,
             CREATOR_GRAD_FEE_BPS
@@ -183,17 +184,23 @@ contract CreatorFeesSplitTest is Test {
     // ERC404 Fee Split Tests
     // ========================
 
+    function _setupERC404Profile() internal {
+        ERC404Factory.GraduationProfile memory profile = ERC404Factory.GraduationProfile({
+            targetETH: 15 ether,
+            unitPerNFT: 1_000_000,
+            poolFee: 3000,
+            tickSpacing: 60,
+            liquidityReserveBps: 1000,
+            active: true
+        });
+        erc404Factory.setProfile(1, profile);
+    }
+
     function test_ERC404_CreationFeeSplit() public {
         MockHookMinimal hook = new MockHookMinimal();
         MockVaultMinimal mockVault = new MockVaultMinimal();
 
-        ERC404BondingInstance.BondingCurveParams memory curveParams = ERC404BondingInstance.BondingCurveParams({
-            initialPrice: 0.001 ether,
-            quarticCoeff: 0,
-            cubicCoeff: 0,
-            quadraticCoeff: 1,
-            normalizationFactor: 1e18
-        });
+        _setupERC404Profile();
 
         bytes32[] memory passwordHashes = new bytes32[](1);
         passwordHashes[0] = keccak256("password");
@@ -213,9 +220,8 @@ contract CreatorFeesSplitTest is Test {
             "ERC404-Fee-Test",
             "FEE",
             "ipfs://test",
-            100_000_000 ether,
-            20,
-            curveParams,
+            10,
+            1,
             tierConfig,
             instanceCreator,
             address(mockVault),
@@ -232,13 +238,7 @@ contract CreatorFeesSplitTest is Test {
         MockHookMinimal hook = new MockHookMinimal();
         MockVaultMinimal mockVault = new MockVaultMinimal();
 
-        ERC404BondingInstance.BondingCurveParams memory curveParams = ERC404BondingInstance.BondingCurveParams({
-            initialPrice: 0.001 ether,
-            quarticCoeff: 0,
-            cubicCoeff: 0,
-            quadraticCoeff: 1,
-            normalizationFactor: 1e18
-        });
+        _setupERC404Profile();
 
         bytes32[] memory passwordHashes = new bytes32[](1);
         passwordHashes[0] = keccak256("password2");
@@ -258,9 +258,8 @@ contract CreatorFeesSplitTest is Test {
             "ERC404-Creator-Withdraw",
             "CRW",
             "ipfs://test",
-            100_000_000 ether,
-            20,
-            curveParams,
+            10,
+            1,
             tierConfig,
             instanceCreator,
             address(mockVault),
@@ -317,16 +316,16 @@ contract CreatorFeesSplitTest is Test {
     }
 
     // ========================
-    // Vault Creator Yield Tests
+    // Factory Creator Yield Tests
     // ========================
 
-    function test_VaultCreator_Properties() public view {
-        assertEq(vault.vaultCreator(), vaultCreator);
+    function test_FactoryCreator_Properties() public view {
+        assertEq(vault.factoryCreator(), vaultFactoryCreator);
         assertEq(vault.creatorYieldCutBps(), CREATOR_YIELD_CUT_BPS);
-        assertEq(vault.creator(), vaultCreator);
+        assertEq(vault.creator(), vaultFactoryCreator);
     }
 
-    function test_VaultCreator_WithdrawCreatorFees() public {
+    function test_FactoryCreator_WithdrawCreatorFees() public {
         // Deposit some fees directly for testing
         vm.prank(owner);
         vault.depositFees{value: 1 ether}();
@@ -334,16 +333,16 @@ contract CreatorFeesSplitTest is Test {
         // Simulate yield being collected: manually set accumulated creator fees
         // Since accumulatedCreatorFees is only populated during fee collection,
         // and we can't easily trigger V4 LP fees in a unit test, we verify
-        // the withdrawal mechanism works by checking vault creator getter
-        assertEq(vault.creator(), vaultCreator);
+        // the withdrawal mechanism works by checking factory creator getter
+        assertEq(vault.creator(), vaultFactoryCreator);
 
         // Verify unauthorized withdrawal reverts
         vm.prank(address(0xBAD));
-        vm.expectRevert("Only vault creator");
+        vm.expectRevert("Only factory creator");
         vault.withdrawCreatorFees();
     }
 
-    function test_VaultCreator_YieldCutBounds() public {
+    function test_FactoryCreator_YieldCutBounds() public {
         // Creator yield cut cannot exceed protocol yield cut (500 bps = 5%)
         vm.expectRevert("Creator cut exceeds protocol yield cut");
         new UltraAlignmentVault(
@@ -354,7 +353,7 @@ contract CreatorFeesSplitTest is Test {
             address(0x7777777777777777777777777777777777777777),
             address(0x8888888888888888888888888888888888888888),
             address(token),
-            vaultCreator,
+            vaultFactoryCreator,
             600 // 6% > 5% protocol cut, should revert
         );
     }

@@ -167,7 +167,8 @@ contract UltraAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback, IAlig
     uint256 public accumulatedProtocolFees; // Pending protocol fees
 
     // Vault creator incentives (creator's share comes from protocol's cut)
-    address public vaultCreator;
+    address public factoryCreator;
+    address public pendingFactoryCreator;
     uint256 public creatorYieldCutBps; // e.g., 100 = 1% (must be <= protocolYieldCutBps)
     uint256 public accumulatedCreatorFees;
 
@@ -230,8 +231,17 @@ contract UltraAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback, IAlig
     event ProtocolFeesWithdrawn(uint256 amount);
 
     // Vault creator events
-    event VaultCreatorFeesWithdrawn(uint256 amount);
-    event VaultCreatorYieldCollected(uint256 amount);
+    event FactoryCreatorFeesWithdrawn(uint256 amount);
+    event FactoryCreatorYieldCollected(uint256 amount);
+    event FactoryCreatorTransferInitiated(address indexed current, address indexed pending);
+    event FactoryCreatorTransferAccepted(address indexed oldCreator, address indexed newCreator);
+
+    // Configuration change events (audit fix: missing events on state changes)
+    event AlignmentTokenUpdated(address indexed oldToken, address indexed newToken);
+    event V4PoolKeyUpdated(bytes32 indexed poolId);
+    event ConversionRewardUpdated(uint256 newReward);
+    event MaxPriceDeviationUpdated(uint256 newBps);
+    event DustDistributionThresholdUpdated(uint256 newThreshold);
 
     // ========== Constructor ==========
 
@@ -243,7 +253,7 @@ contract UltraAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback, IAlig
         address _v2Factory,
         address _v3Factory,
         address _alignmentToken,
-        address _vaultCreator,
+        address _factoryCreator,
         uint256 _creatorYieldCutBps
     ) {
         _initializeOwner(msg.sender);
@@ -263,7 +273,7 @@ contract UltraAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback, IAlig
         v2Factory = _v2Factory;
         v3Factory = _v3Factory;
         alignmentToken = _alignmentToken;
-        vaultCreator = _vaultCreator;
+        factoryCreator = _factoryCreator;
         creatorYieldCutBps = _creatorYieldCutBps;
 
         // Query and cache alignment token decimals for price calculations
@@ -726,7 +736,7 @@ contract UltraAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback, IAlig
                     emit ProtocolYieldCollected(protocolCut);
                 }
                 if (creatorCut > 0) {
-                    emit VaultCreatorYieldCollected(creatorCut);
+                    emit FactoryCreatorYieldCollected(creatorCut);
                 }
             }
         }
@@ -2004,7 +2014,7 @@ contract UltraAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback, IAlig
                     emit ProtocolYieldCollected(protocolCut);
                 }
                 if (creatorCut > 0) {
-                    emit VaultCreatorYieldCollected(creatorCut);
+                    emit FactoryCreatorYieldCollected(creatorCut);
                 }
             }
         }
@@ -2045,17 +2055,33 @@ contract UltraAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback, IAlig
     // ========== Vault Creator Fees ==========
 
     function withdrawCreatorFees() external {
-        require(msg.sender == vaultCreator, "Only vault creator");
+        require(msg.sender == factoryCreator, "Only factory creator");
         uint256 amount = accumulatedCreatorFees;
         require(amount > 0, "No creator fees");
         accumulatedCreatorFees = 0;
-        (bool success, ) = payable(vaultCreator).call{value: amount}("");
+        (bool success, ) = payable(factoryCreator).call{value: amount}("");
         require(success, "ETH transfer failed");
-        emit VaultCreatorFeesWithdrawn(amount);
+        emit FactoryCreatorFeesWithdrawn(amount);
+    }
+
+    function transferFactoryCreator(address newCreator) external {
+        require(msg.sender == factoryCreator, "Only factory creator");
+        require(newCreator != address(0), "Invalid address");
+        require(newCreator != factoryCreator, "Already creator");
+        pendingFactoryCreator = newCreator;
+        emit FactoryCreatorTransferInitiated(factoryCreator, newCreator);
+    }
+
+    function acceptFactoryCreator() external {
+        require(msg.sender == pendingFactoryCreator, "Only pending creator");
+        address old = factoryCreator;
+        factoryCreator = pendingFactoryCreator;
+        pendingFactoryCreator = address(0);
+        emit FactoryCreatorTransferAccepted(old, factoryCreator);
     }
 
     function creator() external view returns (address) {
-        return vaultCreator;
+        return factoryCreator;
     }
 
     // ========== Configuration ==========
@@ -2065,7 +2091,9 @@ contract UltraAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback, IAlig
      */
     function setAlignmentToken(address newToken) external onlyOwner {
         require(newToken != address(0), "Invalid token");
+        address oldToken = alignmentToken;
         alignmentToken = newToken;
+        emit AlignmentTokenUpdated(oldToken, newToken);
     }
 
     /**
@@ -2075,6 +2103,7 @@ contract UltraAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback, IAlig
         // Validate pool configuration before setting
         _validateV4Pool(newPoolKey);
         v4PoolKey = newPoolKey;
+        emit V4PoolKeyUpdated(keccak256(abi.encode(newPoolKey)));
     }
 
     /**
@@ -2084,6 +2113,7 @@ contract UltraAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback, IAlig
     function setStandardConversionReward(uint256 newReward) external onlyOwner {
         require(newReward <= 0.1 ether, "Reward too high (max 0.1 ETH)");
         standardConversionReward = newReward;
+        emit ConversionRewardUpdated(newReward);
     }
 
     /**
@@ -2093,6 +2123,7 @@ contract UltraAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback, IAlig
     function setMaxPriceDeviationBps(uint256 newBps) external onlyOwner {
         require(newBps <= 2000, "Deviation too high (max 20%)");
         maxPriceDeviationBps = newBps;
+        emit MaxPriceDeviationUpdated(newBps);
     }
 
     /**
@@ -2103,6 +2134,7 @@ contract UltraAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback, IAlig
     function setDustDistributionThreshold(uint256 newThreshold) external onlyOwner {
         require(newThreshold > 0, "Threshold must be positive");
         dustDistributionThreshold = newThreshold;
+        emit DustDistributionThresholdUpdated(newThreshold);
     }
 
     /**

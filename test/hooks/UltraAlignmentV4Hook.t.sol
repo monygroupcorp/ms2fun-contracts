@@ -5,17 +5,25 @@ import {Test, console2} from "forge-std/Test.sol";
 import {IHooks} from "v4-core/interfaces/IHooks.sol";
 import {IPoolManager} from "v4-core/interfaces/IPoolManager.sol";
 import {BalanceDelta, toBalanceDelta} from "v4-core/types/BalanceDelta.sol";
+import {BeforeSwapDelta, BeforeSwapDeltaLibrary} from "v4-core/types/BeforeSwapDelta.sol";
 import {Currency, CurrencyLibrary} from "v4-core/types/Currency.sol";
 import {PoolKey} from "v4-core/types/PoolKey.sol";
 import {SafeCast} from "v4-core/libraries/SafeCast.sol";
+import {LPFeeLibrary} from "v4-core/libraries/LPFeeLibrary.sol";
 import {UltraAlignmentVault} from "../../src/vaults/UltraAlignmentVault.sol";
 import {ReentrancyGuard} from "solady/utils/ReentrancyGuard.sol";
 import {Ownable} from "solady/auth/Ownable.sol";
 
 /**
  * @title UltraAlignmentV4HookTest
- * @notice Comprehensive test suite for UltraAlignmentV4Hook
- * @dev Tests tax calculation, collection, pool validation, and vault integration
+ * @notice Unit tests for UltraAlignmentV4Hook fee collection
+ * @dev TestableHook mirrors production logic EXACTLY — no divergence allowed.
+ *
+ * DESIGN RULES (learned the hard way):
+ * 1. TestableHook must use IDENTICAL logic to production UltraAlignmentV4Hook
+ * 2. All pools use realistic setup: currency0=address(0), currency1=token
+ * 3. Both buy (zeroForOne=true) and sell (zeroForOne=false) are tested
+ * 4. No WETH shortcuts — production only accepts address(0) as currency0
  */
 contract UltraAlignmentV4HookTest is Test {
     using SafeCast for uint256;
@@ -29,663 +37,513 @@ contract UltraAlignmentV4HookTest is Test {
     address public alice = address(0x2);
     address public bob = address(0x3);
 
-    address public mockWETH = address(0x1111111111111111111111111111111111111111);
     address public mockToken = address(0x2222222222222222222222222222222222222222);
 
-    // Events
-    event SwapTaxed(
-        address indexed sender,
-        Currency indexed currency,
-        uint256 taxAmount,
-        address indexed projectInstance
-    );
+    uint256 constant DEFAULT_HOOK_FEE_BIPS = 100; // 1%
+    uint24 constant DEFAULT_LP_FEE_RATE = 3000; // 0.3%
 
-    event TaxRateUpdated(uint256 newRate);
+    // Events (must match production)
+    event AlignmentFeeCollected(uint256 ethAmount, address indexed benefactor);
+    event LpFeeRateUpdated(uint24 newRate);
 
     function setUp() public {
         vm.startPrank(owner);
 
-        // Deploy mocks
         mockPoolManager = new MockPoolManager();
         mockVault = new MockVault();
 
-        // Deploy testable hook (no permission validation)
         hook = new TestableHook(
             IPoolManager(address(mockPoolManager)),
             UltraAlignmentVault(payable(address(mockVault))),
-            mockWETH,
-            owner
+            address(0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2), // WETH (not used in fee logic)
+            owner,
+            DEFAULT_HOOK_FEE_BIPS,
+            DEFAULT_LP_FEE_RATE
         );
 
         vm.stopPrank();
 
-        // Fund test accounts
         vm.deal(alice, 100 ether);
         vm.deal(bob, 100 ether);
         vm.deal(address(hook), 100 ether);
     }
 
+    // ========== Helpers ==========
+
+    /// @notice Realistic pool key: currency0=native ETH, currency1=token
+    function _ethTokenPoolKey() internal view returns (PoolKey memory) {
+        return PoolKey({
+            currency0: Currency.wrap(address(0)), // Native ETH — always currency0
+            currency1: Currency.wrap(mockToken),
+            fee: LPFeeLibrary.DYNAMIC_FEE_FLAG,
+            tickSpacing: 60,
+            hooks: IHooks(address(hook))
+        });
+    }
+
+    /// @notice Simulate a buy: ETH→token (zeroForOne=true)
+    /// @param ethAmount ETH spent by swapper (negative delta0, positive delta1)
+    function _buyDelta(uint256 ethAmount, uint256 tokenOut) internal pure returns (BalanceDelta) {
+        return toBalanceDelta(
+            int128(-int256(ethAmount)),  // delta0: swapper sends ETH (negative)
+            int128(int256(tokenOut))     // delta1: swapper receives token (positive)
+        );
+    }
+
+    /// @notice Simulate a sell: token→ETH (zeroForOne=false)
+    /// @param ethOut ETH received by swapper (positive delta0, negative delta1)
+    function _sellDelta(uint256 ethOut, uint256 tokenSpent) internal pure returns (BalanceDelta) {
+        return toBalanceDelta(
+            int128(int256(ethOut)),       // delta0: swapper receives ETH (positive)
+            int128(-int256(tokenSpent))   // delta1: swapper sends token (negative)
+        );
+    }
+
+    function _buyParams(uint256 ethAmount) internal pure returns (IPoolManager.SwapParams memory) {
+        return IPoolManager.SwapParams({
+            zeroForOne: true,
+            amountSpecified: -int256(ethAmount),
+            sqrtPriceLimitX96: 0
+        });
+    }
+
+    function _sellParams(uint256 tokenAmount) internal pure returns (IPoolManager.SwapParams memory) {
+        return IPoolManager.SwapParams({
+            zeroForOne: false,
+            amountSpecified: -int256(tokenAmount),
+            sqrtPriceLimitX96: 0
+        });
+    }
+
     // ========== Initialization Tests ==========
 
-    function test_Constructor_StoresParametersCorrectly() public view {
-        assertEq(address(hook.poolManager()), address(mockPoolManager), "PoolManager address incorrect");
-        assertEq(address(hook.vault()), address(mockVault), "Vault address incorrect");
-        assertEq(hook.weth(), mockWETH, "WETH address incorrect");
-        assertEq(hook.owner(), owner, "Owner address incorrect");
+    function test_constructor_storesParametersCorrectly() public view {
+        assertEq(address(hook.poolManager()), address(mockPoolManager));
+        assertEq(address(hook.vault()), address(mockVault));
+        assertEq(hook.owner(), owner);
     }
 
-    function test_Constructor_InitializesTaxRate() public view {
-        assertEq(hook.taxRateBips(), 100, "Default tax rate should be 100 bps (1%)");
+    function test_constructor_setsImmutableHookFee() public view {
+        assertEq(hook.hookFeeBips(), DEFAULT_HOOK_FEE_BIPS, "hookFeeBips should be set at deploy");
     }
 
-    // ========== Tax Calculation Tests ==========
-
-    function test_calculateTax_zeroTaxRate() public {
-        vm.prank(owner);
-        hook.setTaxRate(0);
-
-        uint256 swapAmount = 1000e18;
-        uint256 taxAmount = (swapAmount * hook.taxRateBips()) / 10000;
-        assertEq(taxAmount, 0, "Tax should be zero when rate is 0");
+    function test_constructor_setsInitialLpFeeRate() public view {
+        assertEq(hook.lpFeeRate(), DEFAULT_LP_FEE_RATE, "lpFeeRate should be set at deploy");
     }
 
-    function test_calculateTax_standardRate() public view {
-        // Default 100 bps = 100/10000 = 1%
-        uint256 swapAmount = 1000e18;
-        uint256 expectedTax = (swapAmount * 100) / 10000;
-        uint256 actualTax = (swapAmount * hook.taxRateBips()) / 10000;
+    // ========== Buy Direction Tests (ETH→token, zeroForOne=true) ==========
+    // THIS IS THE DIRECTION THAT WAS BROKEN BEFORE THE REFACTOR
 
-        assertEq(actualTax, expectedTax, "Tax calculation incorrect for standard rate");
-        assertEq(actualTax, 10e18, "100 bps (1%) on 1000e18 should equal 10e18");
-    }
+    function test_buy_collectsFeeOnETHSide() public {
+        PoolKey memory key = _ethTokenPoolKey();
+        uint256 ethSpent = 1000e18;
+        uint256 expectedFee = (ethSpent * DEFAULT_HOOK_FEE_BIPS) / 10000; // 1% of ETH
 
-    function test_calculateTax_maxRate() public {
-        vm.prank(owner);
-        hook.setTaxRate(100); // 1% max reasonable
+        BalanceDelta delta = _buyDelta(ethSpent, 500e18);
 
-        uint256 swapAmount = 1000e18;
-        uint256 expectedTax = (swapAmount * 100) / 10000;
-        uint256 actualTax = (swapAmount * hook.taxRateBips()) / 10000;
-
-        assertEq(actualTax, expectedTax, "Tax calculation at max rate");
-    }
-
-    function test_calculateTax_smallAmounts() public view {
-        // Test with 1 wei
-        uint256 swapAmount = 1;
-        uint256 taxAmount = (swapAmount * hook.taxRateBips()) / 10000;
-
-        // With 100 bps rate: 1 * 100 / 10000 = 0 (rounding down)
-        assertEq(taxAmount, 0, "Tax on 1 wei should be 0 due to rounding");
-    }
-
-    function test_calculateTax_precisionWith_OneEther() public view {
-        // Test with 1 ether
-        uint256 swapAmount = 1e18;
-        uint256 taxAmount = (swapAmount * hook.taxRateBips()) / 10000;
-
-        // 1e18 * 100 / 10000 = 1e16 (0.01 ether)
-        assertEq(taxAmount, 1e16, "Tax on 1 ether at 100 bps should be 0.01 ether");
-    }
-
-    function test_calculateTax_largeAmounts() public view {
-        uint256 swapAmount = 10000e18;
-        uint256 taxAmount = (swapAmount * hook.taxRateBips()) / 10000;
-
-        // 10000e18 * 100 / 10000 = 100e18
-        assertEq(taxAmount, 100e18, "Tax calculation on large amount");
-    }
-
-    // ========== Tax Collection Tests ==========
-
-    function test_onSwap_collectsTax() public {
-        uint256 swapAmount = 1000e18;
-        uint256 expectedTax = (swapAmount * hook.taxRateBips()) / 10000;
-
-        // Create pool key with ETH (token0) and mock token (token1)
-        PoolKey memory key = PoolKey({
-            currency0: Currency.wrap(mockWETH),
-            currency1: Currency.wrap(mockToken),
-            fee: 3000,
-            tickSpacing: 60,
-            hooks: IHooks(address(hook))
-        });
-
-        // Create swap params: swapping token1 for token0 (outgoing positive)
-        IPoolManager.SwapParams memory params = IPoolManager.SwapParams({
-            zeroForOne: false,
-            amountSpecified: -int256(swapAmount),
-            sqrtPriceLimitX96: 0
-        });
-
-        // Create balance delta with positive delta0 (output)
-        BalanceDelta delta = toBalanceDelta(int128(int256(swapAmount)), int128(-int256(swapAmount)));
-
-        // Call afterSwap
         vm.prank(address(mockPoolManager));
         (bytes4 selector, int128 hookDelta) = hook.afterSwap(
-            alice,
-            key,
-            params,
-            delta,
-            bytes("")
+            alice, key, _buyParams(ethSpent), delta, bytes("")
         );
 
-        assertEq(selector, IHooks.afterSwap.selector, "Should return afterSwap selector");
-        assertEq(hookDelta, int128(uint128(expectedTax)), "Hook delta should equal tax amount");
+        assertEq(selector, IHooks.afterSwap.selector);
+        assertEq(hookDelta, int128(uint128(expectedFee)), "Hook delta should be fee amount");
+        assertEq(mockVault.lastFeeAmount(), expectedFee, "Vault should receive exact fee");
+        assertEq(mockVault.lastBenefactor(), alice, "Benefactor should be swapper");
     }
 
-    function test_onSwap_transfersToVault() public {
-        uint256 swapAmount = 1000e18;
-        uint256 expectedTax = (swapAmount * hook.taxRateBips()) / 10000;
+    function test_buy_feeCalculatedFromETHNotToken() public {
+        PoolKey memory key = _ethTokenPoolKey();
+        uint256 ethSpent = 2000e18;
+        uint256 tokenOut = 800e18; // Different from ETH amount
 
-        PoolKey memory key = PoolKey({
-            currency0: Currency.wrap(mockWETH),
-            currency1: Currency.wrap(mockToken),
-            fee: 3000,
-            tickSpacing: 60,
-            hooks: IHooks(address(hook))
-        });
-
-        IPoolManager.SwapParams memory params = IPoolManager.SwapParams({
-            zeroForOne: false,
-            amountSpecified: -int256(swapAmount),
-            sqrtPriceLimitX96: 0
-        });
-
-        BalanceDelta delta = toBalanceDelta(int128(int256(swapAmount)), int128(-int256(swapAmount)));
+        BalanceDelta delta = _buyDelta(ethSpent, tokenOut);
 
         vm.prank(address(mockPoolManager));
-        hook.afterSwap(alice, key, params, delta, bytes(""));
+        (, int128 hookDelta) = hook.afterSwap(
+            alice, key, _buyParams(ethSpent), delta, bytes("")
+        );
 
-        // Verify vault received the tax call
-        assertEq(mockVault.lastTaxAmount(), expectedTax, "Vault should receive exact tax amount");
-        assertEq(mockVault.lastBenefactor(), alice, "Vault should record correct benefactor");
+        // Fee should be 1% of ETH (2000e18), not 1% of token (800e18)
+        uint256 expectedFee = (ethSpent * DEFAULT_HOOK_FEE_BIPS) / 10000;
+        assertEq(uint128(hookDelta), expectedFee, "Fee must be based on ETH movement, not token");
     }
 
-    function test_onSwap_vaultReceivesCorrectAmount() public {
-        uint256 swapAmount = 5000e18;
-
-        PoolKey memory key = PoolKey({
-            currency0: Currency.wrap(mockWETH),
-            currency1: Currency.wrap(mockToken),
-            fee: 3000,
-            tickSpacing: 60,
-            hooks: IHooks(address(hook))
-        });
-
-        IPoolManager.SwapParams memory params = IPoolManager.SwapParams({
-            zeroForOne: false,
-            amountSpecified: -int256(swapAmount),
-            sqrtPriceLimitX96: 0
-        });
-
-        BalanceDelta delta = toBalanceDelta(int128(int256(swapAmount)), int128(-int256(swapAmount)));
-
-        uint256 expectedTax = (swapAmount * hook.taxRateBips()) / 10000;
+    function test_buy_vaultReceivesETH() public {
+        PoolKey memory key = _ethTokenPoolKey();
+        BalanceDelta delta = _buyDelta(1000e18, 500e18);
 
         vm.prank(address(mockPoolManager));
-        hook.afterSwap(alice, key, params, delta, bytes(""));
+        hook.afterSwap(alice, key, _buyParams(1000e18), delta, bytes(""));
 
-        assertEq(mockVault.lastTaxAmount(), expectedTax, "Vault tax amount mismatch");
+        // Verify vault was called with currency0 (ETH)
+        assertEq(
+            Currency.unwrap(mockVault.lastCurrency()),
+            address(0),
+            "Vault must receive native ETH, not token"
+        );
     }
 
-    function test_onSwap_multipleSwaps() public {
-        PoolKey memory key = PoolKey({
-            currency0: Currency.wrap(mockWETH),
-            currency1: Currency.wrap(mockToken),
-            fee: 3000,
-            tickSpacing: 60,
-            hooks: IHooks(address(hook))
-        });
+    // ========== Sell Direction Tests (token→ETH, zeroForOne=false) ==========
 
-        IPoolManager.SwapParams memory params = IPoolManager.SwapParams({
-            zeroForOne: false,
-            amountSpecified: -int256(1000e18),
-            sqrtPriceLimitX96: 0
-        });
+    function test_sell_collectsFeeOnETHSide() public {
+        PoolKey memory key = _ethTokenPoolKey();
+        uint256 ethReceived = 1000e18;
+        uint256 expectedFee = (ethReceived * DEFAULT_HOOK_FEE_BIPS) / 10000;
 
-        BalanceDelta delta1 = toBalanceDelta(int128(int256(1000e18)), int128(-int256(1000e18)));
+        BalanceDelta delta = _sellDelta(ethReceived, 500e18);
 
-        // First swap
         vm.prank(address(mockPoolManager));
-        hook.afterSwap(alice, key, params, delta1, bytes(""));
-        uint256 firstTax = mockVault.lastTaxAmount();
+        (bytes4 selector, int128 hookDelta) = hook.afterSwap(
+            bob, key, _sellParams(500e18), delta, bytes("")
+        );
 
-        // Second swap by different user
-        BalanceDelta delta2 = toBalanceDelta(int128(int256(2000e18)), int128(-int256(2000e18)));
+        assertEq(selector, IHooks.afterSwap.selector);
+        assertEq(hookDelta, int128(uint128(expectedFee)), "Sell should produce ETH fee");
+        assertEq(mockVault.lastFeeAmount(), expectedFee, "Vault receives sell fee");
+        assertEq(mockVault.lastBenefactor(), bob);
+    }
 
-        params.amountSpecified = -int256(2000e18);
+    function test_sell_feeCalculatedFromETHNotToken() public {
+        PoolKey memory key = _ethTokenPoolKey();
+        uint256 ethReceived = 3000e18;
+        uint256 tokenSpent = 1500e18;
+
+        BalanceDelta delta = _sellDelta(ethReceived, tokenSpent);
+
         vm.prank(address(mockPoolManager));
-        hook.afterSwap(bob, key, params, delta2, bytes(""));
-        uint256 secondTax = mockVault.lastTaxAmount();
+        (, int128 hookDelta) = hook.afterSwap(
+            alice, key, _sellParams(tokenSpent), delta, bytes("")
+        );
 
-        // Verify both taxes calculated correctly
-        assertEq(firstTax, 10e18, "First swap tax should be 10e18 (1% of 1000e18)");
-        assertEq(secondTax, 20e18, "Second swap tax should be 20e18 (1% of 2000e18)");
-        assertEq(mockVault.lastBenefactor(), bob, "Last benefactor should be bob");
+        uint256 expectedFee = (ethReceived * DEFAULT_HOOK_FEE_BIPS) / 10000;
+        assertEq(uint128(hookDelta), expectedFee, "Sell fee must be based on ETH, not token");
+    }
+
+    // ========== Both Directions ==========
+
+    function test_buyThenSell_bothProduceFees() public {
+        PoolKey memory key = _ethTokenPoolKey();
+
+        // Buy: spend 1 ETH
+        BalanceDelta buyDelta = _buyDelta(1 ether, 500e18);
+        vm.prank(address(mockPoolManager));
+        (, int128 buyHookDelta) = hook.afterSwap(
+            alice, key, _buyParams(1 ether), buyDelta, bytes("")
+        );
+        assertGt(buyHookDelta, 0, "Buy must produce a fee");
+
+        // Sell: receive 0.5 ETH
+        BalanceDelta sellDelta = _sellDelta(0.5 ether, 250e18);
+        vm.prank(address(mockPoolManager));
+        (, int128 sellHookDelta) = hook.afterSwap(
+            bob, key, _sellParams(250e18), sellDelta, bytes("")
+        );
+        assertGt(sellHookDelta, 0, "Sell must produce a fee");
+
+        // Verify proportional: buy fee > sell fee (more ETH moved)
+        assertGt(buyHookDelta, sellHookDelta, "Larger ETH movement = larger fee");
     }
 
     // ========== Pool Validation Tests ==========
 
-    function test_onSwap_acceptsETH() public {
-        uint256 swapAmount = 1000e18;
-
-        PoolKey memory key = PoolKey({
-            currency0: Currency.wrap(mockWETH),
-            currency1: Currency.wrap(mockToken),
-            fee: 3000,
-            tickSpacing: 60,
-            hooks: IHooks(address(hook))
-        });
-
-        IPoolManager.SwapParams memory params = IPoolManager.SwapParams({
-            zeroForOne: false,
-            amountSpecified: -int256(swapAmount),
-            sqrtPriceLimitX96: 0
-        });
-
-        BalanceDelta delta = toBalanceDelta(int128(int256(swapAmount)), int128(-int256(swapAmount)));
-
-        // Should succeed with WETH
-        vm.prank(address(mockPoolManager));
-        (bytes4 selector, ) = hook.afterSwap(alice, key, params, delta, bytes(""));
-        assertEq(selector, IHooks.afterSwap.selector, "Should accept ETH/WETH pool");
-    }
-
-    function test_onSwap_ethOnlyValidation_revertOnNonETH() public {
-        uint256 swapAmount = 1000e18;
+    function test_revert_whenCurrency0IsNotNativeETH() public {
         address nonETHToken = address(0x3333333333333333333333333333333333333333);
 
+        // Pool with non-ETH as currency0 — must revert
         PoolKey memory key = PoolKey({
             currency0: Currency.wrap(nonETHToken),
             currency1: Currency.wrap(mockToken),
-            fee: 3000,
+            fee: LPFeeLibrary.DYNAMIC_FEE_FLAG,
             tickSpacing: 60,
             hooks: IHooks(address(hook))
         });
 
-        IPoolManager.SwapParams memory params = IPoolManager.SwapParams({
-            zeroForOne: true,
-            amountSpecified: -int256(swapAmount),
-            sqrtPriceLimitX96: 0
-        });
-
-        BalanceDelta delta = toBalanceDelta(int128(-int256(swapAmount)), int128(int256(swapAmount)));
+        BalanceDelta delta = toBalanceDelta(int128(-1000e18), int128(1000e18));
+        IPoolManager.SwapParams memory params = _buyParams(1000e18);
 
         vm.prank(address(mockPoolManager));
-        vm.expectRevert("Hook only accepts ETH/WETH taxes - pool must be ETH/WETH paired");
+        vm.expectRevert("Pool currency0 must be native ETH");
         hook.afterSwap(alice, key, params, delta, bytes(""));
     }
 
-    function test_onSwap_acceptsNativeETH() public {
-        uint256 swapAmount = 1000e18;
+    function test_revert_whenCurrency0IsWETH() public {
+        // WETH is NOT address(0) — must revert, no shortcuts
+        address wethAddr = address(0x1111111111111111111111111111111111111111);
 
-        // Use address(0) for native ETH
         PoolKey memory key = PoolKey({
-            currency0: Currency.wrap(address(0)),
+            currency0: Currency.wrap(wethAddr),
             currency1: Currency.wrap(mockToken),
-            fee: 3000,
+            fee: LPFeeLibrary.DYNAMIC_FEE_FLAG,
             tickSpacing: 60,
             hooks: IHooks(address(hook))
         });
 
-        IPoolManager.SwapParams memory params = IPoolManager.SwapParams({
-            zeroForOne: false,
-            amountSpecified: -int256(swapAmount),
-            sqrtPriceLimitX96: 0
-        });
-
-        BalanceDelta delta = toBalanceDelta(int128(int256(swapAmount)), int128(-int256(swapAmount)));
+        BalanceDelta delta = toBalanceDelta(int128(-1000e18), int128(1000e18));
 
         vm.prank(address(mockPoolManager));
-        (bytes4 selector, ) = hook.afterSwap(alice, key, params, delta, bytes(""));
-        assertEq(selector, IHooks.afterSwap.selector, "Should accept native ETH");
+        vm.expectRevert("Pool currency0 must be native ETH");
+        hook.afterSwap(alice, key, _buyParams(1000e18), delta, bytes(""));
     }
 
-    // ========== Tax Rate Management Tests ==========
+    // ========== Fee Calculation Tests ==========
 
-    function test_setTaxRate_byOwner() public {
+    function test_feeCalculation_standardRate() public view {
+        uint256 ethMoved = 1000e18;
+        uint256 expectedFee = (ethMoved * DEFAULT_HOOK_FEE_BIPS) / 10000;
+        assertEq(expectedFee, 10e18, "1% of 1000e18 = 10e18");
+    }
+
+    function test_feeCalculation_smallAmount_roundsToZero() public {
+        PoolKey memory key = _ethTokenPoolKey();
+
+        // 50 wei * 100 / 10000 = 0 (rounds down)
+        BalanceDelta delta = _buyDelta(50, 25);
+
+        vm.prank(address(mockPoolManager));
+        (, int128 hookDelta) = hook.afterSwap(
+            alice, key, _buyParams(50), delta, bytes("")
+        );
+
+        assertEq(hookDelta, 0, "Fee should round to zero for tiny swaps");
+    }
+
+    function test_feeCalculation_oneEther() public {
+        PoolKey memory key = _ethTokenPoolKey();
+        BalanceDelta delta = _buyDelta(1 ether, 500e18);
+
+        vm.prank(address(mockPoolManager));
+        (, int128 hookDelta) = hook.afterSwap(
+            alice, key, _buyParams(1 ether), delta, bytes("")
+        );
+
+        // 1e18 * 100 / 10000 = 1e16
+        assertEq(uint128(hookDelta), 1e16, "1% of 1 ETH = 0.01 ETH");
+    }
+
+    function test_feeCalculation_largeAmount() public {
+        PoolKey memory key = _ethTokenPoolKey();
+        BalanceDelta delta = _buyDelta(10000e18, 5000e18);
+
+        vm.prank(address(mockPoolManager));
+        (, int128 hookDelta) = hook.afterSwap(
+            alice, key, _buyParams(10000e18), delta, bytes("")
+        );
+
+        assertEq(uint128(hookDelta), 100e18, "1% of 10000 ETH = 100 ETH");
+    }
+
+    // ========== Zero Fee Tests ==========
+
+    function test_zeroHookFee_noFeeCollected() public {
+        // Deploy hook with hookFeeBips=0
         vm.prank(owner);
-        hook.setTaxRate(50);
-        assertEq(hook.taxRateBips(), 50, "Owner should be able to set tax rate");
+        TestableHook zeroFeeHook = new TestableHook(
+            IPoolManager(address(mockPoolManager)),
+            UltraAlignmentVault(payable(address(mockVault))),
+            address(0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2),
+            owner,
+            0, // hookFeeBips = 0
+            DEFAULT_LP_FEE_RATE
+        );
+
+        PoolKey memory key = PoolKey({
+            currency0: Currency.wrap(address(0)),
+            currency1: Currency.wrap(mockToken),
+            fee: LPFeeLibrary.DYNAMIC_FEE_FLAG,
+            tickSpacing: 60,
+            hooks: IHooks(address(zeroFeeHook))
+        });
+
+        BalanceDelta delta = _buyDelta(1000e18, 500e18);
+
+        vm.prank(address(mockPoolManager));
+        (, int128 hookDelta) = zeroFeeHook.afterSwap(
+            alice, key, _buyParams(1000e18), delta, bytes("")
+        );
+
+        assertEq(hookDelta, 0, "Zero hookFeeBips should produce zero fee");
     }
 
-    function test_setTaxRate_byOwnerValidRates() public {
+    // ========== hookFeeBips Immutability ==========
+
+    function test_hookFeeBips_isImmutable() public view {
+        // hookFeeBips is immutable — no setter exists
+        // This test documents the design: hookFeeBips can only be set at construction
+        assertEq(hook.hookFeeBips(), DEFAULT_HOOK_FEE_BIPS);
+        // There is no setHookFeeBips() function — verified by the fact that
+        // the TestableHook contract has no such method
+    }
+
+    // ========== LP Fee Rate Management ==========
+
+    function test_setLpFeeRate_byOwner() public {
+        vm.prank(owner);
+        hook.setLpFeeRate(5000);
+        assertEq(hook.lpFeeRate(), 5000);
+    }
+
+    function test_setLpFeeRate_validRates() public {
         vm.startPrank(owner);
 
-        hook.setTaxRate(0);
-        assertEq(hook.taxRateBips(), 0, "Should allow 0 tax rate");
+        hook.setLpFeeRate(0);
+        assertEq(hook.lpFeeRate(), 0, "Should allow 0 LP fee");
 
-        hook.setTaxRate(100);
-        assertEq(hook.taxRateBips(), 100, "Should allow 100 bps");
+        hook.setLpFeeRate(3000);
+        assertEq(hook.lpFeeRate(), 3000, "Should allow 3000 (0.3%)");
 
-        hook.setTaxRate(10000);
-        assertEq(hook.taxRateBips(), 10000, "Should allow 10000 bps (100%)");
+        hook.setLpFeeRate(uint24(LPFeeLibrary.MAX_LP_FEE));
+        assertEq(hook.lpFeeRate(), uint24(LPFeeLibrary.MAX_LP_FEE), "Should allow max fee");
 
         vm.stopPrank();
     }
 
-    function test_setTaxRate_ownerOnly() public {
+    function test_setLpFeeRate_ownerOnly() public {
         vm.prank(alice);
         vm.expectRevert();
-        hook.setTaxRate(50);
+        hook.setLpFeeRate(5000);
     }
 
-    function test_setTaxRate_validation_tooHigh() public {
+    function test_setLpFeeRate_rejectsAboveMax() public {
         vm.prank(owner);
         vm.expectRevert("Rate too high");
-        hook.setTaxRate(10001);
+        hook.setLpFeeRate(uint24(LPFeeLibrary.MAX_LP_FEE + 1));
     }
 
-    function test_setTaxRate_emitsEvent() public {
+    function test_setLpFeeRate_emitsEvent() public {
         vm.prank(owner);
         vm.expectEmit(true, false, false, true);
-        emit TaxRateUpdated(75);
-        hook.setTaxRate(75);
+        emit LpFeeRateUpdated(7500);
+        hook.setLpFeeRate(7500);
     }
 
-    // ========== Delta Calculation Tests ==========
+    // ========== beforeSwap Tests ==========
 
-    function test_afterSwap_deltaAmountPositiveToken0() public {
-        uint256 swapAmount = 1000e18;
-        uint256 expectedTax = (swapAmount * 100) / 10000; // 1% of 1000e18 = 10e18
-
-        PoolKey memory key = PoolKey({
-            currency0: Currency.wrap(mockWETH),
-            currency1: Currency.wrap(mockToken),
-            fee: 3000,
-            tickSpacing: 60,
-            hooks: IHooks(address(hook))
-        });
-
-        IPoolManager.SwapParams memory params = IPoolManager.SwapParams({
-            zeroForOne: false,
-            amountSpecified: -int256(swapAmount),
-            sqrtPriceLimitX96: 0
-        });
-
-        BalanceDelta delta = toBalanceDelta(int128(int256(swapAmount)), int128(-int256(swapAmount)));
+    function test_beforeSwap_returnsLpFeeWithOverrideFlag() public {
+        PoolKey memory key = _ethTokenPoolKey();
+        IPoolManager.SwapParams memory params = _buyParams(1 ether);
 
         vm.prank(address(mockPoolManager));
-        (, int128 hookDelta) = hook.afterSwap(alice, key, params, delta, bytes(""));
+        (bytes4 selector, BeforeSwapDelta bsDelta, uint24 fee) = hook.beforeSwap(
+            alice, key, params, bytes("")
+        );
 
-        assertEq(hookDelta, int128(uint128(expectedTax)), "Hook delta should be positive tax");
+        assertEq(selector, IHooks.beforeSwap.selector);
+        assertEq(
+            BeforeSwapDelta.unwrap(bsDelta),
+            BeforeSwapDelta.unwrap(BeforeSwapDeltaLibrary.ZERO_DELTA),
+            "beforeSwap should not modify deltas"
+        );
+        assertEq(
+            fee,
+            DEFAULT_LP_FEE_RATE | LPFeeLibrary.OVERRIDE_FEE_FLAG,
+            "Must return lpFeeRate with OVERRIDE_FEE_FLAG"
+        );
     }
 
-    function test_afterSwap_deltaAmountToken1() public {
-        uint256 swapAmount = 1000e18;
-        uint256 expectedTax = (swapAmount * 100) / 10000; // 1% of 1000e18 = 10e18
+    function test_beforeSwap_reflectsUpdatedRate() public {
+        vm.prank(owner);
+        hook.setLpFeeRate(10000);
 
-        // When zeroForOne=true: we're swapping currency0 (WETH) for currency1 (token)
-        // The output is currency1 (token), so we tax currency1
-        // But we only accept ETH/WETH taxes, so we should use WETH as currency1
-        PoolKey memory key = PoolKey({
-            currency0: Currency.wrap(mockToken),
-            currency1: Currency.wrap(mockWETH),
-            fee: 3000,
-            tickSpacing: 60,
-            hooks: IHooks(address(hook))
-        });
-
-        IPoolManager.SwapParams memory params = IPoolManager.SwapParams({
-            zeroForOne: true,
-            amountSpecified: -int256(swapAmount),
-            sqrtPriceLimitX96: 0
-        });
-
-        BalanceDelta delta = toBalanceDelta(int128(-int256(swapAmount)), int128(int256(swapAmount)));
+        PoolKey memory key = _ethTokenPoolKey();
+        IPoolManager.SwapParams memory params = _buyParams(1 ether);
 
         vm.prank(address(mockPoolManager));
-        (, int128 hookDelta) = hook.afterSwap(alice, key, params, delta, bytes(""));
+        (,, uint24 fee) = hook.beforeSwap(alice, key, params, bytes(""));
 
-        assertEq(hookDelta, int128(uint128(expectedTax)), "Hook delta should be positive tax for token1 output");
+        assertEq(fee, 10000 | LPFeeLibrary.OVERRIDE_FEE_FLAG);
     }
 
-    // ========== Hook Callback Validation ==========
-
-    function test_afterSwap_onlyPoolManagerCanCall() public {
-        PoolKey memory key = PoolKey({
-            currency0: Currency.wrap(mockWETH),
-            currency1: Currency.wrap(mockToken),
-            fee: 3000,
-            tickSpacing: 60,
-            hooks: IHooks(address(hook))
-        });
-
-        IPoolManager.SwapParams memory params = IPoolManager.SwapParams({
-            zeroForOne: false,
-            amountSpecified: -int256(1000e18),
-            sqrtPriceLimitX96: 0
-        });
-
-        BalanceDelta delta = toBalanceDelta(int128(int256(1000e18)), int128(-int256(1000e18)));
+    function test_beforeSwap_onlyPoolManager() public {
+        PoolKey memory key = _ethTokenPoolKey();
+        IPoolManager.SwapParams memory params = _buyParams(1 ether);
 
         vm.prank(alice);
         vm.expectRevert("Unauthorized");
-        hook.afterSwap(alice, key, params, delta, bytes(""));
+        hook.beforeSwap(alice, key, params, bytes(""));
     }
 
-    function test_afterSwap_zeroTaxReturnsZeroDelta() public {
-        vm.prank(owner);
-        hook.setTaxRate(0);
+    // ========== Access Control ==========
 
-        PoolKey memory key = PoolKey({
-            currency0: Currency.wrap(mockWETH),
-            currency1: Currency.wrap(mockToken),
-            fee: 3000,
-            tickSpacing: 60,
-            hooks: IHooks(address(hook))
-        });
+    function test_afterSwap_onlyPoolManagerCanCall() public {
+        PoolKey memory key = _ethTokenPoolKey();
+        BalanceDelta delta = _buyDelta(1000e18, 500e18);
 
-        IPoolManager.SwapParams memory params = IPoolManager.SwapParams({
-            zeroForOne: false,
-            amountSpecified: -int256(1000e18),
-            sqrtPriceLimitX96: 0
-        });
-
-        BalanceDelta delta = toBalanceDelta(int128(int256(1000e18)), int128(-int256(1000e18)));
-
-        vm.prank(address(mockPoolManager));
-        (, int128 hookDelta) = hook.afterSwap(alice, key, params, delta, bytes(""));
-
-        assertEq(hookDelta, 0, "Hook delta should be 0 when tax rate is 0");
+        vm.prank(alice);
+        vm.expectRevert("Unauthorized");
+        hook.afterSwap(alice, key, _buyParams(1000e18), delta, bytes(""));
     }
 
-    // ========== Integration Scenario Tests ==========
+    // ========== Multiple Swaps ==========
 
-    function test_multipleSwapsWithVaryingRates() public {
-        PoolKey memory key = PoolKey({
-            currency0: Currency.wrap(mockWETH),
-            currency1: Currency.wrap(mockToken),
-            fee: 3000,
-            tickSpacing: 60,
-            hooks: IHooks(address(hook))
-        });
+    function test_multipleSwaps_differentUsers() public {
+        PoolKey memory key = _ethTokenPoolKey();
 
-        // First swap at 100 bps
-        uint256 swapAmount1 = 1000e18;
-        IPoolManager.SwapParams memory params = IPoolManager.SwapParams({
-            zeroForOne: false,
-            amountSpecified: -int256(swapAmount1),
-            sqrtPriceLimitX96: 0
-        });
-
-        BalanceDelta delta1 = toBalanceDelta(int128(int256(swapAmount1)), int128(-int256(swapAmount1)));
-
+        // Alice buys
+        BalanceDelta delta1 = _buyDelta(1000e18, 500e18);
         vm.prank(address(mockPoolManager));
-        hook.afterSwap(alice, key, params, delta1, bytes(""));
-        uint256 tax1 = (swapAmount1 * 100) / 10000;
-        assertEq(mockVault.lastTaxAmount(), tax1, "First tax calculation");
+        hook.afterSwap(alice, key, _buyParams(1000e18), delta1, bytes(""));
+        assertEq(mockVault.lastFeeAmount(), 10e18, "Alice: 1% of 1000 ETH");
+        assertEq(mockVault.lastBenefactor(), alice);
 
-        // Change rate to 50 bps
-        vm.prank(owner);
-        hook.setTaxRate(50);
-
-        // Second swap at 50 bps
-        uint256 swapAmount2 = 2000e18;
-        params.amountSpecified = -int256(swapAmount2);
-
-        BalanceDelta delta2 = toBalanceDelta(int128(int256(swapAmount2)), int128(-int256(swapAmount2)));
-
+        // Bob sells (receives 2000 ETH)
+        BalanceDelta delta2 = _sellDelta(2000e18, 1000e18);
         vm.prank(address(mockPoolManager));
-        hook.afterSwap(bob, key, params, delta2, bytes(""));
-        uint256 tax2 = (swapAmount2 * 50) / 10000;
-        assertEq(mockVault.lastTaxAmount(), tax2, "Second tax calculation with updated rate");
+        hook.afterSwap(bob, key, _sellParams(1000e18), delta2, bytes(""));
+        assertEq(mockVault.lastFeeAmount(), 20e18, "Bob: 1% of 2000 ETH");
+        assertEq(mockVault.lastBenefactor(), bob);
     }
+
+    // ========== Vault Integration ==========
 
     function test_vaultIntegration_receiveInstanceCalled() public {
-        PoolKey memory key = PoolKey({
-            currency0: Currency.wrap(mockWETH),
-            currency1: Currency.wrap(mockToken),
-            fee: 3000,
-            tickSpacing: 60,
-            hooks: IHooks(address(hook))
-        });
-
-        IPoolManager.SwapParams memory params = IPoolManager.SwapParams({
-            zeroForOne: false,
-            amountSpecified: -int256(5000e18),
-            sqrtPriceLimitX96: 0
-        });
-
-        BalanceDelta delta = toBalanceDelta(int128(int256(5000e18)), int128(-int256(5000e18)));
+        PoolKey memory key = _ethTokenPoolKey();
+        BalanceDelta delta = _buyDelta(5000e18, 2500e18);
 
         vm.prank(address(mockPoolManager));
-        hook.afterSwap(alice, key, params, delta, bytes(""));
+        hook.afterSwap(alice, key, _buyParams(5000e18), delta, bytes(""));
 
-        // Verify vault tracked the call
-        assertTrue(mockVault.receivedTax(), "Vault should have received tax");
-        assertEq(mockVault.lastBenefactor(), alice, "Benefactor should be swap sender");
+        assertTrue(mockVault.receivedFee(), "Vault should have received fee");
+        assertEq(mockVault.lastBenefactor(), alice);
+        assertEq(mockVault.lastFeeAmount(), 50e18);
     }
 
-    function test_swapWithLargeAmount() public {
-        uint256 largeSwapAmount = 10000e18;
-        uint256 expectedTax = (largeSwapAmount * 100) / 10000;
-
-        PoolKey memory key = PoolKey({
-            currency0: Currency.wrap(mockWETH),
-            currency1: Currency.wrap(mockToken),
-            fee: 3000,
-            tickSpacing: 60,
-            hooks: IHooks(address(hook))
-        });
-
-        IPoolManager.SwapParams memory params = IPoolManager.SwapParams({
-            zeroForOne: false,
-            amountSpecified: -int256(largeSwapAmount),
-            sqrtPriceLimitX96: 0
-        });
-
-        BalanceDelta delta = toBalanceDelta(int128(int256(largeSwapAmount)), int128(-int256(largeSwapAmount)));
-
-        vm.prank(address(mockPoolManager));
-        (, int128 hookDelta) = hook.afterSwap(alice, key, params, delta, bytes(""));
-
-        assertEq(uint128(hookDelta), expectedTax, "Large amount tax calculation");
-        assertEq(mockVault.lastTaxAmount(), expectedTax, "Vault receives correct large tax");
-    }
-
-    function test_reentrancyGuard() public view {
-        // The contract has ReentrancyGuard, verify it's present
-        assertTrue(address(hook) != address(0), "Hook should be deployed");
-        // Reentrancy protection is implicit in contract structure
-    }
-
-    // ========== Missing Edge Case Tests ==========
-
-    function test_afterSwap_maxTaxRate_100percent() public {
-        // Set tax rate to 100% (10000 bps)
-        vm.prank(owner);
-        hook.setTaxRate(10000);
-
-        // Use smaller amount that hook has sufficient funds for
-        uint256 swapAmount = 50e18; // Hook has 100 ether
-        uint256 expectedTax = swapAmount; // 100% of swap amount
-
-        PoolKey memory key = PoolKey({
-            currency0: Currency.wrap(mockWETH),
-            currency1: Currency.wrap(mockToken),
-            fee: 3000,
-            tickSpacing: 60,
-            hooks: IHooks(address(hook))
-        });
-
-        IPoolManager.SwapParams memory params = IPoolManager.SwapParams({
-            zeroForOne: false,
-            amountSpecified: -int256(swapAmount),
-            sqrtPriceLimitX96: 0
-        });
-
-        BalanceDelta delta = toBalanceDelta(int128(int256(swapAmount)), int128(-int256(swapAmount)));
-
-        vm.prank(address(mockPoolManager));
-        (, int128 hookDelta) = hook.afterSwap(alice, key, params, delta, bytes(""));
-
-        assertEq(uint128(hookDelta), expectedTax, "100% tax should take entire swap amount");
-        assertEq(mockVault.lastTaxAmount(), expectedTax, "Vault should receive 100% of swap");
-    }
-
-    function test_afterSwap_vaultCallDoesNotRevertSwap() public {
-        // Deploy a reverting vault mock
+    function test_vaultRevert_propagatesToSwap() public {
         MockRevertingVault revertingVault = new MockRevertingVault();
 
-        // Deploy new hook with reverting vault
+        vm.prank(owner);
         TestableHook revertingHook = new TestableHook(
             IPoolManager(address(mockPoolManager)),
             UltraAlignmentVault(payable(address(revertingVault))),
-            mockWETH,
-            owner
+            address(0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2),
+            owner,
+            DEFAULT_HOOK_FEE_BIPS,
+            DEFAULT_LP_FEE_RATE
         );
-
-        // Fund the reverting hook
         vm.deal(address(revertingHook), 100 ether);
 
-        uint256 swapAmount = 50e18; // Use smaller amount hook has funds for
-        uint256 expectedTax = (swapAmount * 100) / 10000; // 1% tax
-
         PoolKey memory key = PoolKey({
-            currency0: Currency.wrap(mockWETH),
+            currency0: Currency.wrap(address(0)),
             currency1: Currency.wrap(mockToken),
-            fee: 3000,
+            fee: LPFeeLibrary.DYNAMIC_FEE_FLAG,
             tickSpacing: 60,
             hooks: IHooks(address(revertingHook))
         });
 
-        IPoolManager.SwapParams memory params = IPoolManager.SwapParams({
-            zeroForOne: false,
-            amountSpecified: -int256(swapAmount),
-            sqrtPriceLimitX96: 0
-        });
+        BalanceDelta delta = _buyDelta(50e18, 25e18);
 
-        BalanceDelta delta = toBalanceDelta(int128(int256(swapAmount)), int128(-int256(swapAmount)));
-
-        // This should revert because vault.receiveInstance() reverts
-        // Note: In current implementation, hook WILL revert if vault reverts
-        // This is actually correct behavior - we want the swap to fail if tax can't be collected
         vm.prank(address(mockPoolManager));
         vm.expectRevert("Vault revert");
-        revertingHook.afterSwap(alice, key, params, delta, bytes(""));
+        revertingHook.afterSwap(alice, key, _buyParams(50e18), delta, bytes(""));
     }
 
-    function test_afterSwap_gasEfficiency_multipleSwaps() public {
-        PoolKey memory key = PoolKey({
-            currency0: Currency.wrap(mockWETH),
-            currency1: Currency.wrap(mockToken),
-            fee: 3000,
-            tickSpacing: 60,
-            hooks: IHooks(address(hook))
-        });
+    // ========== Gas Efficiency ==========
 
-        IPoolManager.SwapParams memory params = IPoolManager.SwapParams({
-            zeroForOne: false,
-            amountSpecified: -int256(100e18),
-            sqrtPriceLimitX96: 0
-        });
+    function test_gasEfficiency_multipleSwaps() public {
+        PoolKey memory key = _ethTokenPoolKey();
+        BalanceDelta delta = _buyDelta(100e18, 50e18);
+        IPoolManager.SwapParams memory params = _buyParams(100e18);
 
-        BalanceDelta delta = toBalanceDelta(int128(int256(100e18)), int128(-int256(100e18)));
-
-        // Measure gas for 10 consecutive swaps
         uint256 gasStart = gasleft();
 
         for (uint256 i = 0; i < 10; i++) {
@@ -693,84 +551,81 @@ contract UltraAlignmentV4HookTest is Test {
             hook.afterSwap(alice, key, params, delta, bytes(""));
         }
 
-        uint256 gasUsed = gasStart - gasleft();
-        uint256 avgGasPerSwap = gasUsed / 10;
-
-        // Gas should be reasonable (< 200k per swap including mock overhead)
-        // This is a sanity check - actual gas cost should be much lower (~50-100k)
-        assertTrue(avgGasPerSwap < 200000, "Average gas per swap should be < 200k");
-
-        // Verify all swaps executed
-        assertEq(mockPoolManager.takeCount(), 10, "Should have taken tax 10 times");
+        uint256 avgGas = (gasStart - gasleft()) / 10;
+        assertTrue(avgGas < 200000, "Average gas per swap should be < 200k");
+        assertEq(mockPoolManager.takeCount(), 10, "Should have taken fee 10 times");
     }
 
-    function test_afterSwap_smallSwap_taxRoundsToZero() public {
-        // Very small swap where tax rounds to zero
-        uint256 tinySwapAmount = 50; // 50 wei
+    // ========== Max Fee Edge Case ==========
+
+    function test_maxHookFee_100percent() public {
+        vm.prank(owner);
+        TestableHook maxFeeHook = new TestableHook(
+            IPoolManager(address(mockPoolManager)),
+            UltraAlignmentVault(payable(address(mockVault))),
+            address(0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2),
+            owner,
+            10000, // 100% fee
+            DEFAULT_LP_FEE_RATE
+        );
+        vm.deal(address(maxFeeHook), 100 ether);
 
         PoolKey memory key = PoolKey({
-            currency0: Currency.wrap(mockWETH),
+            currency0: Currency.wrap(address(0)),
             currency1: Currency.wrap(mockToken),
-            fee: 3000,
+            fee: LPFeeLibrary.DYNAMIC_FEE_FLAG,
             tickSpacing: 60,
-            hooks: IHooks(address(hook))
+            hooks: IHooks(address(maxFeeHook))
         });
 
-        IPoolManager.SwapParams memory params = IPoolManager.SwapParams({
-            zeroForOne: false,
-            amountSpecified: -int256(tinySwapAmount),
-            sqrtPriceLimitX96: 0
-        });
-
-        BalanceDelta delta = toBalanceDelta(int128(int256(tinySwapAmount)), int128(-int256(tinySwapAmount)));
+        uint256 ethSpent = 50e18;
+        BalanceDelta delta = _buyDelta(ethSpent, 25e18);
 
         vm.prank(address(mockPoolManager));
-        (, int128 hookDelta) = hook.afterSwap(alice, key, params, delta, bytes(""));
+        (, int128 hookDelta) = maxFeeHook.afterSwap(
+            alice, key, _buyParams(ethSpent), delta, bytes("")
+        );
 
-        // 50 wei * 100 bps / 10000 = 0.5 wei, rounds down to 0
-        assertEq(hookDelta, 0, "Tax should round to zero for tiny swaps");
+        assertEq(uint128(hookDelta), ethSpent, "100% fee should take entire ETH amount");
     }
 }
 
-/**
- * @title TestableHook
- * @notice Test version of UltraAlignmentV4Hook without hook permission validation
- * @dev This is for unit testing only - production requires proper hook address encoding
- */
+// ========== TestableHook ==========
+// CRITICAL: This MUST mirror production UltraAlignmentV4Hook logic exactly.
+// If you change production, change this. If they diverge, tests are useless.
+
 contract TestableHook is ReentrancyGuard, Ownable {
     using SafeCast for uint256;
 
     IPoolManager public immutable poolManager;
     UltraAlignmentVault public immutable vault;
     address public immutable weth;
+    uint256 public immutable hookFeeBips;
+    uint24 public lpFeeRate;
 
-    uint256 public taxRateBips;
-
-    event SwapTaxed(
-        address indexed sender,
-        Currency indexed currency,
-        uint256 taxAmount,
-        address indexed projectInstance
-    );
-
-    event TaxRateUpdated(uint256 newRate);
+    event AlignmentFeeCollected(uint256 ethAmount, address indexed benefactor);
+    event LpFeeRateUpdated(uint24 newRate);
 
     constructor(
         IPoolManager _poolManager,
         UltraAlignmentVault _vault,
         address _weth,
-        address _owner
+        address _owner,
+        uint256 _hookFeeBips,
+        uint24 _initialLpFeeRate
     ) {
         require(address(_poolManager) != address(0), "Invalid pool manager");
         require(address(_vault) != address(0), "Invalid vault");
-        require(_weth != address(0), "Invalid WETH");
         require(_owner != address(0), "Invalid owner");
+        require(_hookFeeBips <= 10000, "Hook fee too high");
+        require(_initialLpFeeRate <= LPFeeLibrary.MAX_LP_FEE, "LP fee too high");
 
         _initializeOwner(_owner);
         poolManager = _poolManager;
         vault = _vault;
         weth = _weth;
-        taxRateBips = 100; // 1% default
+        hookFeeBips = _hookFeeBips;
+        lpFeeRate = _initialLpFeeRate;
     }
 
     modifier onlyPoolManager() {
@@ -778,78 +633,54 @@ contract TestableHook is ReentrancyGuard, Ownable {
         _;
     }
 
+    /// @dev MIRRORS production beforeSwap exactly
+    function beforeSwap(address, PoolKey calldata, IPoolManager.SwapParams calldata, bytes calldata)
+        external
+        view
+        onlyPoolManager
+        returns (bytes4, BeforeSwapDelta, uint24)
+    {
+        return (
+            IHooks.beforeSwap.selector,
+            BeforeSwapDeltaLibrary.ZERO_DELTA,
+            lpFeeRate | LPFeeLibrary.OVERRIDE_FEE_FLAG
+        );
+    }
+
+    /// @dev MIRRORS production afterSwap exactly — always taxes currency0 (ETH side)
     function afterSwap(
         address sender,
         PoolKey calldata key,
-        IPoolManager.SwapParams calldata params,
+        IPoolManager.SwapParams calldata,
         BalanceDelta delta,
-        bytes calldata hookData
-    ) external nonReentrant onlyPoolManager returns (bytes4, int128) {
-        int128 taxDelta = _processTax(sender, key, params, delta);
-        return (IHooks.afterSwap.selector, taxDelta);
-    }
+        bytes calldata
+    ) external onlyPoolManager returns (bytes4, int128) {
+        require(Currency.unwrap(key.currency0) == address(0), "Pool currency0 must be native ETH");
 
-    function _processTax(
-        address sender,
-        PoolKey calldata key,
-        IPoolManager.SwapParams calldata params,
-        BalanceDelta delta
-    ) private returns (int128) {
-        // Calculate which currency is being swapped out (the unspecified currency)
-        bool specifiedTokenIs0 = (params.amountSpecified < 0 == params.zeroForOne);
-        Currency taxCurrency;
-        int128 swapAmount;
+        int128 amount0 = delta.amount0();
+        uint256 ethMoved = amount0 < 0 ? uint256(uint128(-amount0)) : uint256(uint128(amount0));
+        uint256 feeAmount = (ethMoved * hookFeeBips) / 10000;
 
-        if (specifiedTokenIs0) {
-            // Swapping token0 for token1, tax is on token1 (output)
-            taxCurrency = key.currency1;
-            swapAmount = delta.amount1();
-        } else {
-            // Swapping token1 for token0, tax is on token0 (output)
-            taxCurrency = key.currency0;
-            swapAmount = delta.amount0();
+        if (feeAmount > 0) {
+            poolManager.take(key.currency0, address(this), feeAmount);
+            vault.receiveInstance{value: feeAmount}(key.currency0, feeAmount, sender);
+            emit AlignmentFeeCollected(feeAmount, sender);
+            return (IHooks.afterSwap.selector, feeAmount.toInt128());
         }
 
-        // Get absolute value of swap amount
-        if (swapAmount < 0) swapAmount = -swapAmount;
-
-        // Calculate tax amount
-        uint256 taxAmount = (uint128(swapAmount) * taxRateBips) / 10000;
-
-        if (taxAmount > 0) {
-            // ENFORCE: Only accept ETH/WETH taxes
-            address token = Currency.unwrap(taxCurrency);
-            require(
-                token == weth || token == address(0),
-                "Hook only accepts ETH/WETH taxes - pool must be ETH/WETH paired"
-            );
-
-            // Take tokens from the pool manager
-            poolManager.take(taxCurrency, address(this), taxAmount);
-
-            // Send tax directly to vault
-            vault.receiveInstance{value: taxAmount}(taxCurrency, taxAmount, sender);
-
-            emit SwapTaxed(sender, taxCurrency, taxAmount, sender);
-
-            // Return the tax amount as positive delta
-            return taxAmount.toInt128();
-        }
-
-        return 0;
+        return (IHooks.afterSwap.selector, int128(0));
     }
 
-    function setTaxRate(uint256 _rate) external onlyOwner {
-        require(_rate <= 10000, "Rate too high");
-        taxRateBips = _rate;
-        emit TaxRateUpdated(_rate);
+    /// @dev MIRRORS production setLpFeeRate exactly
+    function setLpFeeRate(uint24 _rate) external onlyOwner {
+        require(_rate <= LPFeeLibrary.MAX_LP_FEE, "Rate too high");
+        lpFeeRate = _rate;
+        emit LpFeeRateUpdated(_rate);
     }
 }
 
-/**
- * @title MockPoolManager
- * @notice Minimal mock implementation of IPoolManager for testing
- */
+// ========== Mocks ==========
+
 contract MockPoolManager {
     uint256 public takeCount;
     mapping(address => uint256) public tokenBalances;
@@ -860,18 +691,14 @@ contract MockPoolManager {
     }
 
     function settle(Currency currency) external payable {}
-
     function burn(uint256 amount) external {}
 }
 
-/**
- * @title MockVault
- * @notice Minimal mock implementation of UltraAlignmentVault for testing
- */
 contract MockVault {
-    uint256 public lastTaxAmount;
+    uint256 public lastFeeAmount;
     address public lastBenefactor;
-    bool public receivedTax;
+    Currency public lastCurrency;
+    bool public receivedFee;
 
     receive() external payable {}
 
@@ -880,16 +707,13 @@ contract MockVault {
         uint256 amount,
         address benefactor
     ) external payable {
-        lastTaxAmount = amount;
+        lastFeeAmount = amount;
         lastBenefactor = benefactor;
-        receivedTax = true;
+        lastCurrency = currency;
+        receivedFee = true;
     }
 }
 
-/**
- * @title MockRevertingVault
- * @notice Mock vault that always reverts - for testing hook error handling
- */
 contract MockRevertingVault {
     receive() external payable {}
 

@@ -90,7 +90,10 @@ contract ERC404BondingInstanceTest is Test {
             200, // graduationFeeBps (2%)
             100, // polBps (1%)
             address(0xC1EA), // factoryCreator
-            40 // creatorGraduationFeeBps (0.4%)
+            40, // creatorGraduationFeeBps (0.4%)
+            3000, // poolFee
+            60, // tickSpacing
+            1_000_000 ether // unit
         );
 
         vm.stopPrank();
@@ -147,7 +150,7 @@ contract ERC404BondingInstanceTest is Test {
         uint256 fee = (cost * instance.bondingFeeBps()) / 10000;
         uint256 totalWithFee = cost + fee;
         // Should succeed with valid password (inlined verification)
-        instance.buyBonding{value: totalWithFee}(buyAmount, totalWithFee, false, passwordHash1, "");
+        instance.buyBonding{value: totalWithFee}(buyAmount, totalWithFee, false, passwordHash1, "", 0);
         vm.stopPrank();
     }
 
@@ -174,7 +177,7 @@ contract ERC404BondingInstanceTest is Test {
         uint256 cost = instance.calculateCost(buyAmount);
         uint256 fee = (cost * instance.bondingFeeBps()) / 10000;
         uint256 totalWithFee = cost + fee;
-        instance.buyBonding{value: totalWithFee}(buyAmount, totalWithFee, false, bytes32(0), "");
+        instance.buyBonding{value: totalWithFee}(buyAmount, totalWithFee, false, bytes32(0), "", 0);
         vm.stopPrank();
 
         // Now calculate refund
@@ -211,7 +214,7 @@ contract ERC404BondingInstanceTest is Test {
         uint256 fee = (cost * instance.bondingFeeBps()) / 10000;
         uint256 totalWithFee = cost + fee;
 
-        instance.buyBonding{value: totalWithFee}(buyAmount, totalWithFee, false, bytes32(0), "");
+        instance.buyBonding{value: totalWithFee}(buyAmount, totalWithFee, false, bytes32(0), "", 0);
         vm.stopPrank();
 
         assertEq(treasury.balance - treasuryBalanceBefore, fee, "Treasury should receive fee");
@@ -228,7 +231,7 @@ contract ERC404BondingInstanceTest is Test {
         uint256 fee = (cost * instance.bondingFeeBps()) / 10000;
         uint256 totalWithFee = cost + fee;
 
-        instance.buyBonding{value: totalWithFee}(buyAmount, totalWithFee, false, bytes32(0), "");
+        instance.buyBonding{value: totalWithFee}(buyAmount, totalWithFee, false, bytes32(0), "", 0);
         vm.stopPrank();
 
         assertEq(instance.reserve() - reserveBefore, cost, "Reserve should only increase by cost, not fee");
@@ -246,7 +249,7 @@ contract ERC404BondingInstanceTest is Test {
 
         uint256 overpay = 1 ether;
         uint256 balanceBefore = user1.balance;
-        instance.buyBonding{value: totalWithFee + overpay}(buyAmount, totalWithFee + overpay, false, bytes32(0), "");
+        instance.buyBonding{value: totalWithFee + overpay}(buyAmount, totalWithFee + overpay, false, bytes32(0), "", 0);
         uint256 balanceAfter = user1.balance;
 
         assertEq(balanceBefore - balanceAfter, totalWithFee, "Should refund excess beyond totalWithFee");
@@ -262,7 +265,7 @@ contract ERC404BondingInstanceTest is Test {
         uint256 cost = instance.calculateCost(buyAmount);
         // Pass maxCost = cost (without fee) — should revert
         vm.expectRevert("MaxCost exceeded");
-        instance.buyBonding{value: 10 ether}(buyAmount, cost, false, bytes32(0), "");
+        instance.buyBonding{value: 10 ether}(buyAmount, cost, false, bytes32(0), "", 0);
         vm.stopPrank();
     }
 
@@ -289,7 +292,10 @@ contract ERC404BondingInstanceTest is Test {
             0, // 0% graduation fee
             0, // 0% polBps
             address(0xC1EA), // factoryCreator
-            40 // creatorGraduationFeeBps
+            40, // creatorGraduationFeeBps
+            3000, // poolFee
+            60, // tickSpacing
+            1_000_000 ether // unit
         );
         uint256 futureTime = block.timestamp + 1 days;
         zeroFeeInstance.setBondingOpenTime(futureTime);
@@ -305,7 +311,7 @@ contract ERC404BondingInstanceTest is Test {
         vm.startPrank(user1);
         uint256 buyAmount = 1000 * 1e18;
         uint256 cost = zeroFeeInstance.calculateCost(buyAmount);
-        zeroFeeInstance.buyBonding{value: cost}(buyAmount, cost, false, bytes32(0), "");
+        zeroFeeInstance.buyBonding{value: cost}(buyAmount, cost, false, bytes32(0), "", 0);
         vm.stopPrank();
 
         assertEq(treasury.balance, treasuryBefore, "Treasury balance unchanged with 0% fee");
@@ -334,7 +340,10 @@ contract ERC404BondingInstanceTest is Test {
             200, // graduationFeeBps
             100, // polBps
             address(0xC1EA), // factoryCreator
-            40 // creatorGraduationFeeBps
+            40, // creatorGraduationFeeBps
+            3000, // poolFee
+            60, // tickSpacing
+            1_000_000 ether // unit
         );
         uint256 futureTime = block.timestamp + 1 days;
         noTreasuryInstance.setBondingOpenTime(futureTime);
@@ -350,7 +359,7 @@ contract ERC404BondingInstanceTest is Test {
         uint256 fee = (cost * noTreasuryInstance.bondingFeeBps()) / 10000;
         uint256 totalWithFee = cost + fee;
         // Should succeed even without treasury — fee just stays in contract
-        noTreasuryInstance.buyBonding{value: totalWithFee}(buyAmount, totalWithFee, false, bytes32(0), "");
+        noTreasuryInstance.buyBonding{value: totalWithFee}(buyAmount, totalWithFee, false, bytes32(0), "", 0);
         vm.stopPrank();
     }
 
@@ -364,7 +373,7 @@ contract ERC404BondingInstanceTest is Test {
         uint256 fee = (cost * instance.bondingFeeBps()) / 10000;
         uint256 totalWithFee = cost + fee;
 
-        instance.buyBonding{value: totalWithFee}(buyAmount, totalWithFee, false, bytes32(0), "");
+        instance.buyBonding{value: totalWithFee}(buyAmount, totalWithFee, false, bytes32(0), "", 0);
 
         // Refund should equal exact curve cost (not cost+fee)
         uint256 refund = instance.calculateRefund(buyAmount);
@@ -387,7 +396,7 @@ contract ERC404BondingInstanceTest is Test {
 
         vm.expectEmit(true, false, false, true);
         emit ERC404BondingInstance.BondingFeePaid(user1, fee);
-        instance.buyBonding{value: totalWithFee}(buyAmount, totalWithFee, false, bytes32(0), "");
+        instance.buyBonding{value: totalWithFee}(buyAmount, totalWithFee, false, bytes32(0), "", 0);
         vm.stopPrank();
     }
 
@@ -422,7 +431,10 @@ contract ERC404BondingInstanceTest is Test {
             450, // graduationFeeBps (4.5%)
             100, // polBps
             address(0xC1EA), // factoryCreator
-            40 // creatorGraduationFeeBps
+            40, // creatorGraduationFeeBps
+            3000, // poolFee
+            60, // tickSpacing
+            1_000_000 ether // unit
         );
         vm.stopPrank();
 
@@ -451,7 +463,10 @@ contract ERC404BondingInstanceTest is Test {
             0, // 0% graduation fee
             100, // polBps
             address(0xC1EA), // factoryCreator
-            40 // creatorGraduationFeeBps
+            40, // creatorGraduationFeeBps
+            3000, // poolFee
+            60, // tickSpacing
+            1_000_000 ether // unit
         );
         vm.stopPrank();
 
@@ -529,7 +544,10 @@ contract ERC404BondingInstanceTest is Test {
             200, // graduationFeeBps
             250, // polBps (2.5%)
             address(0xC1EA), // factoryCreator
-            40 // creatorGraduationFeeBps
+            40, // creatorGraduationFeeBps
+            3000, // poolFee
+            60, // tickSpacing
+            1_000_000 ether // unit
         );
         vm.stopPrank();
 
@@ -583,7 +601,10 @@ contract ERC404BondingInstanceTest is Test {
             200,
             0, // 0% polBps
             address(0xC1EA), // factoryCreator
-            40 // creatorGraduationFeeBps
+            40, // creatorGraduationFeeBps
+            3000, // poolFee
+            60, // tickSpacing
+            1_000_000 ether // unit
         );
         vm.stopPrank();
 
@@ -617,13 +638,93 @@ contract ERC404BondingInstanceTest is Test {
             200,
             100, // polBps
             address(0xC1EA), // factoryCreator
-            40 // creatorGraduationFeeBps
+            40, // creatorGraduationFeeBps
+            3000, // poolFee
+            60, // tickSpacing
+            1_000_000 ether // unit
         );
         vm.stopPrank();
 
         assertEq(noTreasuryPOL.polBps(), 100, "POL bps stored even without treasury");
         assertEq(noTreasuryPOL.protocolTreasury(), address(0), "Treasury should be zero");
         // POL carve-out is skipped when treasury is address(0) — verified in integration tests
+    }
+
+    // ========================
+    // Deterministic deployLiquidity Tests
+    // ========================
+
+    function test_deployLiquidity_noParams() public {
+        // Verifies deployLiquidity() takes zero arguments and reverts properly
+        // when bonding hasn't started
+        vm.expectRevert("Bonding not configured");
+        instance.deployLiquidity();
+    }
+
+    function test_deployLiquidity_ownerOnlyBeforeFull() public {
+        _activateBonding();
+
+        // Buy some tokens so reserve > 0
+        vm.deal(user1, 10 ether);
+        vm.startPrank(user1);
+        uint256 buyAmount = 1000 * 1e18;
+        uint256 cost = instance.calculateCost(buyAmount);
+        uint256 fee = (cost * instance.bondingFeeBps()) / 10000;
+        instance.buyBonding{value: cost + fee}(buyAmount, cost + fee, false, bytes32(0), "", 0);
+
+        // Now try to deploy liquidity as non-owner
+        vm.expectRevert("Only owner can deploy before maturity/full");
+        instance.deployLiquidity();
+        vm.stopPrank();
+    }
+
+    function test_deployLiquidity_requiresHook() public {
+        // Deploy instance with no hook
+        vm.startPrank(owner);
+        ERC404BondingInstance noHookInstance = new ERC404BondingInstance(
+            "No Hook",
+            "NH",
+            MAX_SUPPLY,
+            LIQUIDITY_RESERVE_PERCENT,
+            curveParams,
+            tierConfig,
+            mockV4PoolManager,
+            address(0), // no hook
+            mockWETH,
+            owner,
+            mockMasterRegistry,
+            address(0xBEEF),
+            owner,
+            "",
+            address(0xFEE),
+            100,
+            200,
+            100,
+            address(0xC1EA),
+            40,
+            3000,
+            60,
+            1_000_000 ether
+        );
+        uint256 futureTime = block.timestamp + 1 days;
+        noHookInstance.setBondingOpenTime(futureTime);
+        // Note: cannot setBondingActive without hook, but deployLiquidity
+        // checks hook independently. Set maturity so it's permissionless.
+        noHookInstance.setBondingMaturityTime(futureTime + 1);
+        vm.stopPrank();
+        vm.warp(futureTime + 1);
+
+        vm.prank(owner);
+        vm.expectRevert("Hook not set");
+        noHookInstance.deployLiquidity();
+    }
+
+    function test_deployLiquidity_requiresReserve() public {
+        _activateBonding();
+        // Instance has no reserve (no buys happened), so reserve == 0
+        vm.prank(owner);
+        vm.expectRevert("No reserve");
+        instance.deployLiquidity();
     }
 }
 

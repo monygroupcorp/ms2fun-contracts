@@ -23,12 +23,14 @@ contract UltraAlignmentHookFactory is Ownable, ReentrancyGuard {
         address indexed hook,
         address indexed poolManager,
         address indexed vault,
-        address creator
+        address creator,
+        uint256 hookFeeBips
     );
 
     event FactoryAuthorized(address indexed factory);
     event FactoryDeauthorized(address indexed factory);
     event HookCreationFeeUpdated(uint256 newFee);
+    event HookTemplateUpdated(address indexed oldTemplate, address indexed newTemplate);
 
     constructor(address _hookTemplate) {
         _initializeOwner(msg.sender);
@@ -52,7 +54,9 @@ contract UltraAlignmentHookFactory is Ownable, ReentrancyGuard {
         address wethAddr,
         address creator,
         bool isCanonical,
-        bytes32 salt
+        bytes32 salt,
+        uint256 hookFeeBips,
+        uint24 initialLpFeeRate
     ) external payable nonReentrant returns (address hook) {
         require(msg.value >= hookCreationFee, "Insufficient fee");
         require(poolManager != address(0), "Invalid pool manager");
@@ -61,11 +65,14 @@ contract UltraAlignmentHookFactory is Ownable, ReentrancyGuard {
         require(creator != address(0), "Invalid creator");
 
         // Deploy new hook instance using CREATE2 for deterministic address
+        // Hook owner is always the protocol (hook factory owner), not the artist
         hook = address(new UltraAlignmentV4Hook{salt: salt}(
             IPoolManager(poolManager),
             IAlignmentVault(payable(vault)),
             wethAddr,
-            creator
+            owner(),
+            hookFeeBips,
+            initialLpFeeRate
         ));
 
         // Register hook (vault is trustless and doesn't require authorization)
@@ -76,7 +83,7 @@ contract UltraAlignmentHookFactory is Ownable, ReentrancyGuard {
             payable(msg.sender).transfer(msg.value - hookCreationFee);
         }
 
-        emit HookCreated(hook, poolManager, vault, msg.sender);
+        emit HookCreated(hook, poolManager, vault, msg.sender, hookFeeBips);
     }
 
     /**
@@ -122,7 +129,9 @@ contract UltraAlignmentHookFactory is Ownable, ReentrancyGuard {
      */
     function setHookTemplate(address _template) external onlyOwner {
         require(_template != address(0), "Invalid template");
+        address oldTemplate = hookTemplate;
         hookTemplate = _template;
+        emit HookTemplateUpdated(oldTemplate, _template);
     }
 }
 

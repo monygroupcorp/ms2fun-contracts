@@ -48,8 +48,8 @@ contract FullWorkflowIntegrationTest is Test {
         execToken.transfer(voter2, 1500e18);
 
         implementation = new MasterRegistryV1();
-        bytes memory initData = abi.encodeWithSelector(
-            MasterRegistryV1.initialize.selector,
+        bytes memory initData = abi.encodeWithSignature(
+            "initialize(address,address)",
             address(execToken),
             owner
         );

@@ -19,8 +19,8 @@ contract HookAddressMinerTest is Test {
 
     // Required flags for UltraAlignmentV4Hook
     uint160 constant REQUIRED_FLAGS = uint160(
-        Hooks.AFTER_SWAP_FLAG | Hooks.AFTER_SWAP_RETURNS_DELTA_FLAG
-    ); // = 0x44
+        Hooks.BEFORE_SWAP_FLAG | Hooks.AFTER_SWAP_FLAG | Hooks.AFTER_SWAP_RETURNS_DELTA_FLAG
+    ); // = 0xC4
 
     // All hook flags
     uint160 constant ALL_HOOK_FLAGS = uint160(
@@ -40,34 +40,35 @@ contract HookAddressMinerTest is Test {
         Hooks.AFTER_REMOVE_LIQUIDITY_RETURNS_DELTA_FLAG
     ); // = 0x3FFF
 
-    uint160 constant FORBIDDEN_FLAGS = ALL_HOOK_FLAGS ^ REQUIRED_FLAGS; // = 0x3FBB
+    uint160 constant FORBIDDEN_FLAGS = ALL_HOOK_FLAGS ^ REQUIRED_FLAGS; // = 0x3F3B
 
     // ========== Flag Constant Tests ==========
 
     function test_flagConstants_areCorrect() public pure {
         // Verify our understanding of the flag values
+        assertEq(uint160(Hooks.BEFORE_SWAP_FLAG), 1 << 7, "BEFORE_SWAP_FLAG should be 1<<7");
         assertEq(uint160(Hooks.AFTER_SWAP_FLAG), 1 << 6, "AFTER_SWAP_FLAG should be 1<<6");
         assertEq(uint160(Hooks.AFTER_SWAP_RETURNS_DELTA_FLAG), 1 << 2, "AFTER_SWAP_RETURNS_DELTA_FLAG should be 1<<2");
 
         // Combined required flags
-        assertEq(REQUIRED_FLAGS, 0x44, "Required flags should be 0x44");
+        assertEq(REQUIRED_FLAGS, 0xC4, "Required flags should be 0xC4");
 
         // All flags should cover bits 0-13
         assertEq(ALL_HOOK_FLAGS, 0x3FFF, "All flags should be 0x3FFF");
 
         // Forbidden flags
-        assertEq(FORBIDDEN_FLAGS, 0x3FBB, "Forbidden flags should be 0x3FBB");
+        assertEq(FORBIDDEN_FLAGS, 0x3F3B, "Forbidden flags should be 0x3F3B");
     }
 
     // ========== Address Validation Tests ==========
 
     function test_hasExactFlags_validAddress() public pure {
-        // An address ending in 0x44 has exactly the right flags
-        address validAddr = address(uint160(0x1234567890123456789012345678901234560044));
+        // An address ending in 0xC4 has exactly the right flags
+        address validAddr = address(uint160(0x12345678901234567890123456789012345600C4));
 
         assertTrue(
             HookAddressMiner.hasExactFlags(validAddr, REQUIRED_FLAGS, FORBIDDEN_FLAGS),
-            "Address ending in 0x44 should be valid"
+            "Address ending in 0xC4 should be valid"
         );
     }
 
@@ -83,8 +84,8 @@ contract HookAddressMinerTest is Test {
     }
 
     function test_hasExactFlags_invalidAddress_missingFlags() public pure {
-        // An address ending in 0x04 only has afterSwapReturnDelta, missing afterSwap
-        address invalidAddr = address(uint160(0x1234567890123456789012345678901234560004));
+        // An address ending in 0x44 only has afterSwap + afterSwapReturnDelta, missing beforeSwap
+        address invalidAddr = address(uint160(0x1234567890123456789012345678901234560044));
 
         assertFalse(
             HookAddressMiner.hasExactFlags(invalidAddr, REQUIRED_FLAGS, FORBIDDEN_FLAGS),
@@ -103,12 +104,12 @@ contract HookAddressMinerTest is Test {
     }
 
     function test_isValidUltraAlignmentHookAddress_valid() public pure {
-        // Test addresses that end in exactly 0x44 (bits 0-13 = 0x0044)
-        // Generate addresses with various upper bits but last 14 bits exactly 0x44
+        // Test addresses that end in exactly 0xC4 (bits 0-13 = 0x00C4)
+        // Generate addresses with various upper bits but last 14 bits exactly 0xC4
         address[] memory validAddrs = new address[](3);
 
-        // Clear last 14 bits and set to exactly 0x44
-        validAddrs[0] = address(uint160(0x44)); // Simple case
+        // Clear last 14 bits and set to exactly 0xC4
+        validAddrs[0] = address(uint160(0xC4)); // Simple case
         validAddrs[1] = address(uint160((uint256(keccak256("test1")) & ~uint256(ALL_HOOK_FLAGS)) | REQUIRED_FLAGS));
         validAddrs[2] = address(uint160((uint256(keccak256("test2")) & ~uint256(ALL_HOOK_FLAGS)) | REQUIRED_FLAGS));
 
@@ -124,9 +125,9 @@ contract HookAddressMinerTest is Test {
         // Test various invalid addresses
         address[] memory invalidAddrs = new address[](5);
         invalidAddrs[0] = address(uint160(0x0000)); // No flags
-        invalidAddrs[1] = address(uint160(0x0040)); // Only afterSwap (missing afterSwapReturnDelta)
-        invalidAddrs[2] = address(uint160(0x0004)); // Only afterSwapReturnDelta (missing afterSwap)
-        invalidAddrs[3] = address(uint160(0x00C4)); // Extra beforeSwap flag (0x80) + required flags
+        invalidAddrs[1] = address(uint160(0x0044)); // Only afterSwap + afterSwapReturnDelta (missing beforeSwap)
+        invalidAddrs[2] = address(uint160(0x0004)); // Only afterSwapReturnDelta
+        invalidAddrs[3] = address(uint160(0x01C4)); // Extra beforeDonate flag + required flags
         invalidAddrs[4] = address(uint160(0x3FFF)); // All flags set
 
         for (uint i = 0; i < invalidAddrs.length; i++) {
@@ -243,13 +244,13 @@ contract HookAddressMinerTest is Test {
     // ========== Flag Decoding Tests ==========
 
     function test_decodeFlags_correctlyIdentifiesFlags() public pure {
-        // Address with afterSwap and afterSwapReturnDelta
-        address validAddr = address(uint160(0x44));
+        // Address with beforeSwap, afterSwap and afterSwapReturnDelta
+        address validAddr = address(uint160(0xC4));
         Hooks.Permissions memory perms = HookAddressMiner.decodeFlags(validAddr);
 
+        assertTrue(perms.beforeSwap, "beforeSwap should be true");
         assertTrue(perms.afterSwap, "afterSwap should be true");
         assertTrue(perms.afterSwapReturnDelta, "afterSwapReturnDelta should be true");
-        assertFalse(perms.beforeSwap, "beforeSwap should be false");
         assertFalse(perms.beforeInitialize, "beforeInitialize should be false");
         assertFalse(perms.afterInitialize, "afterInitialize should be false");
     }

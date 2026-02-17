@@ -31,9 +31,10 @@ import {IHooks} from "v4-core/interfaces/IHooks.sol";
  *   AFTER_REMOVE_LIQUIDITY_RETURNS_DELTA_FLAG = 1 << 0
  *
  * For UltraAlignmentV4Hook, we need:
+ *   - BEFORE_SWAP_FLAG = 0x80 (1 << 7) — dynamic LP fee override
  *   - AFTER_SWAP_FLAG = 0x40 (1 << 6)
  *   - AFTER_SWAP_RETURNS_DELTA_FLAG = 0x04 (1 << 2)
- *   - Combined: 0x44
+ *   - Combined: 0xC4
  *   - All other flags must be 0
  */
 library HookAddressMiner {
@@ -56,10 +57,10 @@ library HookAddressMiner {
     ); // = 0x3FFF (bits 0-13)
 
     /// @notice Hook flags for UltraAlignmentV4Hook
-    /// afterSwap (bit 6) + afterSwapReturnDelta (bit 2)
+    /// beforeSwap (bit 7) + afterSwap (bit 6) + afterSwapReturnDelta (bit 2)
     uint160 constant ULTRA_ALIGNMENT_HOOK_FLAGS = uint160(
-        Hooks.AFTER_SWAP_FLAG | Hooks.AFTER_SWAP_RETURNS_DELTA_FLAG
-    ); // = 0x44
+        Hooks.BEFORE_SWAP_FLAG | Hooks.AFTER_SWAP_FLAG | Hooks.AFTER_SWAP_RETURNS_DELTA_FLAG
+    ); // = 0xC4
 
     /// @notice Flags that must NOT be set for UltraAlignmentV4Hook
     uint160 constant ULTRA_ALIGNMENT_FORBIDDEN_FLAGS = ALL_HOOK_FLAGS ^ ULTRA_ALIGNMENT_HOOK_FLAGS;
@@ -102,7 +103,7 @@ library HookAddressMiner {
 
     /**
      * @notice Find a salt specifically for UltraAlignmentV4Hook deployment
-     * @dev Ensures address has ONLY afterSwap and afterSwapReturnDelta flags set
+     * @dev Ensures address has ONLY beforeSwap, afterSwap, and afterSwapReturnDelta flags set
      * @param deployer The hook factory address
      * @param initCodeHash The keccak256 of hook creation code + constructor args
      * @return salt Valid salt for deployment
@@ -173,7 +174,7 @@ library HookAddressMiner {
 
     /**
      * @notice Check if an address is valid for UltraAlignmentV4Hook
-     * @dev Checks that ONLY afterSwap and afterSwapReturnDelta flags are set
+     * @dev Checks that ONLY beforeSwap, afterSwap, and afterSwapReturnDelta flags are set
      * @param addr The address to validate
      * @return True if the address has exactly the right flags for UltraAlignmentV4Hook
      */
@@ -188,6 +189,8 @@ library HookAddressMiner {
      * @param vault The UltraAlignmentVault address
      * @param weth The WETH address
      * @param owner The hook owner address
+     * @param hookFeeBips The hook fee in basis points
+     * @param initialLpFeeRate The initial LP fee rate
      * @return The keccak256 hash of the full init code
      */
     function computeInitCodeHash(
@@ -195,11 +198,13 @@ library HookAddressMiner {
         address poolManager,
         address vault,
         address weth,
-        address owner
+        address owner,
+        uint256 hookFeeBips,
+        uint24 initialLpFeeRate
     ) internal pure returns (bytes32) {
         return keccak256(abi.encodePacked(
             creationCode,
-            abi.encode(poolManager, vault, weth, owner)
+            abi.encode(poolManager, vault, weth, owner, hookFeeBips, initialLpFeeRate)
         ));
     }
 

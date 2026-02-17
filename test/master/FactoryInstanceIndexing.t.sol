@@ -45,8 +45,8 @@ contract FactoryInstanceIndexingTest is Test {
         execToken.transfer(voter1, 2000e18);
 
         implementation = new MasterRegistryV1();
-        bytes memory initData = abi.encodeWithSelector(
-            MasterRegistryV1.initialize.selector,
+        bytes memory initData = abi.encodeWithSignature(
+            "initialize(address,address)",
             address(execToken),
             owner
         );

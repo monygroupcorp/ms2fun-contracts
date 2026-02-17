@@ -17,8 +17,20 @@ contract DeployERC404Factory is Script {
 
         vm.startBroadcast(deployerPrivateKey);
 
-        ERC404Factory factory = new ERC404Factory(masterRegistry, instanceTemplate, v4PoolManager, weth, creator, creatorFeeBps, creatorGraduationFeeBps);
+        address protocol = vm.envAddress("PROTOCOL");
+        ERC404Factory factory = new ERC404Factory(masterRegistry, instanceTemplate, v4PoolManager, weth, protocol, creator, creatorFeeBps, creatorGraduationFeeBps);
         console.log("ERC404Factory deployed at:", address(factory));
+
+        // Set up default graduation profile (profileId = 1)
+        factory.setProfile(1, ERC404Factory.GraduationProfile({
+            targetETH: 15 ether,
+            unitPerNFT: 1_000_000,
+            poolFee: 3000,
+            tickSpacing: 60,
+            liquidityReserveBps: 1000,
+            active: true
+        }));
+        console.log("Default graduation profile set (profileId=1)");
 
         vm.stopBroadcast();
     }

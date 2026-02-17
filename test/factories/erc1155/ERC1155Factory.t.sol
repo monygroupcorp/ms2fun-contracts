@@ -251,7 +251,7 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
         ERC1155Instance instanceContract = ERC1155Instance(instance);
         
         // Mint 5 tokens
-        instanceContract.mint{value: 0.5 ether}(1, 5, "");
+        instanceContract.mint{value: 0.5 ether}(1, 5, "", 0);
 
         assertEq(instanceContract.balanceOf(minter1, 1), 5);
         ERC1155Instance.Edition memory edition = instanceContract.getEdition(1);
@@ -288,17 +288,17 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
         ERC1155Instance instanceContract = ERC1155Instance(instance);
         
         // Mint 5 tokens
-        instanceContract.mint{value: 1 ether}(1, 5, "");
+        instanceContract.mint{value: 1 ether}(1, 5, "", 0);
         assertEq(instanceContract.balanceOf(minter1, 1), 5);
         ERC1155Instance.Edition memory edition1 = instanceContract.getEdition(1);
         assertEq(edition1.minted, 5);
 
         // Try to mint 6 more (would exceed supply)
         vm.expectRevert("Exceeds supply");
-        instanceContract.mint{value: 1.2 ether}(1, 6, "");
+        instanceContract.mint{value: 1.2 ether}(1, 6, "", 0);
 
         // Mint remaining 5
-        instanceContract.mint{value: 1 ether}(1, 5, "");
+        instanceContract.mint{value: 1 ether}(1, 5, "", 0);
         ERC1155Instance.Edition memory edition2 = instanceContract.getEdition(1);
         assertEq(edition2.minted, 10);
         
@@ -337,7 +337,7 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
         assertEq(price1, 0.1 ether);
         
         // Mint 1 token
-        instanceContract.mint{value: 0.2 ether}(1, 1, "");
+        instanceContract.mint{value: 0.2 ether}(1, 1, "", 0);
         
         // Price should increase for next mint
         uint256 price2 = instanceContract.getCurrentPrice(1);
@@ -376,7 +376,8 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
         instanceContract.mint{value: 0.1 ether}(
             1,
             1,
-            "Hello from minter!"
+            "Hello from minter!",
+            0
         );
 
         // Check message count in global registry
@@ -411,9 +412,9 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
         
         vm.startPrank(minter1);
         ERC1155Instance instanceContract = ERC1155Instance(instance);
-        instanceContract.mint{value: 1 ether}(1, 1, "");
+        instanceContract.mint{value: 1 ether}(1, 1, "", 0);
         vm.stopPrank();
-        
+
         uint256 balanceBefore = address(vault).balance;
         uint256 creatorBalanceBefore = creator.balance;
         
@@ -459,11 +460,11 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
         
         vm.startPrank(minter1);
         ERC1155Instance instanceContract = ERC1155Instance(instance);
-        instanceContract.mint{value: 0.1 ether}(1, 1, "Message 1");
+        instanceContract.mint{value: 0.1 ether}(1, 1, "Message 1", 0);
         vm.stopPrank();
 
         vm.startPrank(minter2);
-        instanceContract.mint{value: 0.1 ether}(1, 1, "Message 2");
+        instanceContract.mint{value: 0.1 ether}(1, 1, "Message 2", 0);
         vm.stopPrank();
         
         // Verify message count (messages are now event-only)
@@ -753,7 +754,7 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
         
         vm.startPrank(minter1);
         ERC1155Instance instanceContract = ERC1155Instance(instance);
-        instanceContract.mint{value: 0.5 ether}(1, 5, "");
+        instanceContract.mint{value: 0.5 ether}(1, 5, "", 0);
         vm.stopPrank();
 
         (

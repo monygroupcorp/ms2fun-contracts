@@ -34,7 +34,8 @@ contract UltraAlignmentHookFactoryTest is Test {
         address indexed hook,
         address indexed poolManager,
         address indexed vault,
-        address creator
+        address creator,
+        uint256 hookFeeBips
     );
 
     event FactoryAuthorized(address indexed factory);
@@ -96,7 +97,9 @@ contract UltraAlignmentHookFactoryTest is Test {
             wethAddr,
             hookCreator,
             true,
-            bytes32(0)
+            bytes32(0),
+            100,
+            3000
         );
     }
 
@@ -110,7 +113,9 @@ contract UltraAlignmentHookFactoryTest is Test {
             wethAddr,
             hookCreator,
             true,
-            bytes32(0)
+            bytes32(0),
+            100,
+            3000
         );
     }
 
@@ -124,7 +129,9 @@ contract UltraAlignmentHookFactoryTest is Test {
             address(0),
             hookCreator,
             true,
-            bytes32(0)
+            bytes32(0),
+            100,
+            3000
         );
     }
 
@@ -138,7 +145,9 @@ contract UltraAlignmentHookFactoryTest is Test {
             wethAddr,
             address(0),
             true,
-            bytes32(0)
+            bytes32(0),
+            100,
+            3000
         );
     }
 
@@ -155,7 +164,9 @@ contract UltraAlignmentHookFactoryTest is Test {
             wethAddr,
             hookCreator,
             true,
-            bytes32(0)
+            bytes32(0),
+            100,
+            3000
         );
     }
 
@@ -169,7 +180,9 @@ contract UltraAlignmentHookFactoryTest is Test {
             wethAddr,
             hookCreator,
             true,
-            bytes32(0)
+            bytes32(0),
+            100,
+            3000
         );
     }
 

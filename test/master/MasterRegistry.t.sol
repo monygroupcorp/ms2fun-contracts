@@ -1,51 +1,85 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import {Test, console} from "forge-std/Test.sol";
+import {Test} from "forge-std/Test.sol";
 import {MasterRegistryV1} from "../../src/master/MasterRegistryV1.sol";
-import {MasterRegistry} from "../../src/master/MasterRegistry.sol";
+import {IMasterRegistry} from "../../src/master/interfaces/IMasterRegistry.sol";
 
-contract MasterRegistryTest is Test {
-    MasterRegistryV1 public implementation;
-    MasterRegistry public proxy;
-    address public execToken;
-    address public owner;
-
-    function setUp() public {
-        owner = address(this);
-        execToken = address(0x123); // Mock EXEC token
-
-        // Deploy implementation
-        implementation = new MasterRegistryV1();
-
-        // Deploy proxy with exec token for governance
-        bytes memory initData = abi.encodeWithSelector(
-            MasterRegistryV1.initialize.selector,
-            execToken,
-            owner
-        );
-        proxy = new MasterRegistry(address(implementation), initData);
-    }
-
-    function test_Initialization() public {
-        // Test initialization
-        assertEq(MasterRegistryV1(address(proxy)).owner(), owner);
-    }
-
-    function test_ApplyForFactory() public {
-        // Test factory application
-        address factory = address(0x456);
-        bytes32[] memory features = new bytes32[](0);
-        
-        vm.deal(address(this), 0.1 ether);
-        MasterRegistryV1(address(proxy)).applyForFactory{value: 0.1 ether}(
-            factory,
-            "ERC404",
-            "Test Factory",
-            "Test Factory Display",
-            "https://example.com/metadata",
-            features
-        );
+contract MockFactory {
+    address public creator;
+    address public protocol;
+    constructor(address _creator, address _protocol) {
+        creator = _creator;
+        protocol = _protocol;
     }
 }
 
+contract MockVaultSimple {
+    address public alignmentToken;
+    constructor(address _token) {
+        alignmentToken = _token;
+    }
+}
+
+contract MasterRegistryReworkTest is Test {
+    MasterRegistryV1 public registry;
+    address public daoOwner = makeAddr("dao");
+    address public alice = makeAddr("alice");
+    address public dummyToken = address(0x1234);
+
+    function setUp() public {
+        registry = new MasterRegistryV1();
+        registry.initialize(daoOwner);
+    }
+
+    function test_Initialize_SetsOwner() public view {
+        assertEq(registry.owner(), daoOwner);
+    }
+
+    function test_Initialize_NoDictator() public view {
+        assertEq(registry.dictator(), address(0));
+    }
+
+    function test_RegisterFactory_OwnerOnly() public {
+        MockFactory factory = new MockFactory(alice, daoOwner);
+        vm.prank(daoOwner);
+        registry.registerFactory(address(factory), "ERC404", "Test", "Test Factory", "ipfs://test");
+        assertTrue(registry.isFactoryRegistered(address(factory)));
+    }
+
+    function test_RegisterFactory_RevertIfNotOwner() public {
+        MockFactory factory = new MockFactory(alice, daoOwner);
+        vm.prank(alice);
+        vm.expectRevert("Only owner");
+        registry.registerFactory(address(factory), "ERC404", "Test", "Test Factory", "ipfs://test");
+    }
+
+    function test_RegisterVault_OwnerOnly() public {
+        // Create an alignment target with dummyToken
+        IMasterRegistry.AlignmentAsset[] memory assets = new IMasterRegistry.AlignmentAsset[](1);
+        assets[0] = IMasterRegistry.AlignmentAsset({
+            token: dummyToken,
+            symbol: "DUMMY",
+            info: "",
+            metadataURI: ""
+        });
+
+        vm.prank(daoOwner);
+        uint256 targetId = registry.registerAlignmentTarget("Test Target", "", "", assets);
+
+        // Deploy vault with matching alignment token
+        MockVaultSimple vault = new MockVaultSimple(dummyToken);
+
+        vm.prank(daoOwner);
+        registry.registerVault(address(vault), "Test Vault", "ipfs://test", targetId);
+        assertTrue(registry.isVaultRegistered(address(vault)));
+    }
+
+    function test_RegisterVault_RevertIfNotOwner() public {
+        // Revert happens at "Only owner" check before target validation, so targetId 0 is fine
+        MockVaultSimple vault = new MockVaultSimple(dummyToken);
+        vm.prank(alice);
+        vm.expectRevert("Only owner");
+        registry.registerVault(address(vault), "Test Vault", "ipfs://test", 0);
+    }
+}

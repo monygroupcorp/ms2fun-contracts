@@ -9,8 +9,7 @@ import {MetadataUtils} from "../shared/libraries/MetadataUtils.sol";
 import {IFactoryInstance} from "../interfaces/IFactoryInstance.sol";
 import {IFactory} from "../interfaces/IFactory.sol";
 import {VaultRegistry} from "../registry/VaultRegistry.sol";
-import {FactoryApprovalGovernance} from "../governance/FactoryApprovalGovernance.sol";
-import {VaultApprovalGovernance} from "../governance/VaultApprovalGovernance.sol";
+// Governance imports removed - DAO owner model replaces dictator+governance
 import {GlobalMessageRegistry} from "../registry/GlobalMessageRegistry.sol";
 
 /**
@@ -28,7 +27,6 @@ import {GlobalMessageRegistry} from "../registry/GlobalMessageRegistry.sol";
  *
  * Additional Modules:
  * - Vault/hook registry → VaultRegistry
- * - Factory voting → FactoryApprovalGovernance
  */
 contract MasterRegistryV1 is UUPSUpgradeable, Ownable, ReentrancyGuard, IMasterRegistry {
     // Constants
@@ -63,6 +61,14 @@ contract MasterRegistryV1 is UUPSUpgradeable, Ownable, ReentrancyGuard, IMasterR
     mapping(address => bool) public registeredVaults;
     uint256 public vaultRegistrationFee = 0.05 ether;
 
+    // Alignment Target System
+    uint256 public nextAlignmentTargetId;
+    mapping(uint256 => IMasterRegistry.AlignmentTarget) public alignmentTargets;
+    mapping(uint256 => IMasterRegistry.AlignmentAsset[]) internal alignmentTargetAssets;
+    mapping(uint256 => address[]) public alignmentTargetAmbassadors;
+    mapping(uint256 => mapping(address => bool)) internal _isAmbassador;
+    mapping(address => uint256[]) public tokenToTargetIds;
+
     // Note: Competitive Rental Queue System has been extracted to FeaturedQueueManager
 
     // Events (FactoryRegistered and InstanceRegistered defined in IMasterRegistry)
@@ -83,6 +89,9 @@ contract MasterRegistryV1 is UUPSUpgradeable, Ownable, ReentrancyGuard, IMasterR
     // Featured Queue Manager Events
     event FeaturedQueueManagerSet(address indexed newManager);
 
+    // Configuration change events (audit fix: missing events)
+    event GlobalMessageRegistrySet(address indexed newRegistry);
+
     // Note: All competitive queue events are defined in IMasterRegistry interface
 
     // Constructor
@@ -91,108 +100,46 @@ contract MasterRegistryV1 is UUPSUpgradeable, Ownable, ReentrancyGuard, IMasterR
     }
 
     /**
-     * @notice Initialize the contract (supports flexible parameters via low-level call)
-     * @dev When called with 1 param: param is owner, execToken = address(0)
-     *      When called with 2 params: param1 = execToken, param2 = owner
-     *      This function signature must match what tests expect for .selector
+     * @notice Initialize the contract with a single owner (DAO address)
+     * @dev Owner-only model: no dictator, no EXEC token, no governance modules
+     * @param _owner Address of the DAO or owner
      */
-    function initialize(address param1, address param2) public {
-        // Determine which signature was used based on parameter validity
-        // If param2 is address(0), assume single-parameter call where param1 = owner
-        if (param2 == address(0)) {
-            _initializeWithOwner(address(0), param1);
-        } else {
-            // Two-parameter call: param1 = execToken, param2 = owner
-            _initializeWithOwner(param1, param2);
-        }
-    }
-
-    /**
-     * @notice Internal initialize logic
-     */
-    function _initializeWithOwner(address _execToken, address _owner) internal {
+    function initialize(address _owner) public {
         require(!_initialized, "Already initialized");
         require(_owner != address(0), "Invalid owner");
-        require(_execToken != address(0), "EXEC token required");
 
         _initialized = true;
         _setOwner(_owner);
-        dictator = _owner; // Set dictator to owner initially
+        dictator = address(0); // No dictator in owner-only model
         nextFactoryId = 1;
-
-        // Store EXEC token address (now required)
-        execToken = _execToken;
 
         // Initialize vault registration fees
         if (vaultRegistrationFee == 0) {
             vaultRegistrationFee = 0.05 ether;
         }
-
-        // Always create factory governance module (EXEC token is required)
-        FactoryApprovalGovernance gov = new FactoryApprovalGovernance();
-        gov.initialize(_execToken, address(this), _owner);
-        governanceModule = address(gov);
-
-        // Always create vault governance module (EXEC token is required)
-        VaultApprovalGovernance vaultGov = new VaultApprovalGovernance();
-        vaultGov.initialize(_execToken, address(this), _owner);
-        vaultGovernanceModule = address(vaultGov);
-
-        // Note: Competitive queue system is now in FeaturedQueueManager
-    }
-
-    // ============ Dictator Governance Functions ============
-
-    /**
-     * @notice Initiate the abdication process (48-hour timelock)
-     * @dev Only callable by dictator. Starts the countdown to permanent power transfer.
-     */
-    function initiateAbdication() external {
-        require(msg.sender == dictator, "Only dictator");
-        require(dictator != address(0), "Dictator already abdicated");
-        require(abdicationInitiatedAt == 0, "Abdication already initiated");
-
-        abdicationInitiatedAt = block.timestamp;
-        emit AbdicationInitiated(dictator, block.timestamp + ABDICATION_TIMELOCK);
     }
 
     /**
-     * @notice Cancel the abdication process during timelock
-     * @dev Only callable by dictator during the 48-hour window
+     * @notice Legacy 2-param initialize for upgrade compatibility
+     * @dev Ignores param1 (was execToken), delegates to single-param initialize
      */
-    function cancelAbdication() external {
-        require(msg.sender == dictator, "Only dictator");
-        require(abdicationInitiatedAt > 0, "Abdication not initiated");
-        require(block.timestamp < abdicationInitiatedAt + ABDICATION_TIMELOCK, "Timelock elapsed");
-
-        abdicationInitiatedAt = 0;
-        emit AbdicationCancelled(dictator, block.timestamp);
+    function initialize(address param1, address param2) public {
+        // Legacy wrapper: param1 was execToken (ignored), param2 is owner
+        // If param2 is address(0), assume single-parameter style where param1 = owner
+        if (param2 == address(0)) {
+            initialize(param1);
+        } else {
+            initialize(param2);
+        }
     }
 
-    /**
-     * @notice Finalize abdication and permanently transfer power to governance
-     * @dev Only callable by dictator after 48-hour timelock. Irreversible.
-     */
-    function finalizeAbdication() external {
-        require(msg.sender == dictator, "Only dictator");
-        require(abdicationInitiatedAt > 0, "Abdication not initiated");
-        require(block.timestamp >= abdicationInitiatedAt + ABDICATION_TIMELOCK, "Timelock not elapsed");
-
-        // Verify governance succession is ready
-        require(governanceModule != address(0), "Factory governance not set");
-        require(vaultGovernanceModule != address(0), "Vault governance not set");
-        require(execToken != address(0), "EXEC token not set");
-
-        address formerDictator = dictator;
-        dictator = address(0);
-
-        emit AbdicationFinalized(block.timestamp, governanceModule, vaultGovernanceModule);
-    }
+    // ============ Dictator Governance Functions (REMOVED) ============
+    // initiateAbdication, cancelAbdication, finalizeAbdication removed in owner-only rework
+    // State variable slots (dictator, abdicationInitiatedAt, ABDICATION_TIMELOCK) kept for storage layout compatibility
 
     /**
      * @notice Register a factory (direct registration, admin only)
-     * @dev In Phase 1, factories are pre-approved and registered by admin.
-     *      In Phase 2, factory approval will be via FactoryApprovalGovernance.
+     * @dev Factories are registered by the owner (DAO or admin).
      *
      * @param factoryAddress Address of the factory contract
      * @param contractType Type of contract (e.g., "ERC404", "ERC1155")
@@ -242,7 +189,7 @@ contract MasterRegistryV1 is UUPSUpgradeable, Ownable, ReentrancyGuard, IMasterR
         bytes32[] memory features,
         address creator
     ) internal {
-        require(msg.sender == dictator || msg.sender == governanceModule, "Only dictator or governance");
+        require(msg.sender == owner(), "Only owner");
         require(factoryAddress != address(0), "Invalid factory address");
         require(bytes(contractType).length > 0, "Invalid contract type");
         require(!registeredFactories[factoryAddress], "Factory already registered");
@@ -403,20 +350,23 @@ contract MasterRegistryV1 is UUPSUpgradeable, Ownable, ReentrancyGuard, IMasterR
     function registerVault(
         address vault,
         string memory name,
-        string memory metadataURI
-    ) external payable override {
-        // Allow dictator for direct registration OR vault governance module after approval
-        require(msg.sender == dictator || msg.sender == vaultGovernanceModule, "Only dictator or vault governance");
+        string memory metadataURI,
+        uint256 targetId
+    ) external override {
+        require(msg.sender == owner(), "Only owner");
         require(vault != address(0), "Invalid vault address");
         require(bytes(name).length > 0 && bytes(name).length <= 256, "Invalid name");
         require(!registeredVaults[vault], "Vault already registered");
         require(MetadataUtils.isValidURI(metadataURI), "Invalid metadata URI");
         require(vault.code.length > 0, "Vault must be a contract");
 
-        // Fee only required for direct registration (governance handles fees separately)
-        if (msg.sender != vaultGovernanceModule) {
-            require(msg.value >= vaultRegistrationFee, "Insufficient registration fee");
-        }
+        // Alignment target enforcement
+        require(alignmentTargets[targetId].approvedAt > 0, "Target not found");
+        require(alignmentTargets[targetId].active, "Target not active");
+
+        // Verify vault's alignment token is in target's asset list
+        address vaultToken = _getVaultAlignmentToken(vault);
+        require(_isTokenInTarget(targetId, vaultToken), "Token not in target assets");
 
         registeredVaults[vault] = true;
 
@@ -426,16 +376,11 @@ contract MasterRegistryV1 is UUPSUpgradeable, Ownable, ReentrancyGuard, IMasterR
             name: name,
             metadataURI: metadataURI,
             active: true,
-            registeredAt: block.timestamp
+            registeredAt: block.timestamp,
+            targetId: targetId
         });
 
-        // Refund excess (only for direct registration)
-        if (msg.sender != vaultGovernanceModule && msg.value > vaultRegistrationFee) {
-            (bool success, ) = payable(msg.sender).call{value: msg.value - vaultRegistrationFee}("");
-            require(success, "Refund failed");
-        }
-
-        emit VaultRegistered(vault, msg.sender, name, vaultRegistrationFee);
+        emit VaultRegistered(vault, msg.sender, name, targetId);
     }
 
     function getVaultInfo(address vault) external view override returns (VaultInfo memory) {
@@ -453,100 +398,144 @@ contract MasterRegistryV1 is UUPSUpgradeable, Ownable, ReentrancyGuard, IMasterR
         emit VaultDeactivated(vault);
     }
 
-    // ============ Vault Governance ============
+    // ============ Alignment Target Functions ============
 
-    /**
-     * @notice Set factory governance module address
-     * @dev Only owner can set the factory governance module
-     * @param _governanceModule Address of the FactoryApprovalGovernance contract
-     */
-    function setGovernanceModule(address _governanceModule) external onlyOwner {
-        require(_governanceModule != address(0), "Invalid governance module");
-        governanceModule = _governanceModule;
-        emit GovernanceModuleSet(_governanceModule);
-    }
-
-    /**
-     * @notice Set vault governance module address
-     * @dev Only owner can set the vault governance module
-     * @param _vaultGovernanceModule Address of the VaultApprovalGovernance contract
-     */
-    function setVaultGovernanceModule(address _vaultGovernanceModule) external onlyOwner {
-        require(_vaultGovernanceModule != address(0), "Invalid governance module");
-        vaultGovernanceModule = _vaultGovernanceModule;
-        emit VaultGovernanceModuleSet(_vaultGovernanceModule);
-    }
-
-    /**
-     * @notice Apply for vault approval via governance
-     * @dev Forwards application to VaultApprovalGovernance module
-     * @param vaultAddress Address of the vault contract
-     * @param vaultType Type of vault (e.g., "UniswapV4LP", "AaveYield")
-     * @param title Human-readable title
-     * @param displayTitle Display title for UI
-     * @param metadataURI URI for metadata
-     * @param features Array of feature identifiers
-     */
-    function applyForVault(
-        address vaultAddress,
-        string memory vaultType,
+    function registerAlignmentTarget(
         string memory title,
-        string memory displayTitle,
+        string memory description,
         string memory metadataURI,
-        bytes32[] memory features
-    ) external payable {
-        require(vaultGovernanceModule != address(0), "Vault governance module not set");
-        IVaultApprovalGovernance(vaultGovernanceModule).submitApplicationWithApplicant{value: msg.value}(
-            vaultAddress,
-            vaultType,
-            title,
-            displayTitle,
-            metadataURI,
-            features,
-            msg.sender
-        );
-    }
+        IMasterRegistry.AlignmentAsset[] memory assets
+    ) external override returns (uint256) {
+        require(msg.sender == owner(), "Only owner");
+        require(bytes(title).length > 0 && bytes(title).length <= 256, "Invalid title");
+        require(assets.length > 0, "Must have at least one asset");
 
-    /**
-     * @notice Register an approved vault (called by VaultApprovalGovernance after approval)
-     * @dev Only callable by vault governance module
-     * @param vaultAddress Address of the approved vault
-     * @param vaultType Type of vault
-     * @param title Vault title
-     * @param displayTitle Display title
-     * @param metadataURI Metadata URI
-     * @param features Feature identifiers
-     * @param creator Original applicant address
-     */
-    function registerApprovedVault(
-        address vaultAddress,
-        string memory vaultType,
-        string memory title,
-        string memory displayTitle,
-        string memory metadataURI,
-        bytes32[] memory features,
-        address creator
-    ) external {
-        require(msg.sender == vaultGovernanceModule, "Only vault governance module");
-        require(vaultAddress != address(0), "Invalid vault address");
-        require(!registeredVaults[vaultAddress], "Vault already registered");
-        require(MetadataUtils.isValidURI(metadataURI), "Invalid metadata URI");
-        require(vaultAddress.code.length > 0, "Vault must be a contract");
+        uint256 targetId = ++nextAlignmentTargetId;
 
-        // Register the vault
-        registeredVaults[vaultAddress] = true;
-
-        vaultInfo[vaultAddress] = IMasterRegistry.VaultInfo({
-            vault: vaultAddress,
-            creator: creator,
-            name: title,
+        alignmentTargets[targetId] = IMasterRegistry.AlignmentTarget({
+            id: targetId,
+            title: title,
+            description: description,
             metadataURI: metadataURI,
-            active: true,
-            registeredAt: block.timestamp
+            approvedAt: block.timestamp,
+            active: true
         });
 
-        emit VaultRegistered(vaultAddress, creator, title, 0);
+        for (uint256 i = 0; i < assets.length; i++) {
+            require(assets[i].token != address(0), "Invalid asset token");
+            alignmentTargetAssets[targetId].push(assets[i]);
+            tokenToTargetIds[assets[i].token].push(targetId);
+        }
+
+        emit AlignmentTargetRegistered(targetId, title);
+        return targetId;
     }
+
+    function getAlignmentTarget(uint256 targetId) external view override returns (IMasterRegistry.AlignmentTarget memory) {
+        require(alignmentTargets[targetId].approvedAt > 0, "Target not found");
+        return alignmentTargets[targetId];
+    }
+
+    function getAlignmentTargetAssets(uint256 targetId) external view override returns (IMasterRegistry.AlignmentAsset[] memory) {
+        require(alignmentTargets[targetId].approvedAt > 0, "Target not found");
+        return alignmentTargetAssets[targetId];
+    }
+
+    function isAlignmentTargetActive(uint256 targetId) external view override returns (bool) {
+        return alignmentTargets[targetId].active;
+    }
+
+    function isApprovedAlignmentToken(uint256 targetId, address token) external view override returns (bool) {
+        IMasterRegistry.AlignmentAsset[] storage assets = alignmentTargetAssets[targetId];
+        for (uint256 i = 0; i < assets.length; i++) {
+            if (assets[i].token == token) return true;
+        }
+        return false;
+    }
+
+    function deactivateAlignmentTarget(uint256 targetId) external override {
+        require(msg.sender == owner(), "Only owner");
+        require(alignmentTargets[targetId].approvedAt > 0, "Target not found");
+        alignmentTargets[targetId].active = false;
+        emit AlignmentTargetDeactivated(targetId);
+    }
+
+    function updateAlignmentTarget(
+        uint256 targetId,
+        string memory description,
+        string memory metadataURI
+    ) external override {
+        require(msg.sender == owner(), "Only owner");
+        require(alignmentTargets[targetId].approvedAt > 0, "Target not found");
+
+        alignmentTargets[targetId].description = description;
+        alignmentTargets[targetId].metadataURI = metadataURI;
+
+        emit AlignmentTargetUpdated(targetId);
+    }
+
+    // ============ Ambassador Functions ============
+
+    function addAmbassador(uint256 targetId, address ambassador) external override {
+        require(msg.sender == owner(), "Only owner");
+        require(alignmentTargets[targetId].approvedAt > 0, "Target not found");
+        require(ambassador != address(0), "Invalid ambassador");
+        require(!_isAmbassador[targetId][ambassador], "Already ambassador");
+
+        _isAmbassador[targetId][ambassador] = true;
+        alignmentTargetAmbassadors[targetId].push(ambassador);
+
+        emit AmbassadorAdded(targetId, ambassador);
+    }
+
+    function removeAmbassador(uint256 targetId, address ambassador) external override {
+        require(msg.sender == owner(), "Only owner");
+        require(_isAmbassador[targetId][ambassador], "Not ambassador");
+
+        _isAmbassador[targetId][ambassador] = false;
+
+        // Remove from array (swap and pop)
+        address[] storage ambassadors = alignmentTargetAmbassadors[targetId];
+        for (uint256 i = 0; i < ambassadors.length; i++) {
+            if (ambassadors[i] == ambassador) {
+                ambassadors[i] = ambassadors[ambassadors.length - 1];
+                ambassadors.pop();
+                break;
+            }
+        }
+
+        emit AmbassadorRemoved(targetId, ambassador);
+    }
+
+    function getAmbassadors(uint256 targetId) external view override returns (address[] memory) {
+        return alignmentTargetAmbassadors[targetId];
+    }
+
+    function isAmbassador(uint256 targetId, address account) external view override returns (bool) {
+        return _isAmbassador[targetId][account];
+    }
+
+    // ============ Internal Helpers ============
+
+    function _getVaultAlignmentToken(address vault) internal view returns (address) {
+        (bool success, bytes memory data) = vault.staticcall(
+            abi.encodeWithSignature("alignmentToken()")
+        );
+        require(success && data.length >= 32, "Vault has no alignment token");
+        return abi.decode(data, (address));
+    }
+
+    function _isTokenInTarget(uint256 targetId, address token) internal view returns (bool) {
+        IMasterRegistry.AlignmentAsset[] storage assets = alignmentTargetAssets[targetId];
+        for (uint256 i = 0; i < assets.length; i++) {
+            if (assets[i].token == token) return true;
+        }
+        return false;
+    }
+
+    // ============ Governance Functions (REMOVED) ============
+    // setGovernanceModule, setVaultGovernanceModule, applyForVault, registerApprovedVault
+    // removed in owner-only rework. State variable slots kept for storage layout compatibility.
 
     // ============ Global Message Registry ============
 
@@ -558,6 +547,7 @@ contract MasterRegistryV1 is UUPSUpgradeable, Ownable, ReentrancyGuard, IMasterR
     function setGlobalMessageRegistry(address _globalMessageRegistry) external onlyOwner {
         require(_globalMessageRegistry != address(0), "Invalid registry address");
         globalMessageRegistry = _globalMessageRegistry;
+        emit GlobalMessageRegistrySet(_globalMessageRegistry);
     }
 
     /**
@@ -586,120 +576,12 @@ contract MasterRegistryV1 is UUPSUpgradeable, Ownable, ReentrancyGuard, IMasterR
     // UUPS Upgrade Authorization
     function _authorizeUpgrade(address newImplementation) internal override onlyOwner {}
 
-    // Phase 2 Features - Factory Application (Governance)
-
-    function applyForFactory(
-        address factoryAddress,
-        string memory contractType,
-        string memory title,
-        string memory displayTitle,
-        string memory metadataURI,
-        bytes32[] memory features
-    ) external payable override {
-        require(governanceModule != address(0), "Governance module not set");
-        IFactoryApprovalGovernance(governanceModule).submitApplicationWithApplicant{value: msg.value}(
-            factoryAddress,
-            contractType,
-            title,
-            displayTitle,
-            metadataURI,
-            features,
-            msg.sender
-        );
-    }
-
-
-    function getFactoryApplication(address factoryAddress) external view override returns (FactoryApplication memory) {
-        require(governanceModule != address(0), "Governance module not set");
-
-        // Get application data from governance module
-        (
-            address applicant,
-            string memory contractType,
-            string memory title,
-            ,  // phase
-            uint256 phaseDeadline,
-            uint256 cumulativeYayRequired,
-            uint256 roundCount
-        ) = IFactoryApprovalGovernance(governanceModule).getApplication(factoryAddress);
-
-        // For backwards compatibility, we approximate vote counts from latest round
-        uint256 approvalVotes = 0;
-        uint256 rejectionVotes = 0;
-        ApplicationStatus status = ApplicationStatus.Pending;
-
-        if (roundCount > 0) {
-            // This is a simplified view - actual voting data is in rounds
-            // For detailed info, query FactoryApprovalGovernance directly
-            approvalVotes = cumulativeYayRequired;
-        }
-
-        // Convert to IMasterRegistry.FactoryApplication
-        return FactoryApplication({
-            factoryAddress: factoryAddress,
-            applicant: applicant,
-            contractType: contractType,
-            title: title,
-            displayTitle: title,
-            metadataURI: "",
-            features: new bytes32[](0),
-            status: status,
-            applicationFee: 0.1 ether,
-            createdAt: phaseDeadline,
-            totalVotes: approvalVotes + rejectionVotes,
-            approvalVotes: approvalVotes,
-            rejectionVotes: rejectionVotes,
-            rejectionReason: "",
-            verified: false,
-            verificationURI: ""
-        });
-    }
+    // Phase 2 Features - Factory/Vault Application (REMOVED)
+    // applyForFactory, getFactoryApplication removed in owner-only rework.
+    // Factories are now registered directly by DAO owner via registerFactory.
 }
 
-// Interfaces for extension modules
-interface IFactoryApprovalGovernance {
-    function submitApplicationWithApplicant(
-        address factoryAddress,
-        string memory contractType,
-        string memory title,
-        string memory displayTitle,
-        string memory metadataURI,
-        bytes32[] memory features,
-        address applicant
-    ) external payable;
-
-    function getApplication(address factoryAddress) external view returns (
-        address applicant,
-        string memory contractType,
-        string memory title,
-        uint8 phase,
-        uint256 phaseDeadline,
-        uint256 cumulativeYayRequired,
-        uint256 roundCount
-    );
-}
-
-interface IVaultApprovalGovernance {
-    function submitApplicationWithApplicant(
-        address vaultAddress,
-        string memory vaultType,
-        string memory title,
-        string memory displayTitle,
-        string memory metadataURI,
-        bytes32[] memory features,
-        address applicant
-    ) external payable;
-
-    function getApplication(address vaultAddress) external view returns (
-        address applicant,
-        string memory vaultType,
-        string memory title,
-        uint8 phase,
-        uint256 phaseDeadline,
-        uint256 cumulativeYayRequired,
-        uint256 roundCount
-    );
-}
+// Governance interfaces removed in owner-only rework
 
 // Data structures (needed by interface)
 struct FactoryInfo {

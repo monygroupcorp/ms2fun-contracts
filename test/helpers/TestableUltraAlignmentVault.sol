@@ -14,7 +14,7 @@ contract TestableUltraAlignmentVault is UltraAlignmentVault {
         address _v2Factory,
         address _v3Factory,
         address _alignmentToken,
-        address _vaultCreator,
+        address _factoryCreator,
         uint256 _creatorYieldCutBps
     )
         UltraAlignmentVault(
@@ -25,7 +25,7 @@ contract TestableUltraAlignmentVault is UltraAlignmentVault {
             _v2Factory,
             _v3Factory,
             _alignmentToken,
-            _vaultCreator,
+            _factoryCreator,
             _creatorYieldCutBps
         )
     {}

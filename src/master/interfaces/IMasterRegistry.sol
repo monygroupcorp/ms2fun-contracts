@@ -63,6 +63,23 @@ interface IMasterRegistry {
         string metadataURI;
         bool active;
         uint256 registeredAt;
+        uint256 targetId;
+    }
+
+    struct AlignmentTarget {
+        uint256 id;
+        string title;
+        string description;
+        string metadataURI;
+        uint256 approvedAt;
+        bool active;
+    }
+
+    struct AlignmentAsset {
+        address token;
+        string symbol;
+        string info;
+        string metadataURI;
     }
 
     struct InstanceInfo {
@@ -153,20 +170,19 @@ interface IMasterRegistry {
         address indexed vault,
         address indexed creator,
         string name,
-        uint256 registrationFee
+        uint256 indexed targetId
     );
 
     event VaultDeactivated(address indexed vault);
 
+    event AlignmentTargetRegistered(uint256 indexed targetId, string title);
+    event AlignmentTargetDeactivated(uint256 indexed targetId);
+    event AlignmentTargetUpdated(uint256 indexed targetId);
+    event AmbassadorAdded(uint256 indexed targetId, address indexed ambassador);
+    event AmbassadorRemoved(uint256 indexed targetId, address indexed ambassador);
+
     // Functions
-    function applyForFactory(
-        address factoryAddress,
-        string memory contractType,
-        string memory title,
-        string memory displayTitle,
-        string memory metadataURI,
-        bytes32[] memory features
-    ) external payable;
+    // applyForFactory removed in owner-only rework
 
     function registerInstance(
         address instance,
@@ -177,9 +193,7 @@ interface IMasterRegistry {
         address vault
     ) external;
 
-    function getFactoryApplication(
-        address factoryAddress
-    ) external view returns (FactoryApplication memory);
+    // getFactoryApplication removed in owner-only rework
 
     function getFactoryInfo(
         uint256 factoryId
@@ -199,14 +213,44 @@ interface IMasterRegistry {
     function registerVault(
         address vault,
         string memory name,
-        string memory metadataURI
-    ) external payable;
+        string memory metadataURI,
+        uint256 targetId
+    ) external;
 
     function getVaultInfo(address vault) external view returns (VaultInfo memory);
 
     function isVaultRegistered(address vault) external view returns (bool);
 
     function deactivateVault(address vault) external;
+
+    // Alignment Target Functions
+    function registerAlignmentTarget(
+        string memory title,
+        string memory description,
+        string memory metadataURI,
+        AlignmentAsset[] memory assets
+    ) external returns (uint256);
+
+    function getAlignmentTarget(uint256 targetId) external view returns (AlignmentTarget memory);
+
+    function getAlignmentTargetAssets(uint256 targetId) external view returns (AlignmentAsset[] memory);
+
+    function isAlignmentTargetActive(uint256 targetId) external view returns (bool);
+
+    function isApprovedAlignmentToken(uint256 targetId, address token) external view returns (bool);
+
+    function deactivateAlignmentTarget(uint256 targetId) external;
+
+    function updateAlignmentTarget(
+        uint256 targetId,
+        string memory description,
+        string memory metadataURI
+    ) external;
+
+    function addAmbassador(uint256 targetId, address ambassador) external;
+    function removeAmbassador(uint256 targetId, address ambassador) external;
+    function getAmbassadors(uint256 targetId) external view returns (address[] memory);
+    function isAmbassador(uint256 targetId, address account) external view returns (bool);
 
     // Fee Configuration
     function vaultRegistrationFee() external view returns (uint256);

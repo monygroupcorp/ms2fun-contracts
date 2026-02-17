@@ -55,6 +55,7 @@ library BondingCurveMath {
         Params memory params,
         uint256 supply
     ) private pure returns (uint256) {
+        require(params.normalizationFactor != 0, "normalizationFactor cannot be zero");
         // Scale down by normalization factor (same as CULTEXEC404)
         uint256 scaledSupplyWad = supply / params.normalizationFactor;
         

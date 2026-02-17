@@ -15,6 +15,7 @@ import {Currency, CurrencyLibrary} from "v4-core/types/Currency.sol";
 import {PoolId, PoolIdLibrary} from "v4-core/types/PoolId.sol";
 import {StateLibrary} from "v4-core/libraries/StateLibrary.sol";
 import {TickMath} from "v4-core/libraries/TickMath.sol";
+import {LPFeeLibrary} from "v4-core/libraries/LPFeeLibrary.sol";
 import {IERC20} from "forge-std/interfaces/IERC20.sol";
 
 /**
@@ -52,8 +53,12 @@ contract V4HookDeploymentTest is ForkTestBase {
 
     // Required flags for UltraAlignmentV4Hook (must be set)
     uint160 constant REQUIRED_FLAGS = uint160(
-        Hooks.AFTER_SWAP_FLAG | Hooks.AFTER_SWAP_RETURNS_DELTA_FLAG
-    ); // = 0x44
+        Hooks.BEFORE_SWAP_FLAG | Hooks.AFTER_SWAP_FLAG | Hooks.AFTER_SWAP_RETURNS_DELTA_FLAG
+    ); // = 0xC4
+
+    // Default hook fee and LP fee for tests
+    uint256 constant DEFAULT_HOOK_FEE_BIPS = 100; // 1%
+    uint24 constant DEFAULT_LP_FEE_RATE = 3000; // 0.3%
 
     // All hook permission flags (bits 0-13)
     uint160 constant ALL_HOOK_FLAGS = uint160(
@@ -136,7 +141,9 @@ contract V4HookDeploymentTest is ForkTestBase {
             address(poolManager),
             address(vault),
             WETH,
-            address(this)
+            address(this),
+            DEFAULT_HOOK_FEE_BIPS,
+            DEFAULT_LP_FEE_RATE
         );
 
         emit log_named_bytes32("Init code hash", initCodeHash);
@@ -150,7 +157,7 @@ contract V4HookDeploymentTest is ForkTestBase {
         emit log_named_bytes32("Found salt", salt);
         emit log_named_address("Predicted address", predictedAddress);
         emit log_named_uint("Address as uint160", uint160(predictedAddress));
-        emit log_named_uint("Required flags (0x44)", REQUIRED_FLAGS);
+        emit log_named_uint("Required flags (0xC4)", REQUIRED_FLAGS);
         emit log_named_uint("Forbidden flags", FORBIDDEN_FLAGS);
         emit log_named_uint("Address & required", uint160(predictedAddress) & REQUIRED_FLAGS);
         emit log_named_uint("Address & forbidden", uint160(predictedAddress) & FORBIDDEN_FLAGS);
@@ -178,6 +185,7 @@ contract V4HookDeploymentTest is ForkTestBase {
 
         // Decode and log all flags for verification
         Hooks.Permissions memory perms = HookAddressMiner.decodeFlags(predictedAddress);
+        assertTrue(perms.beforeSwap, "beforeSwap flag should be set");
         assertTrue(perms.afterSwap, "afterSwap flag should be set");
         assertTrue(perms.afterSwapReturnDelta, "afterSwapReturnDelta flag should be set");
 
@@ -247,7 +255,9 @@ contract V4HookDeploymentTest is ForkTestBase {
             address(poolManager),
             address(vault),
             WETH,
-            address(this)
+            address(this),
+            DEFAULT_HOOK_FEE_BIPS,
+            DEFAULT_LP_FEE_RATE
         );
 
         // Step 2: Mine a valid salt
@@ -269,7 +279,9 @@ contract V4HookDeploymentTest is ForkTestBase {
             WETH,
             address(this),
             true,  // isCanonical
-            salt
+            salt,
+            DEFAULT_HOOK_FEE_BIPS,
+            DEFAULT_LP_FEE_RATE
         );
 
         emit log_named_address("Deployed hook address", deployedHook);
@@ -285,12 +297,13 @@ contract V4HookDeploymentTest is ForkTestBase {
         );
 
         // Step 6: Verify hook state
-        UltraAlignmentV4Hook hook = UltraAlignmentV4Hook(deployedHook);
+        UltraAlignmentV4Hook hook = UltraAlignmentV4Hook(payable(deployedHook));
         assertEq(address(hook.poolManager()), address(poolManager), "PoolManager should be set");
         assertEq(address(hook.vault()), address(vault), "Vault should be set");
         assertEq(hook.weth(), WETH, "WETH should be set");
         assertEq(hook.owner(), address(this), "Owner should be set");
-        assertEq(hook.taxRateBips(), 100, "Default tax rate should be 100 bips");
+        assertEq(hook.hookFeeBips(), DEFAULT_HOOK_FEE_BIPS, "Hook fee should be 100 bips");
+        assertEq(hook.lpFeeRate(), DEFAULT_LP_FEE_RATE, "LP fee rate should be 3000");
 
         emit log_string("");
         emit log_string("[SUCCESS] Hook deployed successfully through factory!");
@@ -318,7 +331,9 @@ contract V4HookDeploymentTest is ForkTestBase {
             address(poolManager),
             address(vault),
             WETH,
-            address(this)
+            address(this),
+            DEFAULT_HOOK_FEE_BIPS,
+            DEFAULT_LP_FEE_RATE
         );
 
         address wouldBeAddress = HookAddressMiner.computeAddress(
@@ -349,7 +364,9 @@ contract V4HookDeploymentTest is ForkTestBase {
             WETH,
             address(this),
             true,
-            invalidSalt
+            invalidSalt,
+            DEFAULT_HOOK_FEE_BIPS,
+            DEFAULT_LP_FEE_RATE
         );
 
         emit log_string("");
@@ -374,11 +391,11 @@ contract V4HookDeploymentTest is ForkTestBase {
         address hook = _deployValidHook();
         emit log_named_address("Hook deployed at", hook);
 
-        // Create pool key with our hook
+        // Create pool key with our hook — dynamic fee since hook overrides LP fee via beforeSwap
         PoolKey memory key = PoolKey({
             currency0: CurrencyLibrary.ADDRESS_ZERO,  // Native ETH
             currency1: Currency.wrap(USDC),
-            fee: 3000,
+            fee: LPFeeLibrary.DYNAMIC_FEE_FLAG,
             tickSpacing: 60,
             hooks: IHooks(hook)
         });
@@ -431,7 +448,7 @@ contract V4HookDeploymentTest is ForkTestBase {
             afterAddLiquidity: false,
             beforeRemoveLiquidity: false,
             afterRemoveLiquidity: false,
-            beforeSwap: false,
+            beforeSwap: true,
             afterSwap: true,
             beforeDonate: false,
             afterDonate: false,
@@ -446,15 +463,18 @@ contract V4HookDeploymentTest is ForkTestBase {
 
         // Log permissions
         emit log_string("Expected permissions:");
+        emit log_named_string("  beforeSwap", expectedPerms.beforeSwap ? "true" : "false");
         emit log_named_string("  afterSwap", expectedPerms.afterSwap ? "true" : "false");
         emit log_named_string("  afterSwapReturnDelta", expectedPerms.afterSwapReturnDelta ? "true" : "false");
 
         emit log_string("");
         emit log_string("Actual permissions (from address):");
+        emit log_named_string("  beforeSwap", actualPerms.beforeSwap ? "true" : "false");
         emit log_named_string("  afterSwap", actualPerms.afterSwap ? "true" : "false");
         emit log_named_string("  afterSwapReturnDelta", actualPerms.afterSwapReturnDelta ? "true" : "false");
 
         // Verify required permissions are set
+        assertTrue(actualPerms.beforeSwap, "beforeSwap should be enabled");
         assertTrue(actualPerms.afterSwap, "afterSwap should be enabled");
         assertTrue(actualPerms.afterSwapReturnDelta, "afterSwapReturnDelta should be enabled");
 
@@ -472,7 +492,9 @@ contract V4HookDeploymentTest is ForkTestBase {
             address(poolManager),
             address(vault),
             WETH,
-            address(this)
+            address(this),
+            DEFAULT_HOOK_FEE_BIPS,
+            DEFAULT_LP_FEE_RATE
         );
 
         (bytes32 salt, ) = HookAddressMiner.mineSaltForUltraAlignmentHook(
@@ -486,7 +508,9 @@ contract V4HookDeploymentTest is ForkTestBase {
             WETH,
             address(this),
             true,
-            salt
+            salt,
+            DEFAULT_HOOK_FEE_BIPS,
+            DEFAULT_LP_FEE_RATE
         );
     }
 
@@ -497,11 +521,13 @@ contract V4HookDeploymentTest is ForkTestBase {
         address _poolManager,
         address _vault,
         address _weth,
-        address _owner
+        address _owner,
+        uint256 _hookFeeBips,
+        uint24 _initialLpFeeRate
     ) internal pure returns (bytes32) {
         bytes memory initCode = abi.encodePacked(
             type(UltraAlignmentV4Hook).creationCode,
-            abi.encode(_poolManager, _vault, _weth, _owner)
+            abi.encode(_poolManager, _vault, _weth, _owner, _hookFeeBips, _initialLpFeeRate)
         );
         return keccak256(initCode);
     }

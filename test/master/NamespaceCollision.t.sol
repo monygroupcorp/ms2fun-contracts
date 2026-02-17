@@ -50,9 +50,6 @@ contract NamespaceCollisionTest is Test {
 
     // Test constants
     uint256 constant INSTANCE_FEE = 0.01 ether;
-    uint256 constant MAX_SUPPLY = 10_000_000 * 1e18;
-
-    ERC404BondingInstance.BondingCurveParams defaultCurveParams;
     ERC404BondingInstance.TierConfig defaultTierConfig;
 
     function setUp() public {
@@ -63,8 +60,8 @@ contract NamespaceCollisionTest is Test {
 
         // Deploy MasterRegistry with proxy
         implementation = new MasterRegistryV1();
-        bytes memory initData = abi.encodeWithSelector(
-            MasterRegistryV1.initialize.selector,
+        bytes memory initData = abi.encodeWithSignature(
+            "initialize(address,address)",
             address(execToken),
             owner
         );
@@ -106,6 +103,7 @@ contract NamespaceCollisionTest is Test {
             mockInstanceTemplate,
             mockV4PoolManager,
             mockWETH,
+            owner,              // protocol
             address(0xC1EA),
             2000,
             40
@@ -122,6 +120,17 @@ contract NamespaceCollisionTest is Test {
         // Set protocol treasury on both factories
         erc404Factory.setProtocolTreasury(address(0xFEE));
         erc1155Factory.setProtocolTreasury(address(0xFEE));
+
+        // Setup graduation profile for ERC404
+        ERC404Factory.GraduationProfile memory profile = ERC404Factory.GraduationProfile({
+            targetETH: 15 ether,
+            unitPerNFT: 1_000_000,
+            poolFee: 3000,
+            tickSpacing: 60,
+            liquidityReserveBps: 1000,
+            active: true
+        });
+        erc404Factory.setProfile(1, profile);
 
         // Register both factories with MasterRegistry (as dictator)
         // Note: titles must be alphanumeric, hyphens, underscores only (no spaces)
@@ -140,15 +149,6 @@ contract NamespaceCollisionTest is Test {
             "ERC1155 Factory",
             "ipfs://erc1155-factory"
         );
-
-        // Setup default bonding curve parameters for ERC404
-        defaultCurveParams = ERC404BondingInstance.BondingCurveParams({
-            initialPrice: 0.025 ether,
-            quarticCoeff: 3 gwei,
-            cubicCoeff: 1333333333,
-            quadraticCoeff: 2 gwei,
-            normalizationFactor: 1e7
-        });
 
         bytes32[] memory passwordHashes = new bytes32[](2);
         passwordHashes[0] = keccak256("password1");
@@ -187,9 +187,8 @@ contract NamespaceCollisionTest is Test {
             "poggers",
             "POG",
             "ipfs://metadata",
-            MAX_SUPPLY,
             10,
-            defaultCurveParams,
+            1,
             defaultTierConfig,
             creator1,
             address(vault),
@@ -249,9 +248,8 @@ contract NamespaceCollisionTest is Test {
             "poggers",
             "POG",
             "ipfs://metadata",
-            MAX_SUPPLY,
             10,
-            defaultCurveParams,
+            1,
             defaultTierConfig,
             creator2,
             address(vault),
@@ -275,9 +273,8 @@ contract NamespaceCollisionTest is Test {
             "poggers",
             "POG",
             "ipfs://metadata",
-            MAX_SUPPLY,
             10,
-            defaultCurveParams,
+            1,
             defaultTierConfig,
             creator1,
             address(vault),
@@ -325,9 +322,8 @@ contract NamespaceCollisionTest is Test {
             "poggers",
             "POG",
             "ipfs://metadata",
-            MAX_SUPPLY,
             10,
-            defaultCurveParams,
+            1,
             defaultTierConfig,
             creator2,
             address(vault),
@@ -349,9 +345,8 @@ contract NamespaceCollisionTest is Test {
             "poggers",
             "POG",
             "ipfs://metadata",
-            MAX_SUPPLY,
             10,
-            defaultCurveParams,
+            1,
             defaultTierConfig,
             creator1,
             address(vault),
@@ -366,9 +361,8 @@ contract NamespaceCollisionTest is Test {
             "poggers",
             "POG2",
             "ipfs://metadata2",
-            MAX_SUPPLY,
             10,
-            defaultCurveParams,
+            1,
             defaultTierConfig,
             creator2,
             address(vault),
@@ -400,9 +394,8 @@ contract NamespaceCollisionTest is Test {
             "different_name",
             "DIFF",
             "ipfs://metadata",
-            MAX_SUPPLY,
             10,
-            defaultCurveParams,
+            1,
             defaultTierConfig,
             creator2,
             address(vault),

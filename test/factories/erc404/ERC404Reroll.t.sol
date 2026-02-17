@@ -81,7 +81,10 @@ contract ERC404RerollTest is Test {
             200, // graduationFeeBps (2%)
             100, // polBps (1%)
             address(0xC1EA), // factoryCreator
-            40 // creatorGraduationFeeBps (0.4%)
+            40, // creatorGraduationFeeBps (0.4%)
+            3000, // poolFee
+            60, // tickSpacing
+            1_000_000 ether // unit
         );
 
         // Fund users with ETH

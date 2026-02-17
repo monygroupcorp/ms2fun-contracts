@@ -8,7 +8,6 @@ import {MasterRegistry} from "../src/master/MasterRegistry.sol";
 contract DeployMaster is Script {
     function run() external {
         uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
-        address execToken = vm.envAddress("EXEC_TOKEN");
         
         vm.startBroadcast(deployerPrivateKey);
 
@@ -17,9 +16,9 @@ contract DeployMaster is Script {
         console.log("Implementation deployed at:", address(implementation));
 
         // Deploy proxy using Solady's LibClone (via MasterRegistry wrapper)
-        bytes memory initData = abi.encodeWithSelector(
-            MasterRegistryV1.initialize.selector,
-            execToken,
+        // Use single-param initialize (owner-only model, execToken ignored)
+        bytes memory initData = abi.encodeWithSignature(
+            "initialize(address)",
             msg.sender
         );
         MasterRegistry proxy = new MasterRegistry(address(implementation), initData);

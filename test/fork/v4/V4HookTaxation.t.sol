@@ -9,8 +9,10 @@ import { PoolId, PoolIdLibrary } from "v4-core/types/PoolId.sol";
 import { StateLibrary } from "v4-core/libraries/StateLibrary.sol";
 import { IHooks } from "v4-core/interfaces/IHooks.sol";
 import { Hooks } from "v4-core/libraries/Hooks.sol";
+import { LPFeeLibrary } from "v4-core/libraries/LPFeeLibrary.sol";
 import { IUnlockCallback } from "v4-core/interfaces/callback/IUnlockCallback.sol";
 import { BalanceDelta } from "v4-core/types/BalanceDelta.sol";
+import { BeforeSwapDelta, BeforeSwapDeltaLibrary } from "v4-core/types/BeforeSwapDelta.sol";
 import { TickMath } from "v4-core/libraries/TickMath.sol";
 import { CurrencySettler } from "../../../lib/v4-core/test/utils/CurrencySettler.sol";
 import { IERC20 } from "forge-std/interfaces/IERC20.sol";
@@ -18,12 +20,13 @@ import { UltraAlignmentV4Hook } from "../../../src/factories/erc404/hooks/UltraA
 
 /**
  * @title V4HookTaxation
- * @notice Fork tests for UltraAlignmentV4Hook taxation mechanics
+ * @notice Fork tests for UltraAlignmentV4Hook fee collection mechanics
  * @dev Run with: forge test --mp test/fork/v4/V4HookTaxation.t.sol --fork-url $ETH_RPC_URL -vvv
  *
- * Tests the critical "double taxation" alignment system:
- * - Downstream projects tax their swaps → vault receives tokens
- * - Vault's own V4 position is also taxed → benefactors receive share
+ * Tests the alignment fee system:
+ * - Hook fee (immutable) is collected on the ETH side of every swap (buy & sell)
+ * - LP fee (dynamic) is overridden via beforeSwap
+ * - Both directions produce ETH fees to vault
  *
  * IMPORTANT: V4 hooks require specific address prefixes matching their permissions.
  * This test uses vm.etch to deploy the hook at a valid address for testing purposes.
@@ -63,8 +66,11 @@ contract V4HookTaxationTest is ForkTestBase, IUnlockCallback {
     bool v4Available;
 
     // Hook address must have flags matching permissions
-    // afterSwap (1 << 6 = 0x40) + afterSwapReturnDelta (1 << 2 = 0x04) = 0x44
-    address constant HOOK_ADDRESS = address(0x0000000000000000000000000000000000000044);
+    // beforeSwap (1 << 7 = 0x80) + afterSwap (1 << 6 = 0x40) + afterSwapReturnDelta (1 << 2 = 0x04) = 0xC4
+    address constant HOOK_ADDRESS = address(0x00000000000000000000000000000000000000C4);
+
+    uint256 constant DEFAULT_HOOK_FEE_BIPS = 100; // 1%
+    uint24 constant DEFAULT_LP_FEE_RATE = 3000; // 0.3%
 
     function setUp() public {
         loadAddresses();
@@ -77,42 +83,42 @@ contract V4HookTaxationTest is ForkTestBase, IUnlockCallback {
             mockVault = new MockVault();
 
             // Deploy mock hook (test version without address validation)
-            MockTaxHook implementation = new MockTaxHook(
+            MockFeeHook implementation = new MockFeeHook(
                 poolManager,
                 address(mockVault),
                 WETH,
-                address(this)
+                address(this),
+                DEFAULT_HOOK_FEE_BIPS,
+                DEFAULT_LP_FEE_RATE
             );
 
             // Copy bytecode to hook address with correct flags
             vm.etch(HOOK_ADDRESS, address(implementation).code);
-            hook = UltraAlignmentV4Hook(HOOK_ADDRESS);
+            hook = UltraAlignmentV4Hook(payable(HOOK_ADDRESS));
 
             // Initialize owner using Solady's Ownable pattern
-            // Note: Immutable variables (poolManager, vault, weth) are embedded in bytecode, not storage
             vm.prank(HOOK_ADDRESS);
-            MockTaxHook(payable(HOOK_ADDRESS)).initOwner(address(this));
+            MockFeeHook(payable(HOOK_ADDRESS)).initOwner(address(this));
 
-            // Set tax rate to 100 bips (1%) using the setter
-            // Storage layout changed after adding ReentrancyGuard, so use proper method
+            // Set LP fee rate
             vm.prank(address(this));
-            hook.setTaxRate(100);
+            MockFeeHook(payable(HOOK_ADDRESS)).setLpFeeRate(DEFAULT_LP_FEE_RATE);
         }
     }
 
     // ========== Tests ==========
 
-    function test_hookTaxesSwaps_success() public {
+    function test_hookFeesSwaps_success() public {
         if (!v4Available) {
             emit log_string("SKIPPED: V4 not available");
             return;
         }
 
-        emit log_string("=== V4 Hook Taxation Test ===");
+        emit log_string("=== V4 Hook Fee Test (Buy: ETH->Token) ===");
         emit log_string("");
 
-        // Create pool with hook
-        PoolKey memory key = _createETHPoolKeyWithHook(USDC, 500, hook);
+        // Create pool with hook — dynamic fee
+        PoolKey memory key = _createETHPoolKeyWithHook(USDC, hook);
 
         // Initialize pool if needed
         (uint160 sqrtPriceX96,,,) = StateLibrary.getSlot0(poolManager, key.toId());
@@ -127,67 +133,73 @@ contract V4HookTaxationTest is ForkTestBase, IUnlockCallback {
         IERC20(USDC).approve(address(poolManager), type(uint256).max);
         _addLiquidity(key, 1e15);
 
-        // Execute swap (ETH→USDC, so tax is collected in USDC - the output currency)
-        uint256 vaultUsdcBefore = IERC20(USDC).balanceOf(address(mockVault));
+        // Execute buy swap (ETH→USDC) — fee is collected on ETH side
+        uint256 vaultEthBefore = address(mockVault).balance;
 
         _swap(key, true, 0.1 ether);
 
-        uint256 vaultUsdcAfter = IERC20(USDC).balanceOf(address(mockVault));
-        uint256 taxReceived = vaultUsdcAfter - vaultUsdcBefore;
+        uint256 vaultEthAfter = address(mockVault).balance;
+        uint256 feeReceived = vaultEthAfter - vaultEthBefore;
 
-        emit log_named_uint("Tax received by vault (USDC)", taxReceived);
+        emit log_named_uint("Fee received by vault (ETH)", feeReceived);
 
-        // Verify tax was collected (should be ~1% of output)
-        assertGt(taxReceived, 0, "Vault should receive tax");
+        // Verify fee was collected on ETH side
+        assertGt(feeReceived, 0, "Vault should receive ETH fee on buy");
 
         emit log_string("");
-        emit log_string("[SUCCESS] Hook successfully taxes swaps and sends to vault!");
+        emit log_string("[SUCCESS] Hook successfully collects ETH fees on buy swaps!");
     }
 
-    function test_hookTaxRate_configurable() public {
+    function test_hookLpFeeRate_configurable() public {
         if (!v4Available) {
             emit log_string("SKIPPED: V4 not available");
             return;
         }
 
-        emit log_string("=== V4 Hook Tax Rate Configuration Test ===");
+        emit log_string("=== V4 Hook LP Fee Rate Configuration Test ===");
         emit log_string("");
 
-        uint256 initialRate = hook.taxRateBips();
-        emit log_named_uint("Initial tax rate (bips)", initialRate);
-        assertEq(initialRate, 100, "Initial rate should be 100 bips (1%)");
+        // hookFeeBips is immutable — verify it
+        uint256 immutableFee = hook.hookFeeBips();
+        emit log_named_uint("Hook fee (immutable, bips)", immutableFee);
+        assertEq(immutableFee, DEFAULT_HOOK_FEE_BIPS, "Hook fee should be set at deploy");
 
-        // Change tax rate to 2%
+        // lpFeeRate is configurable
+        uint24 initialRate = hook.lpFeeRate();
+        emit log_named_uint("Initial LP fee rate", initialRate);
+        assertEq(initialRate, DEFAULT_LP_FEE_RATE, "Initial LP fee rate should match");
+
+        // Change LP fee rate to 0.5%
         vm.expectEmit(true, true, true, true, address(hook));
-        emit MockTaxHook.TaxRateUpdated(200);
-        hook.setTaxRate(200);
+        emit MockFeeHook.LpFeeRateUpdated(5000);
+        MockFeeHook(payable(address(hook))).setLpFeeRate(5000);
 
-        uint256 newRate = hook.taxRateBips();
-        emit log_named_uint("New tax rate (bips)", newRate);
-        assertEq(newRate, 200, "Rate should be updated to 200 bips (2%)");
+        uint24 newRate = hook.lpFeeRate();
+        emit log_named_uint("New LP fee rate", newRate);
+        assertEq(newRate, 5000, "LP fee rate should be updated");
 
         // Verify max rate is enforced
         vm.expectRevert("Rate too high");
-        hook.setTaxRate(10001);
+        MockFeeHook(payable(address(hook))).setLpFeeRate(uint24(LPFeeLibrary.MAX_LP_FEE + 1));
 
         emit log_string("");
-        emit log_string("[SUCCESS] Tax rate is configurable by owner!");
+        emit log_string("[SUCCESS] LP fee rate is configurable, hook fee is immutable!");
     }
 
-    function test_hookDoubleTaxation_onVaultPosition() public {
+    function test_hookDoubleFee_onVaultPosition() public {
         if (!v4Available) {
             emit log_string("SKIPPED: V4 not available");
             return;
         }
 
-        emit log_string("=== V4 Double Taxation Test ===");
+        emit log_string("=== V4 Double Fee Test ===");
         emit log_string("");
         emit log_string("CRITICAL: When vault adds liquidity to its own pool,");
-        emit log_string("that position ALSO gets taxed, creating double alignment!");
+        emit log_string("that position ALSO gets fee'd, creating double alignment!");
         emit log_string("");
 
         // Create pool with hook
-        PoolKey memory key = _createETHPoolKeyWithHook(USDC, 500, hook);
+        PoolKey memory key = _createETHPoolKeyWithHook(USDC, hook);
 
         // Initialize pool if needed
         (uint160 sqrtPriceX96,,,) = StateLibrary.getSlot0(poolManager, key.toId());
@@ -202,24 +214,23 @@ contract V4HookTaxationTest is ForkTestBase, IUnlockCallback {
         _addLiquidity(key, 1e15);
 
         // Execute swap from this test contract (simulating vault swap)
-        // Track tax received by vault (ETH→USDC swap, so tax is in USDC)
-        mockVault.resetLastTax();
-        uint256 vaultUsdcBefore = IERC20(USDC).balanceOf(address(mockVault));
+        mockVault.resetLastFee();
+        uint256 vaultEthBefore = address(mockVault).balance;
 
         _swap(key, true, 0.1 ether);
 
-        uint256 vaultUsdcAfter = IERC20(USDC).balanceOf(address(mockVault));
+        uint256 vaultEthAfter = address(mockVault).balance;
 
-        // The vault should have received SOME tax from the swap
-        uint256 taxReceived = mockVault.lastTaxReceived();
-        assertGt(taxReceived, 0, "Vault receives tax from swaps");
+        // The vault should have received SOME fee from the swap
+        uint256 feeReceived = mockVault.lastFeeReceived();
+        assertGt(feeReceived, 0, "Vault receives fee from swaps");
 
-        emit log_named_uint("Vault USDC before", vaultUsdcBefore);
-        emit log_named_uint("Vault USDC after", vaultUsdcAfter);
-        emit log_named_uint("Tax vault received", taxReceived);
+        emit log_named_uint("Vault ETH before", vaultEthBefore);
+        emit log_named_uint("Vault ETH after", vaultEthAfter);
+        emit log_named_uint("Fee vault received", feeReceived);
         emit log_string("");
-        emit log_string("[SUCCESS] Double taxation confirmed!");
-        emit log_string("Vault's positions are NOT exempt from taxation");
+        emit log_string("[SUCCESS] Double fee confirmed!");
+        emit log_string("Vault's positions are NOT exempt from fees");
     }
 
     function test_hookOnlyAcceptsETH_reverts() public {
@@ -231,36 +242,36 @@ contract V4HookTaxationTest is ForkTestBase, IUnlockCallback {
         emit log_string("=== V4 Hook ETH-Only Validation Test ===");
         emit log_string("");
 
-        // Create pool with hook but using DAI instead of ETH
-        // Hook should revert when trying to tax non-ETH/WETH currencies during a swap
+        // Create pool with hook but using DAI as currency0 instead of ETH
+        // Hook should revert because currency0 != address(0)
         PoolKey memory key = PoolKey({
             currency0: Currency.wrap(DAI),
             currency1: Currency.wrap(USDC),
-            fee: 500,
-            tickSpacing: 10,
+            fee: LPFeeLibrary.DYNAMIC_FEE_FLAG,
+            tickSpacing: 60,
             hooks: IHooks(address(hook))
         });
 
         // Pool init succeeds (hook doesn't validate on init, only on swap)
         _initializePool(key, SQRT_PRICE_DAI_USDC);
 
-        // Add liquidity so swap produces output that triggers the tax check
+        // Add liquidity so swap produces output that triggers the fee check
         deal(DAI, address(this), 100_000e18);
         deal(USDC, address(this), 100_000e6);
         IERC20(DAI).approve(address(poolManager), type(uint256).max);
         IERC20(USDC).approve(address(poolManager), type(uint256).max);
         _addLiquidity(key, 1e15);
 
-        // Swap should revert because hook rejects non-ETH tax currencies
+        // Swap should revert because hook rejects non-ETH pools (currency0 != address(0))
         vm.expectRevert();
         _swap(key, true, 1e18);
 
         emit log_string("");
         emit log_string("[SUCCESS] Hook correctly rejects non-ETH pools!");
-        emit log_string("Enforcement: Only ETH/WETH pools can use this hook");
+        emit log_string("Enforcement: Only pools with native ETH as currency0 can use this hook");
     }
 
-    function test_hookEmitsSwapTaxedEvent() public {
+    function test_hookEmitsAlignmentFeeEvent() public {
         if (!v4Available) {
             emit log_string("SKIPPED: V4 not available");
             return;
@@ -270,7 +281,7 @@ contract V4HookTaxationTest is ForkTestBase, IUnlockCallback {
         emit log_string("");
 
         // Create pool with hook
-        PoolKey memory key = _createETHPoolKeyWithHook(USDC, 500, hook);
+        PoolKey memory key = _createETHPoolKeyWithHook(USDC, hook);
 
         // Initialize pool if needed
         (uint160 sqrtPriceX96,,,) = StateLibrary.getSlot0(poolManager, key.toId());
@@ -288,29 +299,44 @@ contract V4HookTaxationTest is ForkTestBase, IUnlockCallback {
         _swap(key, true, 0.1 ether);
 
         // Check that vault received a call (which proves event logic executed)
-        assertGt(mockVault.lastTaxReceived(), 0, "Event logic executed");
+        assertGt(mockVault.lastFeeReceived(), 0, "Event logic executed");
 
         emit log_string("");
-        emit log_string("[SUCCESS] SwapTaxed event emitted on swap!");
+        emit log_string("[SUCCESS] AlignmentFeeCollected event emitted on swap!");
     }
 
-    function test_zeroTaxWhenRateIsZero() public {
+    function test_zeroFeeWhenRateIsZero() public {
         if (!v4Available) {
             emit log_string("SKIPPED: V4 not available");
             return;
         }
 
-        emit log_string("=== V4 Zero Tax Rate Test ===");
+        emit log_string("=== V4 Zero Hook Fee Test ===");
         emit log_string("");
 
-        // Set tax rate to 0
-        hook.setTaxRate(0);
-        uint256 rate = hook.taxRateBips();
-        emit log_named_uint("Tax rate", rate);
-        assertEq(rate, 0, "Tax rate should be 0");
+        // Deploy a hook with hookFeeBips=0
+        MockFeeHook zeroFeeImpl = new MockFeeHook(
+            poolManager,
+            address(mockVault),
+            WETH,
+            address(this),
+            0, // hookFeeBips = 0
+            DEFAULT_LP_FEE_RATE
+        );
+
+        vm.etch(HOOK_ADDRESS, address(zeroFeeImpl).code);
+        hook = UltraAlignmentV4Hook(payable(HOOK_ADDRESS));
+
+        vm.prank(HOOK_ADDRESS);
+        MockFeeHook(payable(HOOK_ADDRESS)).initOwner(address(this));
+        MockFeeHook(payable(HOOK_ADDRESS)).setLpFeeRate(DEFAULT_LP_FEE_RATE);
+
+        uint256 fee = hook.hookFeeBips();
+        emit log_named_uint("Hook fee bips", fee);
+        assertEq(fee, 0, "Hook fee should be 0");
 
         // Create pool with hook
-        PoolKey memory key = _createETHPoolKeyWithHook(USDC, 500, hook);
+        PoolKey memory key = _createETHPoolKeyWithHook(USDC, hook);
 
         // Initialize pool if needed
         (uint160 sqrtPriceX96,,,) = StateLibrary.getSlot0(poolManager, key.toId());
@@ -330,13 +356,98 @@ contract V4HookTaxationTest is ForkTestBase, IUnlockCallback {
         _swap(key, true, 0.1 ether);
 
         uint256 vaultBalanceAfter = address(mockVault).balance;
-        uint256 taxReceived = vaultBalanceAfter - vaultBalanceBefore;
+        uint256 feeReceived = vaultBalanceAfter - vaultBalanceBefore;
 
-        emit log_named_uint("Tax received", taxReceived);
-        assertEq(taxReceived, 0, "No tax should be collected when rate is 0");
+        emit log_named_uint("Fee received", feeReceived);
+        assertEq(feeReceived, 0, "No fee should be collected when hookFeeBips is 0");
 
         emit log_string("");
-        emit log_string("[SUCCESS] Zero tax rate works correctly!");
+        emit log_string("[SUCCESS] Zero hook fee works correctly!");
+    }
+
+    function test_sellSwap_feesETHSide() public {
+        if (!v4Available) {
+            emit log_string("SKIPPED: V4 not available");
+            return;
+        }
+
+        emit log_string("=== V4 Hook Fee Test (Sell: Token->ETH) ===");
+        emit log_string("");
+
+        // Create pool with hook
+        PoolKey memory key = _createETHPoolKeyWithHook(USDC, hook);
+
+        // Initialize pool if needed
+        (uint160 sqrtPriceX96,,,) = StateLibrary.getSlot0(poolManager, key.toId());
+        if (sqrtPriceX96 == 0) {
+            _initializePool(key, SQRT_PRICE_ETH_USDC);
+        }
+
+        // Add liquidity
+        vm.deal(address(this), 100 ether);
+        deal(USDC, address(this), 100_000e6);
+        IERC20(USDC).approve(address(poolManager), type(uint256).max);
+        _addLiquidity(key, 1e15);
+
+        // Execute sell swap (USDC→ETH, zeroForOne=false since ETH is currency0)
+        uint256 vaultEthBefore = address(mockVault).balance;
+
+        _swap(key, false, 100e6); // sell 100 USDC for ETH
+
+        uint256 vaultEthAfter = address(mockVault).balance;
+        uint256 feeReceived = vaultEthAfter - vaultEthBefore;
+
+        emit log_named_uint("Fee received by vault (ETH) on sell", feeReceived);
+
+        // Verify fee was collected on ETH side for sell direction too
+        assertGt(feeReceived, 0, "Vault should receive ETH fee on sell");
+
+        emit log_string("");
+        emit log_string("[SUCCESS] Hook collects ETH fees on sell swaps!");
+    }
+
+    function test_buyAndSell_bothFeed() public {
+        if (!v4Available) {
+            emit log_string("SKIPPED: V4 not available");
+            return;
+        }
+
+        emit log_string("=== V4 Hook Fee Test (Buy + Sell both fee'd) ===");
+        emit log_string("");
+
+        // Create pool with hook
+        PoolKey memory key = _createETHPoolKeyWithHook(USDC, hook);
+
+        // Initialize pool if needed
+        (uint160 sqrtPriceX96,,,) = StateLibrary.getSlot0(poolManager, key.toId());
+        if (sqrtPriceX96 == 0) {
+            _initializePool(key, SQRT_PRICE_ETH_USDC);
+        }
+
+        // Add liquidity
+        vm.deal(address(this), 100 ether);
+        deal(USDC, address(this), 100_000e6);
+        IERC20(USDC).approve(address(poolManager), type(uint256).max);
+        _addLiquidity(key, 1e15);
+
+        // Buy: ETH→USDC
+        uint256 vaultEthBefore = address(mockVault).balance;
+        _swap(key, true, 0.1 ether);
+        uint256 buyFee = address(mockVault).balance - vaultEthBefore;
+
+        emit log_named_uint("Buy fee (ETH)", buyFee);
+        assertGt(buyFee, 0, "Buy should produce ETH fee");
+
+        // Sell: USDC→ETH
+        vaultEthBefore = address(mockVault).balance;
+        _swap(key, false, 100e6);
+        uint256 sellFee = address(mockVault).balance - vaultEthBefore;
+
+        emit log_named_uint("Sell fee (ETH)", sellFee);
+        assertGt(sellFee, 0, "Sell should produce ETH fee");
+
+        emit log_string("");
+        emit log_string("[SUCCESS] Both buy and sell directions produce ETH fees to vault!");
     }
 
     // ========== Unlock Callback ==========
@@ -431,24 +542,16 @@ contract V4HookTaxationTest is ForkTestBase, IUnlockCallback {
         poolManager.initialize(key, sqrtPriceX96);
     }
 
-    function _createETHPoolKeyWithHook(address token, uint24 fee, IHooks _hook) internal pure returns (PoolKey memory) {
+    function _createETHPoolKeyWithHook(address token, IHooks _hook) internal pure returns (PoolKey memory) {
         bool isToken0 = uint160(address(0)) < uint160(token);
 
         return PoolKey({
             currency0: isToken0 ? CurrencyLibrary.ADDRESS_ZERO : Currency.wrap(token),
             currency1: isToken0 ? Currency.wrap(token) : CurrencyLibrary.ADDRESS_ZERO,
-            fee: fee,
-            tickSpacing: _getTickSpacing(fee),
+            fee: LPFeeLibrary.DYNAMIC_FEE_FLAG,
+            tickSpacing: 60,
             hooks: _hook
         });
-    }
-
-    function _getTickSpacing(uint24 fee) internal pure returns (int24) {
-        if (fee == 100) return 1;
-        if (fee == 500) return 10;
-        if (fee == 3000) return 60;
-        if (fee == 10000) return 200;
-        revert("Unknown fee tier");
     }
 
     // Realistic sqrtPriceX96 values accounting for token decimals
@@ -466,118 +569,110 @@ contract V4HookTaxationTest is ForkTestBase, IUnlockCallback {
 // ========== Mock Contracts ==========
 
 /**
- * @notice Mock vault for testing hook taxation
+ * @notice Mock vault for testing hook fee collection
  */
 contract MockVault {
-    uint256 public lastTaxReceived;
+    uint256 public lastFeeReceived;
 
     function receiveInstance(Currency currency, uint256 amount, address sender) external payable {
-        lastTaxReceived = amount;
+        lastFeeReceived = amount;
     }
 
-    function resetLastTax() external {
-        lastTaxReceived = 0;
+    function resetLastFee() external {
+        lastFeeReceived = 0;
     }
 
     receive() external payable {}
 }
 
 /**
- * @notice Mock hook for testing - skips address validation
+ * @notice Mock hook for testing — skips address validation, implements fee model
  */
-contract MockTaxHook is BaseTestHooks {
+contract MockFeeHook is BaseTestHooks {
     using SafeCast for uint256;
     using SafeCast for int128;
 
     IPoolManager public immutable poolManager;
     address public immutable vault;
     address public immutable weth;
-    uint256 public taxRateBips;
+    uint256 public immutable hookFeeBips;
+    uint24 public lpFeeRate;
     address public owner;
 
-    event SwapTaxed(address indexed sender, Currency indexed currency, uint256 taxAmount, address indexed projectInstance);
-    event TaxRateUpdated(uint256 newRate);
+    event AlignmentFeeCollected(uint256 ethAmount, address indexed benefactor);
+    event LpFeeRateUpdated(uint24 newRate);
 
-    constructor(IPoolManager _poolManager, address _vault, address _weth, address _owner) {
+    constructor(
+        IPoolManager _poolManager,
+        address _vault,
+        address _weth,
+        address _owner,
+        uint256 _hookFeeBips,
+        uint24 _initialLpFeeRate
+    ) {
         poolManager = _poolManager;
         vault = _vault;
         weth = _weth;
         owner = _owner;
-        taxRateBips = 100; // 1% default
+        hookFeeBips = _hookFeeBips;
+        lpFeeRate = _initialLpFeeRate;
     }
 
     function initOwner(address _owner) external {
         owner = _owner;
     }
 
+    function beforeSwap(address, PoolKey calldata, IPoolManager.SwapParams calldata, bytes calldata)
+        external
+        view
+        override
+        returns (bytes4, BeforeSwapDelta, uint24)
+    {
+        return (
+            IHooks.beforeSwap.selector,
+            BeforeSwapDeltaLibrary.ZERO_DELTA,
+            lpFeeRate | LPFeeLibrary.OVERRIDE_FEE_FLAG
+        );
+    }
+
     function afterSwap(
         address sender,
         PoolKey calldata key,
-        IPoolManager.SwapParams calldata params,
+        IPoolManager.SwapParams calldata,
         BalanceDelta delta,
         bytes calldata
     ) external override returns (bytes4, int128) {
         require(msg.sender == address(poolManager), "Unauthorized");
 
-        int128 taxDelta = _processTax(sender, key, params, delta);
-        return (IHooks.afterSwap.selector, taxDelta);
-    }
+        // Always tax the ETH movement (currency0 = native ETH)
+        require(Currency.unwrap(key.currency0) == address(0), "Pool currency0 must be native ETH");
 
-    function _processTax(
-        address sender,
-        PoolKey calldata key,
-        IPoolManager.SwapParams calldata params,
-        BalanceDelta delta
-    ) private returns (int128) {
-        // Validate pool has ETH/WETH on at least one side
-        address token0 = Currency.unwrap(key.currency0);
-        address token1 = Currency.unwrap(key.currency1);
-        bool currency0IsETH = (token0 == weth || token0 == address(0));
-        bool currency1IsETH = (token1 == weth || token1 == address(0));
-        require(currency0IsETH || currency1IsETH, "Hook only accepts ETH/WETH pools");
+        int128 amount0 = delta.amount0();
+        uint256 ethMoved = amount0 < 0 ? uint256(uint128(-amount0)) : uint256(uint128(amount0));
+        uint256 feeAmount = (ethMoved * hookFeeBips) / 10000;
 
-        // afterSwapReturnDelta operates on the UNSPECIFIED (output) currency.
-        // Tax the output side so take() and the returned hookDelta cancel out.
-        bool isExactInput = params.amountSpecified < 0;
-        bool outputIsCurrency1 = isExactInput == params.zeroForOne;
-        int128 outputDelta = outputIsCurrency1 ? delta.amount1() : delta.amount0();
-
-        // Only tax positive output (tokens the swapper would receive)
-        if (outputDelta <= 0) return 0;
-
-        uint256 taxAmount = (uint256(uint128(outputDelta)) * taxRateBips) / 10000;
-        if (taxAmount == 0) return 0;
-
-        Currency outputCurrency = outputIsCurrency1 ? key.currency1 : key.currency0;
-
-        // Take tax from pool output and forward to vault
-        poolManager.take(outputCurrency, address(this), taxAmount);
-
-        if (Currency.unwrap(outputCurrency) == address(0)) {
-            // Native ETH
-            MockVault(payable(vault)).receiveInstance{value: taxAmount}(outputCurrency, taxAmount, sender);
-        } else {
-            // ERC20: transfer tokens then notify vault
-            IERC20(Currency.unwrap(outputCurrency)).transfer(vault, taxAmount);
-            MockVault(payable(vault)).receiveInstance(outputCurrency, taxAmount, sender);
+        if (feeAmount > 0) {
+            poolManager.take(key.currency0, address(this), feeAmount);
+            MockVault(payable(vault)).receiveInstance{value: feeAmount}(key.currency0, feeAmount, sender);
+            emit AlignmentFeeCollected(feeAmount, sender);
+            return (IHooks.afterSwap.selector, feeAmount.toInt128());
         }
 
-        emit SwapTaxed(sender, outputCurrency, taxAmount, sender);
-        return taxAmount.toInt128();
+        return (IHooks.afterSwap.selector, int128(0));
     }
 
-    function setTaxRate(uint256 _rate) external {
-        require(msg.sender == owner, "Only owner");
-        require(_rate <= 10000, "Rate too high");
-        taxRateBips = _rate;
-        emit TaxRateUpdated(_rate);
+    function setLpFeeRate(uint24 _rate) external {
+        require(msg.sender == owner || msg.sender == address(this), "Only owner");
+        require(_rate <= LPFeeLibrary.MAX_LP_FEE, "Rate too high");
+        lpFeeRate = _rate;
+        emit LpFeeRateUpdated(_rate);
     }
 
     receive() external payable {}
 }
 
 /**
- * @notice Import for types
+ * @notice Imports for types
  */
 import { UltraAlignmentVault } from "../../../src/vaults/UltraAlignmentVault.sol";
 import { BaseTestHooks } from "v4-core/test/BaseTestHooks.sol";

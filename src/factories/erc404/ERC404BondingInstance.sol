@@ -6,6 +6,7 @@ import { DN404Mirror } from "dn404/src/DN404Mirror.sol";
 import { Ownable } from "solady/auth/Ownable.sol";
 import { ReentrancyGuard } from "solady/utils/ReentrancyGuard.sol";
 import { SafeTransferLib } from "solady/utils/SafeTransferLib.sol";
+import { FixedPointMathLib } from "solady/utils/FixedPointMathLib.sol";
 import { BondingCurveMath } from "./libraries/BondingCurveMath.sol";
 import { IPoolManager } from "v4-core/interfaces/IPoolManager.sol";
 import { PoolKey } from "v4-core/types/PoolKey.sol";
@@ -89,6 +90,11 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IUnlockCallba
     TierConfig public tierConfig; // Storage (set in constructor, never changed)
     uint256 public tierCount;
 
+    // Pool configuration (from graduation profile)
+    uint24 public immutable poolFee;
+    int24 public immutable tickSpacing;
+    uint256 public immutable UNIT;
+
     IPoolManager public immutable v4PoolManager;
     IHooks public v4Hook; // Can be set after deployment
     address public immutable factory;
@@ -152,6 +158,7 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IUnlockCallba
     event GraduationFeePaid(address indexed treasury, uint256 amount);
     event CreatorGraduationFeePaid(address indexed factoryCreator, uint256 amount);
     event ProtocolLiquidityDeployed(address indexed treasury, uint256 tokenAmount, uint256 ethAmount);
+    event V4HookSet(address indexed hook);
 
     // ┌─────────────────────────┐
     // │      Constructor        │
@@ -177,7 +184,10 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IUnlockCallba
         uint256 _graduationFeeBps,
         uint256 _polBps,
         address _factoryCreator,
-        uint256 _creatorGraduationFeeBps
+        uint256 _creatorGraduationFeeBps,
+        uint24 _poolFee,
+        int24 _tickSpacing,
+        uint256 _unit
     ) {
         require(_maxSupply > 0, "Invalid max supply");
         require(_liquidityReservePercent < 100, "Invalid reserve percent");
@@ -225,6 +235,9 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IUnlockCallba
         polBps = _polBps;
         factoryCreator = _factoryCreator;
         creatorGraduationFeeBps = _creatorGraduationFeeBps;
+        poolFee = _poolFee;
+        tickSpacing = _tickSpacing;
+        UNIT = _unit;
 
         // Initialize password hash mapping
         for (uint256 i = 0; i < _tierConfig.passwordHashes.length; i++) {
@@ -291,6 +304,7 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IUnlockCallba
         require(_hook != address(0), "Invalid hook");
         require(address(v4Hook) == address(0), "Hook already set");
         v4Hook = IHooks(_hook);
+        emit V4HookSet(_hook);
     }
 
     // ┌─────────────────────────┐
@@ -385,14 +399,17 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IUnlockCallba
      * @param mintNFT Whether to mint NFTs
      * @param passwordHash Password hash for tier access (bytes32(0) for public)
      * @param message Optional message
+     * @param deadline Timestamp after which this transaction reverts (0 = no deadline)
      */
     function buyBonding(
         uint256 amount,
         uint256 maxCost,
         bool mintNFT,
         bytes32 passwordHash,
-        string calldata message
+        string calldata message,
+        uint256 deadline
     ) external payable nonReentrant {
+        require(deadline == 0 || block.timestamp <= deadline, "Transaction expired");
         require(bondingActive, "Bonding not active");
         require(liquidityPool == address(0), "Bonding ended");
         require(address(v4Hook) != address(0), "Hook not configured");
@@ -428,10 +445,10 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IUnlockCallba
         }
 
         // Handle free mints if applicable
-        if (freeSupply > 1000000 ether && !freeMint[msg.sender]) {
+        if (freeSupply > UNIT && !freeMint[msg.sender]) {
             totalBondingSupply += amount;
-            amount += 1000000 ether;
-            freeSupply -= 1000000 ether;
+            amount += UNIT;
+            freeSupply -= UNIT;
             freeMint[msg.sender] = true;
         } else {
             totalBondingSupply += amount;
@@ -486,13 +503,16 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IUnlockCallba
      * @param minRefund Minimum ETH refund expected
      * @param passwordHash Password hash for tier access
      * @param message Optional message
+     * @param deadline Timestamp after which this transaction reverts (0 = no deadline)
      */
     function sellBonding(
         uint256 amount,
         uint256 minRefund,
         bytes32 passwordHash,
-        string calldata message
+        string calldata message,
+        uint256 deadline
     ) external nonReentrant {
+        require(deadline == 0 || block.timestamp <= deadline, "Transaction expired");
         require(bondingActive, "Bonding not active");
         require(liquidityPool == address(0), "Bonding ended");
         require(address(v4Hook) != address(0), "Hook not configured");
@@ -521,7 +541,7 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IUnlockCallba
         uint256 balance = balanceOf(msg.sender);
         require(balance >= amount, "Insufficient balance");
         
-        if (freeMint[msg.sender] && (balance - amount < 1000000 ether)) {
+        if (freeMint[msg.sender] && (balance - amount < UNIT)) {
             revert("Cannot sell free mint tokens");
         }
 
@@ -1259,32 +1279,24 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IUnlockCallba
 
     /**
      * @notice Deploy liquidity to Uniswap V4
-     * @dev Creates a new pool with hook attached and adds FULL-RANGE (infinite range) liquidity
-     *      Full-range means tickLower = minUsableTick and tickUpper = maxUsableTick
-     *      This ensures liquidity is available at all price points
+     * @dev Fully deterministic — no caller-supplied parameters.
+     *      Computes sqrtPriceX96 from post-fee token/ETH ratio.
+     *      Uses reserve for ETH, LIQUIDITY_RESERVE for tokens.
+     *      Pool config (fee, tickSpacing) from immutables set at construction.
      *
-     *      Permissionless deployment allowed when:
-     *      - Bonding curve is full (reached max capacity), OR
-     *      - Maturity time is reached (if set)
-     *      Otherwise, only owner can deploy
+     *      Permissionless when:
+     *      - Bonding curve is full, OR
+     *      - Maturity time is reached
+     *      Otherwise, only owner can deploy.
      *
-     * @param poolFee Pool fee (e.g., 3000 for 0.3%)
-     * @param tickSpacing Tick spacing (must match poolFee: 10 for 0.05%, 60 for 0.3%, 200 for 1%)
-     * @param amountToken Amount of tokens to add
-     * @param amountETH Amount of ETH to add
-     * @param sqrtPriceX96 Initial sqrt price for pool (Q64.96 format)
      * @return liquidity Amount of liquidity added
      */
-    function deployLiquidity(
-        uint24 poolFee,
-        int24 tickSpacing,
-        uint256 amountToken,
-        uint256 amountETH,
-        uint160 sqrtPriceX96
-    ) external payable nonReentrant returns (uint128 liquidity) {
+    function deployLiquidity() external nonReentrant returns (uint128 liquidity) {
         require(bondingOpenTime != 0, "Bonding not configured");
         require(block.timestamp >= bondingOpenTime, "Too early");
         require(liquidityPool == address(0), "Already deployed");
+        require(address(v4Hook) != address(0), "Hook not set");
+        require(reserve > 0, "No reserve");
 
         // Check if permissionless deployment is allowed
         uint256 maxBondingSupply = MAX_SUPPLY - LIQUIDITY_RESERVE;
@@ -1292,38 +1304,124 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IUnlockCallba
         bool isMatured = bondingMaturityTime != 0 && block.timestamp >= bondingMaturityTime;
         bool isPermissionless = isFull || isMatured;
 
-        // Only owner can deploy if not permissionless
         if (!isPermissionless) {
             require(msg.sender == owner(), "Only owner can deploy before maturity/full");
         }
-        require(msg.value >= amountETH, "Insufficient ETH");
-        require(amountToken <= LIQUIDITY_RESERVE, "Exceeds reserve");
-        require(address(v4Hook) != address(0), "Hook not set");
-        require(sqrtPriceX96 >= TickMath.MIN_SQRT_PRICE && sqrtPriceX96 <= TickMath.MAX_SQRT_PRICE, "Invalid sqrt price");
 
-        // ENFORCE FULL-RANGE LIQUIDITY: Always use min/max usable ticks
+        // Step 1: Compute graduation fee from reserve
+        uint256 ethAvailable = reserve;
+        uint256 graduationFee = 0;
+        uint256 creatorGradCut = 0;
+
+        if (graduationFeeBps > 0 && protocolTreasury != address(0)) {
+            graduationFee = (ethAvailable * graduationFeeBps) / 10000;
+            if (creatorGraduationFeeBps > 0 && factoryCreator != address(0)) {
+                creatorGradCut = (ethAvailable * creatorGraduationFeeBps) / 10000;
+                if (creatorGradCut > graduationFee) creatorGradCut = graduationFee;
+            }
+        }
+
+        uint256 ethAfterGrad = ethAvailable - graduationFee;
+
+        // Step 2: Compute POL amounts
+        uint256 polETH = 0;
+        uint256 polTokens = 0;
+        uint256 tokensAvailable = LIQUIDITY_RESERVE;
+
+        if (polBps > 0 && protocolTreasury != address(0)) {
+            polETH = (ethAfterGrad * polBps) / 10000;
+            polTokens = (tokensAvailable * polBps) / 10000;
+        }
+
+        // Step 3: Final pool amounts
+        uint256 ethForPool = ethAfterGrad - polETH;
+        uint256 tokensForPool = tokensAvailable - polTokens;
+
+        require(ethForPool > 0, "No ETH for pool");
+        require(tokensForPool > 0, "No tokens for pool");
+
+        // Step 4: Determine token ordering and compute sqrtPriceX96
+        Currency currency0 = Currency.wrap(address(this));
+        Currency currency1 = Currency.wrap(weth);
+        bool token0IsThis = currency0 < currency1;
+
+        if (!token0IsThis) {
+            (currency0, currency1) = (currency1, currency0);
+        }
+
+        // Compute sqrtPriceX96 = sqrt(currency1 / currency0) * 2^96
+        uint160 sqrtPriceX96;
+        {
+            uint256 numerator;
+            uint256 denominator;
+            if (token0IsThis) {
+                // currency0 = token, currency1 = WETH
+                numerator = ethForPool;
+                denominator = tokensForPool;
+            } else {
+                // currency0 = WETH, currency1 = token
+                numerator = tokensForPool;
+                denominator = ethForPool;
+            }
+            // sqrtPriceX96 = sqrt((numerator << 192) / denominator)
+            uint256 priceX192 = FixedPointMathLib.fullMulDiv(numerator, 1 << 192, denominator);
+            sqrtPriceX96 = uint160(FixedPointMathLib.sqrt(priceX192));
+        }
+
+        // Ensure sqrtPriceX96 is within V4 bounds
+        if (sqrtPriceX96 < TickMath.MIN_SQRT_PRICE + 1) sqrtPriceX96 = TickMath.MIN_SQRT_PRICE + 1;
+        if (sqrtPriceX96 > TickMath.MAX_SQRT_PRICE - 1) sqrtPriceX96 = TickMath.MAX_SQRT_PRICE - 1;
+
+        // Step 5: Build pool key
         int24 tickLower = TickMath.minUsableTick(tickSpacing);
         int24 tickUpper = TickMath.maxUsableTick(tickSpacing);
 
-        // Store original amounts before any swapping
-        uint256 originalTokenAmount = amountToken;
-        uint256 originalETHAmount = amountETH;
+        PoolKey memory poolKey = PoolKey({
+            currency0: currency0,
+            currency1: currency1,
+            fee: poolFee,
+            tickSpacing: tickSpacing,
+            hooks: v4Hook
+        });
 
-        // Take graduation fee from deployment ETH before pool creation
-        uint256 ethForPool = amountETH;
-        if (graduationFeeBps > 0 && protocolTreasury != address(0)) {
-            uint256 graduationFee = (ethForPool * graduationFeeBps) / 10000;
-            ethForPool -= graduationFee;
-            amountETH = ethForPool;
+        // Step 6: Wrap ETH to WETH
+        IWETH(weth).deposit{value: ethForPool}();
 
-            // Split graduation fee between protocol and factory creator
-            uint256 creatorGradCut = 0;
-            if (creatorGraduationFeeBps > 0 && factoryCreator != address(0)) {
-                creatorGradCut = (originalETHAmount * creatorGraduationFeeBps) / 10000;
-                if (creatorGradCut > graduationFee) creatorGradCut = graduationFee;
-            }
+        // Approve pool manager for WETH if needed
+        if (!token0IsThis) {
+            IERC20(weth).approve(address(v4PoolManager), ethForPool);
+        }
+
+        // Step 7: Initialize pool
+        v4PoolManager.initialize(poolKey, sqrtPriceX96);
+
+        // Step 8: Add liquidity
+        {
+            uint256 amount0 = token0IsThis ? tokensForPool : ethForPool;
+            uint256 amount1 = token0IsThis ? ethForPool : tokensForPool;
+
+            uint160 sqrtPriceAX96 = TickMath.getSqrtPriceAtTick(tickLower);
+            uint160 sqrtPriceBX96 = TickMath.getSqrtPriceAtTick(tickUpper);
+
+            liquidity = LiquidityAmounts.getLiquidityForAmounts(
+                sqrtPriceX96, sqrtPriceAX96, sqrtPriceBX96, amount0, amount1
+            );
+
+            LiquidityDeployParams memory deployParams = LiquidityDeployParams({
+                poolKey: poolKey,
+                tickLower: tickLower,
+                tickUpper: tickUpper,
+                amount0: amount0,
+                amount1: amount1,
+                sender: address(this)
+            });
+
+            v4PoolManager.unlock(abi.encode(deployParams));
+        }
+
+        // Step 9: Send fees
+        if (graduationFee > 0) {
             uint256 protocolGradCut = graduationFee - creatorGradCut;
-
             if (protocolGradCut > 0) {
                 SafeTransferLib.safeTransferETH(protocolTreasury, protocolGradCut);
             }
@@ -1331,96 +1429,19 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IUnlockCallba
                 SafeTransferLib.safeTransferETH(factoryCreator, creatorGradCut);
                 emit CreatorGraduationFeePaid(factoryCreator, creatorGradCut);
             }
-            emit GraduationFeePaid(protocolTreasury, protocolGradCut);
+            emit GraduationFeePaid(protocolTreasury, graduationFee - creatorGradCut);
         }
 
-        // Reserve POL amounts (after graduation fee, before main deployment)
-        uint256 polETHReserve = 0;
-        uint256 polTokenReserve = 0;
-        if (polBps > 0 && protocolTreasury != address(0)) {
-            polETHReserve = (ethForPool * polBps) / 10000;
-            polTokenReserve = (amountToken * polBps) / 10000;
-            ethForPool -= polETHReserve;
-            amountToken -= polTokenReserve;
-            amountETH = ethForPool;
+        // Step 10: Deploy POL
+        if (polETH > 0 && polTokens > 0) {
+            _deployProtocolLiquidity(poolKey, tickLower, tickUpper, polTokens, polETH, token0IsThis);
         }
 
-        // Create pool key and determine currency ordering
-        PoolKey memory poolKey;
-        bool token0IsThis;
-        {
-            Currency currency0 = Currency.wrap(address(this));
-            Currency currency1 = Currency.wrap(weth);
-            token0IsThis = currency0 < currency1;
-
-            if (!token0IsThis) {
-                (currency0, currency1) = (currency1, currency0);
-                (amountToken, amountETH) = (amountETH, amountToken);
-            }
-
-            poolKey = PoolKey({
-                currency0: currency0,
-                currency1: currency1,
-                fee: poolFee,
-                tickSpacing: tickSpacing,
-                hooks: v4Hook
-            });
-        }
-
-        // Wrap ETH to WETH if needed
-        if (ethForPool > 0) {
-            IWETH(weth).deposit{value: ethForPool}();
-        }
-
-        // Approve pool manager to spend WETH if needed
-        if (!token0IsThis) {
-            IERC20(weth).approve(address(v4PoolManager), ethForPool);
-        }
-
-        // Initialize pool with initial price
-        v4PoolManager.initialize(poolKey, sqrtPriceX96);
-
-        // Calculate liquidity and add to pool
-        {
-            uint160 sqrtPriceAX96 = TickMath.getSqrtPriceAtTick(tickLower);
-            uint160 sqrtPriceBX96 = TickMath.getSqrtPriceAtTick(tickUpper);
-
-            liquidity = LiquidityAmounts.getLiquidityForAmounts(
-                sqrtPriceX96,
-                sqrtPriceAX96,
-                sqrtPriceBX96,
-                amountToken,
-                amountETH
-            );
-
-            // Prepare and execute liquidity deployment
-            LiquidityDeployParams memory deployParams = LiquidityDeployParams({
-                poolKey: poolKey,
-                tickLower: tickLower,
-                tickUpper: tickUpper,
-                amount0: amountToken,
-                amount1: amountETH,
-                sender: address(this)
-            });
-
-            v4PoolManager.unlock(abi.encode(deployParams));
-        }
-
-        // Deploy protocol-owned liquidity to treasury
-        if (polETHReserve > 0 && polTokenReserve > 0) {
-            _deployProtocolLiquidity(poolKey, tickLower, tickUpper, polTokenReserve, polETHReserve, token0IsThis);
-        }
-
-        // Store pool address and update reserve
+        // Step 11: Update state
         liquidityPool = address(v4PoolManager);
-        reserve -= originalTokenAmount;
+        reserve = 0; // All reserve ETH has been deployed
 
-        // Refund excess ETH
-        if (msg.value > originalETHAmount) {
-            SafeTransferLib.safeTransferETH(msg.sender, msg.value - originalETHAmount);
-        }
-
-        emit LiquidityDeployed(liquidityPool, originalTokenAmount, ethForPool);
+        emit LiquidityDeployed(liquidityPool, tokensForPool, ethForPool);
     }
 
     /**
@@ -1526,8 +1547,8 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IUnlockCallba
      * @dev Each NFT represents 1,000,000 tokens (1M tokens = 1 NFT)
      * @return The number of tokens per NFT
      */
-    function _unit() internal pure override returns (uint256) {
-        return 1000000 * 10 ** 18;
+    function _unit() internal view override returns (uint256) {
+        return UNIT;
     }
 
     /**

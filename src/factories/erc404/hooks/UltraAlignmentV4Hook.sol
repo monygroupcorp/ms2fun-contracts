@@ -5,10 +5,11 @@ import {ReentrancyGuard} from "solady/utils/ReentrancyGuard.sol";
 import {Ownable} from "solady/auth/Ownable.sol";
 import {Hooks} from "v4-core/libraries/Hooks.sol";
 import {SafeCast} from "v4-core/libraries/SafeCast.sol";
+import {LPFeeLibrary} from "v4-core/libraries/LPFeeLibrary.sol";
 import {IHooks} from "v4-core/interfaces/IHooks.sol";
 import {IPoolManager} from "v4-core/interfaces/IPoolManager.sol";
 import {BalanceDelta} from "v4-core/types/BalanceDelta.sol";
-import {BeforeSwapDelta} from "v4-core/types/BeforeSwapDelta.sol";
+import {BeforeSwapDelta, BeforeSwapDeltaLibrary} from "v4-core/types/BeforeSwapDelta.sol";
 import {Currency, CurrencyLibrary} from "v4-core/types/Currency.sol";
 import {PoolKey} from "v4-core/types/PoolKey.sol";
 import {IAlignmentVault} from "../../../interfaces/IAlignmentVault.sol";
@@ -16,9 +17,11 @@ import {IERC20} from "../../../shared/interfaces/IERC20.sol";
 
 /**
  * @title UltraAlignmentV4Hook
- * @notice Uniswap v4 hook that taxes swaps and sends taxes to alignment vault
- * @dev Taxes are sent directly to vault with project instance tracking for contribution metrics
- * @dev Implements IHooks directly - only afterSwap is active, all other hooks return appropriate selectors
+ * @notice Uniswap v4 hook that collects alignment fees on swaps and sends them to the vault
+ * @dev Fees are sent directly to vault with project instance tracking for contribution metrics.
+ *      Uses beforeSwap for dynamic LP fee override and afterSwap for ETH-side fee collection.
+ *      Hook fee (hookFeeBips) is immutable — set once at deploy, no governance risk.
+ *      LP fee (lpFeeRate) is owner-adjustable via setLpFeeRate().
  */
 contract UltraAlignmentV4Hook is IHooks, ReentrancyGuard, Ownable {
     using Hooks for IHooks;
@@ -27,39 +30,40 @@ contract UltraAlignmentV4Hook is IHooks, ReentrancyGuard, Ownable {
 
     IPoolManager public immutable poolManager;
     IAlignmentVault public immutable vault;
-    address public immutable weth; // WETH address for validation
-    
-    // Tax rate in basis points (e.g., 100 = 1%)
-    uint256 public taxRateBips;
-    
-    // Events
-    event SwapTaxed(
-        address indexed sender,
-        Currency indexed currency,
-        uint256 taxAmount,
-        address indexed projectInstance
-    );
-    
-    event TaxRateUpdated(uint256 newRate);
+    address public immutable weth;
+
+    /// @notice Hook fee in basis points — immutable, set at deploy (e.g., 100 = 1%)
+    uint256 public immutable hookFeeBips;
+
+    /// @notice LP fee rate — owner-configurable, overrides pool's static fee via beforeSwap
+    uint24 public lpFeeRate;
+
+    event AlignmentFeeCollected(uint256 ethAmount, address indexed benefactor);
+    event LpFeeRateUpdated(uint24 newRate);
 
     constructor(
         IPoolManager _poolManager,
         IAlignmentVault _vault,
         address _weth,
-        address _owner
+        address _owner,
+        uint256 _hookFeeBips,
+        uint24 _initialLpFeeRate
     ) {
         require(address(_poolManager) != address(0), "Invalid pool manager");
         require(address(_vault) != address(0), "Invalid vault");
         require(_weth != address(0), "Invalid WETH");
         require(_owner != address(0), "Invalid owner");
+        require(_hookFeeBips <= 10000, "Hook fee too high");
+        require(_initialLpFeeRate <= LPFeeLibrary.MAX_LP_FEE, "LP fee too high");
 
         _initializeOwner(_owner);
         poolManager = _poolManager;
         vault = _vault;
         weth = _weth;
-        taxRateBips = 100; // 1% default
-        
-        // Validate hook permissions - we need afterSwap with return delta
+        hookFeeBips = _hookFeeBips;
+        lpFeeRate = _initialLpFeeRate;
+
+        // Validate hook permissions — beforeSwap + afterSwap with return delta
         Hooks.validateHookPermissions(
             IHooks(address(this)),
             Hooks.Permissions({
@@ -69,7 +73,7 @@ contract UltraAlignmentV4Hook is IHooks, ReentrancyGuard, Ownable {
                 afterAddLiquidity: false,
                 beforeRemoveLiquidity: false,
                 afterRemoveLiquidity: false,
-                beforeSwap: false,
+                beforeSwap: true,
                 afterSwap: true,
                 beforeDonate: false,
                 afterDonate: false,
@@ -87,99 +91,63 @@ contract UltraAlignmentV4Hook is IHooks, ReentrancyGuard, Ownable {
     }
 
     /**
-     * @notice Hook called after a swap - taxes the swap and accumulates tokens
-     * @param sender The address that initiated the swap
-     * @param key The pool key for the pool being swapped
-     * @param params The swap parameters
-     * @param delta The balance delta from the swap
-     * @param hookData Arbitrary data passed to the hook
-     * @return selector The function selector
-     * @return hookDelta The hook's delta (positive means hook took tokens)
+     * @notice Dynamic LP fee override — returns owner-configurable lpFeeRate on every swap
+     */
+    function beforeSwap(address, PoolKey calldata, IPoolManager.SwapParams calldata, bytes calldata)
+        external
+        view
+        onlyPoolManager
+        returns (bytes4, BeforeSwapDelta, uint24)
+    {
+        return (
+            IHooks.beforeSwap.selector,
+            BeforeSwapDeltaLibrary.ZERO_DELTA,
+            lpFeeRate | LPFeeLibrary.OVERRIDE_FEE_FLAG
+        );
+    }
+
+    /**
+     * @notice Collect alignment fee on the ETH side of every swap
+     * @dev Always taxes delta.amount0() since currency0 must be native ETH.
+     *      Works for both buys (ETH→token) and sells (token→ETH).
      */
     function afterSwap(
         address sender,
         PoolKey calldata key,
-        IPoolManager.SwapParams calldata params,
+        IPoolManager.SwapParams calldata,
         BalanceDelta delta,
-        bytes calldata hookData
+        bytes calldata
     ) external onlyPoolManager returns (bytes4, int128) {
-        // Calculate tax and send to vault
-        int128 taxDelta = _processTax(sender, key, params, delta);
-        return (IHooks.afterSwap.selector, taxDelta);
+        // Always tax the ETH movement (currency0 = native ETH)
+        require(Currency.unwrap(key.currency0) == address(0), "Pool currency0 must be native ETH");
+
+        int128 amount0 = delta.amount0();
+        uint256 ethMoved = amount0 < 0 ? uint256(uint128(-amount0)) : uint256(uint128(amount0));
+        uint256 feeAmount = (ethMoved * hookFeeBips) / 10000;
+
+        if (feeAmount > 0) {
+            poolManager.take(key.currency0, address(this), feeAmount);
+            vault.receiveInstance{value: feeAmount}(key.currency0, feeAmount, sender);
+            emit AlignmentFeeCollected(feeAmount, sender);
+            return (IHooks.afterSwap.selector, feeAmount.toInt128());
+        }
+
+        return (IHooks.afterSwap.selector, int128(0));
     }
 
     /**
-     * @dev Internal function to process tax calculation and transfer
-     * Extracted to avoid stack too deep errors
+     * @notice Set LP fee rate (owner only)
+     * @param _rate New LP fee rate (max LPFeeLibrary.MAX_LP_FEE = 1000000 = 100%)
      */
-    function _processTax(
-        address sender,
-        PoolKey calldata key,
-        IPoolManager.SwapParams calldata params,
-        BalanceDelta delta
-    ) private returns (int128) {
-        // Calculate which currency is being swapped out (the unspecified currency)
-        bool specifiedTokenIs0 = (params.amountSpecified < 0 == params.zeroForOne);
-        Currency taxCurrency;
-        int128 swapAmount;
-
-        if (specifiedTokenIs0) {
-            // Swapping token0 for token1, tax is on token1 (output)
-            taxCurrency = key.currency1;
-            swapAmount = delta.amount1();
-        } else {
-            // Swapping token1 for token0, tax is on token0 (output)
-            taxCurrency = key.currency0;
-            swapAmount = delta.amount0();
-        }
-
-        // Get absolute value of swap amount
-        if (swapAmount < 0) swapAmount = -swapAmount;
-
-        // Calculate tax amount
-        uint256 taxAmount = (uint128(swapAmount) * taxRateBips) / 10000;
-
-        if (taxAmount > 0) {
-            // ENFORCE: Only accept native ETH taxes (pools must be native ETH paired)
-            /// @dev Only native ETH (address(0)) is supported. WETH is not supported because
-            /// the tax forwarding mechanism uses {value: taxAmount} which only works with native ETH.
-            address token = Currency.unwrap(taxCurrency);
-            require(
-                token == address(0),
-                "Hook only accepts native ETH taxes - pool must be native ETH paired"
-            );
-
-            // Take tokens from the pool manager
-            poolManager.take(taxCurrency, address(this), taxAmount);
-
-            // Send tax directly to vault with sender as benefactor
-            // Vault will accumulate and track ETH from the instance/benefactor
-            vault.receiveInstance{value: taxAmount}(taxCurrency, taxAmount, sender);
-
-            emit SwapTaxed(sender, taxCurrency, taxAmount, sender);
-
-            // Return the tax amount as positive delta (hook took tokens)
-            return taxAmount.toInt128();
-        }
-
-        return 0;
-    }
-
-
-    /**
-     * @notice Set tax rate (owner only)
-     * @param _rate New tax rate in basis points (max 10000 = 100%)
-     */
-    function setTaxRate(uint256 _rate) external onlyOwner {
-        require(_rate <= 10000, "Rate too high");
-        taxRateBips = _rate;
-        emit TaxRateUpdated(_rate);
+    function setLpFeeRate(uint24 _rate) external onlyOwner {
+        require(_rate <= LPFeeLibrary.MAX_LP_FEE, "Rate too high");
+        lpFeeRate = _rate;
+        emit LpFeeRateUpdated(_rate);
     }
 
     // ============================================
     // Unused Hook Implementations (Stub Methods)
     // ============================================
-    // These hooks are not enabled but must be implemented for IHooks interface compliance
 
     function beforeInitialize(address, PoolKey calldata, uint160)
         external
@@ -235,14 +203,6 @@ contract UltraAlignmentV4Hook is IHooks, ReentrancyGuard, Ownable {
         return (IHooks.afterRemoveLiquidity.selector, BalanceDelta.wrap(0));
     }
 
-    function beforeSwap(address, PoolKey calldata, IPoolManager.SwapParams calldata, bytes calldata)
-        external
-        pure
-        returns (bytes4, BeforeSwapDelta, uint24)
-    {
-        return (IHooks.beforeSwap.selector, BeforeSwapDelta.wrap(0), 0);
-    }
-
     function beforeDonate(address, PoolKey calldata, uint256, uint256, bytes calldata)
         external
         pure
@@ -258,5 +218,7 @@ contract UltraAlignmentV4Hook is IHooks, ReentrancyGuard, Ownable {
     {
         return IHooks.afterDonate.selector;
     }
-}
 
+    /// @notice Receive ETH from poolManager.take() before forwarding to vault
+    receive() external payable {}
+}

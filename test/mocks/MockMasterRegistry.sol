@@ -11,14 +11,7 @@ import {IMasterRegistry} from "../../src/master/interfaces/IMasterRegistry.sol";
 contract MockMasterRegistry is IMasterRegistry {
     // Simple no-op implementations for testing
 
-    function applyForFactory(
-        address,
-        string memory,
-        string memory,
-        string memory,
-        string memory,
-        bytes32[] memory
-    ) external payable override {}
+    // applyForFactory removed in owner-only rework
 
     function registerInstance(
         address,
@@ -29,31 +22,7 @@ contract MockMasterRegistry is IMasterRegistry {
         address
     ) external override {}
 
-    function getFactoryApplication(address)
-        external
-        view
-        override
-        returns (FactoryApplication memory)
-    {
-        return FactoryApplication({
-            factoryAddress: address(0),
-            applicant: address(0),
-            contractType: "",
-            title: "",
-            displayTitle: "",
-            metadataURI: "",
-            features: new bytes32[](0),
-            status: ApplicationStatus.Pending,
-            applicationFee: 0,
-            createdAt: 0,
-            totalVotes: 0,
-            approvalVotes: 0,
-            rejectionVotes: 0,
-            rejectionReason: "",
-            verified: false,
-            verificationURI: ""
-        });
-    }
+    // getFactoryApplication removed in owner-only rework
 
     function getFactoryInfo(uint256)
         external
@@ -115,8 +84,9 @@ contract MockMasterRegistry is IMasterRegistry {
     function registerVault(
         address,
         string memory,
-        string memory
-    ) external payable override {}
+        string memory,
+        uint256
+    ) external override {}
 
     function getVaultInfo(address)
         external
@@ -130,7 +100,8 @@ contract MockMasterRegistry is IMasterRegistry {
             name: "",
             metadataURI: "",
             active: false,
-            registeredAt: 0
+            registeredAt: 0,
+            targetId: 0
         });
     }
 
@@ -139,6 +110,58 @@ contract MockMasterRegistry is IMasterRegistry {
     }
 
     function deactivateVault(address) external override {}
+
+    // Alignment Target stubs
+    function registerAlignmentTarget(
+        string memory,
+        string memory,
+        string memory,
+        AlignmentAsset[] memory
+    ) external override returns (uint256) {
+        return 0;
+    }
+
+    function getAlignmentTarget(uint256) external view override returns (AlignmentTarget memory) {
+        return AlignmentTarget({
+            id: 0,
+            title: "",
+            description: "",
+            metadataURI: "",
+            approvedAt: 0,
+            active: false
+        });
+    }
+
+    function getAlignmentTargetAssets(uint256) external view override returns (AlignmentAsset[] memory) {
+        return new AlignmentAsset[](0);
+    }
+
+    function isAlignmentTargetActive(uint256) external view override returns (bool) {
+        return false;
+    }
+
+    function isApprovedAlignmentToken(uint256, address) external view override returns (bool) {
+        return false;
+    }
+
+    function deactivateAlignmentTarget(uint256) external override {}
+
+    function updateAlignmentTarget(
+        uint256,
+        string memory,
+        string memory
+    ) external override {}
+
+    function addAmbassador(uint256, address) external override {}
+    function removeAmbassador(uint256, address) external override {}
+
+    function getAmbassadors(uint256) external view override returns (address[] memory) {
+        return new address[](0);
+    }
+
+    function isAmbassador(uint256, address) external view override returns (bool) {
+        return false;
+    }
 
     function vaultRegistrationFee() external view override returns (uint256) {
         return 0;
