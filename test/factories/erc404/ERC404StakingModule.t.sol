@@ -100,14 +100,17 @@ contract ERC404StakingModuleTest is Test {
         module.recordUnstake(user1, 101 ether);
     }
 
-    function test_recordFeesReceived_updatesCumulative() public {
+    function test_recordFeesReceived_updatesRewardPerToken() public {
         vm.prank(instance1);
         module.enableStaking();
+        vm.prank(instance1);
+        module.recordStake(user1, 100 ether);  // need a staker for rate to update
 
         vm.prank(instance1);
         module.recordFeesReceived(50 ether);
 
-        assertEq(module.totalFeesAccumulated(instance1), 50 ether);
+        // rewardPerTokenStored = (50 ETH * 1e18) / 100 ether = 0.5 ETH per token (scaled)
+        assertEq(module.rewardPerTokenStored(instance1), 0.5 ether);
     }
 
     function test_computeClaim_twoStakers_shareBasedAccounting() public {
@@ -143,6 +146,37 @@ contract ERC404StakingModuleTest is Test {
         vm.prank(instance1);
         uint256 user1SecondPayout = module.computeClaim(user1);
         assertEq(user1SecondPayout, 50 ether);
+    }
+
+    function test_recordStake_lateJoiner_doesNotDilutePriorStaker() public {
+        vm.prank(instance1);
+        module.enableStaking();
+
+        // user1 stakes first
+        vm.prank(instance1);
+        module.recordStake(user1, 100 ether);
+
+        // Fees arrive while user1 is sole staker — user1 entitled to all of it
+        vm.prank(instance1);
+        module.recordFeesReceived(100 ether);
+
+        // user2 joins late
+        vm.prank(instance1);
+        module.recordStake(user2, 100 ether);
+
+        // More fees arrive, now 50/50
+        vm.prank(instance1);
+        module.recordFeesReceived(100 ether);
+
+        // user1: 100 ETH (sole epoch) + 50 ETH (shared epoch) = 150 ETH
+        vm.prank(instance1);
+        uint256 user1Payout = module.computeClaim(user1);
+        assertEq(user1Payout, 150 ether);
+
+        // user2: 0 ETH (before stake) + 50 ETH (shared epoch) = 50 ETH
+        vm.prank(instance1);
+        uint256 user2Payout = module.computeClaim(user2);
+        assertEq(user2Payout, 50 ether);
     }
 
     function test_computeClaim_noPendingRewards_reverts() public {
