@@ -5,14 +5,13 @@ import {Test} from "forge-std/Test.sol";
 import {DeploySepolia} from "../../script/DeploySepolia.s.sol";
 import {MasterRegistryV1} from "../../src/master/MasterRegistryV1.sol";
 import {IMasterRegistry} from "../../src/master/interfaces/IMasterRegistry.sol";
+import {IAlignmentRegistry} from "../../src/master/interfaces/IAlignmentRegistry.sol";
 
 contract DeploySepoliaTest is Test {
     DeploySepolia s;
 
     function setUp() public {
         s = new DeploySepolia();
-        // deploy() creates all contracts with msg.sender = address(s)
-        // so all ownership goes to the DeploySepolia contract
         s.deploy(address(s));
     }
 
@@ -31,11 +30,12 @@ contract DeploySepoliaTest is Test {
         assertTrue(address(s.erc1155Factory()) != address(0), "erc1155Factory");
         assertTrue(address(s.erc721Factory()) != address(0), "erc721Factory");
         assertTrue(address(s.promotionBadges()) != address(0), "promotionBadges");
+        assertTrue(address(s.launchManager()) != address(0), "launchManager");
+        assertTrue(address(s.curveParamsComputer()) != address(0), "curveParamsComputer");
     }
 
     function test_masterRegistryProxyInitialized() public view {
         MasterRegistryV1 registry = MasterRegistryV1(s.masterRegistry());
-        // Owner is deployer param passed to deploy(), which is address(s)
         assertEq(registry.owner(), address(s));
     }
 
@@ -55,21 +55,20 @@ contract DeploySepoliaTest is Test {
     }
 
     function test_alignmentTargetCreated() public view {
-        MasterRegistryV1 registry = MasterRegistryV1(s.masterRegistry());
-        IMasterRegistry.AlignmentTarget memory target = registry.getAlignmentTarget(s.alignmentTargetId());
+        IAlignmentRegistry.AlignmentTarget memory target = s.alignmentRegistry().getAlignmentTarget(s.alignmentTargetId());
         assertEq(target.id, s.alignmentTargetId());
         assertTrue(target.active);
 
-        IMasterRegistry.AlignmentAsset[] memory assets = registry.getAlignmentTargetAssets(s.alignmentTargetId());
+        IAlignmentRegistry.AlignmentAsset[] memory assets = s.alignmentRegistry().getAlignmentTargetAssets(s.alignmentTargetId());
         assertEq(assets.length, 1);
         assertEq(assets[0].token, address(s.testToken()));
     }
 
     function test_factoryWiring() public view {
-        // ERC404Factory
+        // ERC404Factory: tier perks now via LaunchManager
         assertEq(s.erc404Factory().protocolTreasury(), address(s.treasury()));
-        assertEq(address(s.erc404Factory().promotionBadges()), address(s.promotionBadges()));
-        assertEq(address(s.erc404Factory().featuredQueueManager()), address(s.queueManager()));
+        assertEq(address(s.launchManager().promotionBadges()), address(s.promotionBadges()));
+        assertEq(address(s.launchManager().featuredQueueManager()), address(s.queueManager()));
 
         // ERC1155Factory
         assertEq(s.erc1155Factory().protocolTreasury(), address(s.treasury()));
@@ -84,8 +83,7 @@ contract DeploySepoliaTest is Test {
 
     function test_masterRegistryWiring() public view {
         MasterRegistryV1 registry = MasterRegistryV1(s.masterRegistry());
-        assertEq(registry.getGlobalMessageRegistry(), address(s.globalMessageRegistry()));
-        assertEq(registry.featuredQueueManager(), address(s.queueManager()));
+        // featuredQueueManager moved out of MasterRegistryV1
     }
 
     function test_daoConfig() public view {
@@ -99,7 +97,8 @@ contract DeploySepoliaTest is Test {
     }
 
     function test_promotionBadgesAuthorized() public view {
-        assertTrue(s.promotionBadges().authorizedFactories(address(s.erc404Factory())));
+        // ERC404: LaunchManager is authorized (not factory directly)
+        assertTrue(s.promotionBadges().authorizedFactories(address(s.launchManager())));
         assertTrue(s.promotionBadges().authorizedFactories(address(s.erc1155Factory())));
         assertTrue(s.promotionBadges().authorizedFactories(address(s.erc721Factory())));
     }

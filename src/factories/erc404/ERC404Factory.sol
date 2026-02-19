@@ -11,10 +11,8 @@ import {IFactory} from "../../interfaces/IFactory.sol";
 import {ERC404BondingInstance} from "./ERC404BondingInstance.sol";
 import {ERC404StakingModule} from "./ERC404StakingModule.sol";
 import {LiquidityDeployerModule} from "./LiquidityDeployerModule.sol";
-import {PromotionBadges} from "../../promotion/PromotionBadges.sol";
-import {FeaturedQueueManager} from "../../master/FeaturedQueueManager.sol";
-import {BondingCurveMath} from "./libraries/BondingCurveMath.sol";
-import {FixedPointMathLib} from "solady/utils/FixedPointMathLib.sol";
+import {LaunchManager} from "./LaunchManager.sol";
+import {CurveParamsComputer} from "./CurveParamsComputer.sol";
 import {LPFeeLibrary} from "v4-core/libraries/LPFeeLibrary.sol";
 
 /**
@@ -23,12 +21,11 @@ import {LPFeeLibrary} from "v4-core/libraries/LPFeeLibrary.sol";
  * @dev Requires vault to have its hook pre-configured (created via UltraAlignmentHookFactory.createVaultWithHook)
  */
 contract ERC404Factory is OwnableRoles, ReentrancyGuard, IFactory {
-    using FixedPointMathLib for uint256;
-
     uint256 public constant PROTOCOL_ROLE = _ROLE_0;  // 1 << 0 = 1
     uint256 public constant CREATOR_ROLE = _ROLE_1;   // 1 << 1 = 2
 
     IMasterRegistry public masterRegistry;
+    address public immutable globalMessageRegistry;
     address public instanceTemplate;
     uint256 public instanceCreationFee;
     address public v4PoolManager;
@@ -47,22 +44,14 @@ contract ERC404Factory is OwnableRoles, ReentrancyGuard, IFactory {
     uint256 public accumulatedCreatorFees;
     uint256 public accumulatedProtocolFees;
 
-    // Tiered creation
-    enum CreationTier { STANDARD, PREMIUM, LAUNCH }
-
-    struct TierConfig {
-        uint256 fee;
-        uint256 featuredDuration;    // 0 = no featured placement
-        uint256 featuredPosition;    // Position to place in queue (0 = no placement)
-        PromotionBadges.BadgeType badge; // NONE = no badge
-        uint256 badgeDuration;       // 0 = no badge
-    }
-
-    mapping(CreationTier => TierConfig) public tierConfigs;
-    PromotionBadges public promotionBadges;
-    FeaturedQueueManager public featuredQueueManager;
+    // Modules
     ERC404StakingModule public immutable stakingModule;
     LiquidityDeployerModule public immutable liquidityDeployer;
+    LaunchManager public immutable launchManager;
+    CurveParamsComputer public immutable curveComputer;
+
+    // Tiered creation — enum kept here for backward-compatible external ABI
+    enum CreationTier { STANDARD, PREMIUM, LAUNCH }
 
     // Feature matrix
     bytes32[] public features = [
@@ -85,15 +74,7 @@ contract ERC404Factory is OwnableRoles, ReentrancyGuard, IFactory {
 
     mapping(uint256 => GraduationProfile) public profiles;
 
-    // Reference curve shape weights (protocol-configurable)
-    uint256 public quarticWeight = 3 gwei;
-    uint256 public cubicWeight = 1333333333;
-    uint256 public quadraticWeight = 2 gwei;
-    uint256 public baseWeight = 0.025 ether;
-
     event ProfileUpdated(uint256 indexed profileId, uint256 targetETH, bool active);
-    event CurveWeightsUpdated();
-
     event InstanceCreated(
         address indexed instance,
         address indexed creator,
@@ -110,7 +91,6 @@ contract ERC404Factory is OwnableRoles, ReentrancyGuard, IFactory {
     event BondingFeeUpdated(uint256 newBps);
     event GraduationFeeUpdated(uint256 newBps);
     event POLConfigUpdated(uint256 newBps);
-    event TierConfigUpdated(CreationTier tier, uint256 fee);
     event InstanceCreatedWithTier(address indexed instance, CreationTier tier, uint256 fee);
 
     constructor(
@@ -123,11 +103,17 @@ contract ERC404Factory is OwnableRoles, ReentrancyGuard, IFactory {
         uint256 _creatorFeeBps,
         uint256 _creatorGraduationFeeBps,
         address _stakingModule,
-        address _liquidityDeployer
+        address _liquidityDeployer,
+        address _globalMessageRegistry,
+        address _launchManager,
+        address _curveComputer
     ) {
         require(_protocol != address(0), "Invalid protocol");
         require(_stakingModule != address(0), "Invalid staking module");
         require(_liquidityDeployer != address(0), "Invalid liquidity deployer");
+        require(_globalMessageRegistry != address(0), "Invalid global message registry");
+        require(_launchManager != address(0), "Invalid launch manager");
+        require(_curveComputer != address(0), "Invalid curve computer");
         _initializeOwner(_protocol);
         _grantRoles(_protocol, PROTOCOL_ROLE);
         _grantRoles(_creator, CREATOR_ROLE);
@@ -137,18 +123,19 @@ contract ERC404Factory is OwnableRoles, ReentrancyGuard, IFactory {
         creatorFeeBps = _creatorFeeBps;
         creatorGraduationFeeBps = _creatorGraduationFeeBps;
         masterRegistry = IMasterRegistry(_masterRegistry);
+        globalMessageRegistry = _globalMessageRegistry;
         instanceTemplate = _instanceTemplate;
         v4PoolManager = _v4PoolManager;
         weth = _weth;
         instanceCreationFee = 0.01 ether;
         stakingModule = ERC404StakingModule(_stakingModule);
         liquidityDeployer = LiquidityDeployerModule(payable(_liquidityDeployer));
+        launchManager = LaunchManager(_launchManager);
+        curveComputer = CurveParamsComputer(_curveComputer);
     }
 
     /**
      * @notice Create a new ERC404 bonding instance (defaults to STANDARD tier)
-     * @param nftCount Number of NFTs in the collection
-     * @param profileId Graduation profile ID
      */
     function createInstance(
         string memory name,
@@ -205,16 +192,11 @@ contract ERC404Factory is OwnableRoles, ReentrancyGuard, IFactory {
         string memory styleUri,
         CreationTier creationTier
     ) internal returns (address instance) {
-        // Determine fee based on tier
-        TierConfig memory config = tierConfigs[creationTier];
-        uint256 fee;
-        if (config.fee > 0) {
-            fee = config.fee;
-        } else if (creationTier == CreationTier.STANDARD) {
-            fee = instanceCreationFee;
-        } else {
-            revert("Tier not configured");
-        }
+        // Resolve fee via LaunchManager (maps our enum to theirs via uint8 cast — same ordinal)
+        uint256 fee = launchManager.getTierFee(
+            LaunchManager.CreationTier(uint8(creationTier)),
+            instanceCreationFee
+        );
 
         require(msg.value >= fee, "Insufficient fee");
 
@@ -250,7 +232,12 @@ contract ERC404Factory is OwnableRoles, ReentrancyGuard, IFactory {
         uint256 maxSupply = nftCount * unit;
         uint256 liquidityReservePercent = profile.liquidityReserveBps / 100; // Convert bps to percent
 
-        ERC404BondingInstance.BondingCurveParams memory curveParams = computeCurveParams(nftCount, profileId);
+        ERC404BondingInstance.BondingCurveParams memory curveParams = curveComputer.computeCurveParams(
+            nftCount,
+            profile.targetETH,
+            profile.unitPerNFT,
+            profile.liquidityReserveBps
+        );
 
         // Soft capability checks — emit warnings, never revert
         try IAlignmentVault(payable(vault)).supportsCapability(keccak256("YIELD_GENERATION")) returns (bool supported) {
@@ -273,7 +260,7 @@ contract ERC404Factory is OwnableRoles, ReentrancyGuard, IFactory {
             hook,
             weth,
             address(this),
-            address(masterRegistry),
+            globalMessageRegistry,
             vault,
             instanceCreator,
             styleUri,
@@ -301,15 +288,7 @@ contract ERC404Factory is OwnableRoles, ReentrancyGuard, IFactory {
         );
 
         // Apply tier perks AFTER successful deployment and registration
-        if (config.featuredDuration > 0 && address(featuredQueueManager) != address(0)) {
-            featuredQueueManager.rentFeaturedPositionFor(
-                instance, config.featuredPosition, config.featuredDuration
-            );
-        }
-
-        if (config.badge != PromotionBadges.BadgeType.NONE && address(promotionBadges) != address(0)) {
-            promotionBadges.assignBadgeFor(instance, config.badge, config.badgeDuration);
-        }
+        launchManager.applyTierPerks(instance, LaunchManager.CreationTier(uint8(creationTier)));
 
         // Refund excess
         if (msg.value > fee) {
@@ -336,29 +315,6 @@ contract ERC404Factory is OwnableRoles, ReentrancyGuard, IFactory {
     function setInstanceCreationFee(uint256 _fee) external onlyRoles(PROTOCOL_ROLE) {
         instanceCreationFee = _fee;
         emit InstanceCreationFeeUpdated(_fee);
-    }
-
-    /**
-     * @notice Set tier configuration (owner only)
-     */
-    function setTierConfig(CreationTier tier, TierConfig calldata config) external onlyRoles(PROTOCOL_ROLE) {
-        require(config.fee > 0, "Fee must be positive");
-        tierConfigs[tier] = config;
-        emit TierConfigUpdated(tier, config.fee);
-    }
-
-    /**
-     * @notice Set PromotionBadges contract reference
-     */
-    function setPromotionBadges(address _promotionBadges) external onlyRoles(PROTOCOL_ROLE) {
-        promotionBadges = PromotionBadges(_promotionBadges);
-    }
-
-    /**
-     * @notice Set FeaturedQueueManager contract reference
-     */
-    function setFeaturedQueueManager(address _featuredQueueManager) external onlyRoles(PROTOCOL_ROLE) {
-        featuredQueueManager = FeaturedQueueManager(payable(_featuredQueueManager));
     }
 
     function setProtocolTreasury(address _treasury) external onlyRoles(PROTOCOL_ROLE) {
@@ -416,66 +372,5 @@ contract ERC404Factory is OwnableRoles, ReentrancyGuard, IFactory {
         require(profile.liquidityReserveBps > 0 && profile.liquidityReserveBps < 10000, "Invalid reserve bps");
         profiles[profileId] = profile;
         emit ProfileUpdated(profileId, profile.targetETH, profile.active);
-    }
-
-    function setCurveWeights(
-        uint256 _quarticWeight,
-        uint256 _cubicWeight,
-        uint256 _quadraticWeight,
-        uint256 _baseWeight
-    ) external onlyRoles(PROTOCOL_ROLE) {
-        quarticWeight = _quarticWeight;
-        cubicWeight = _cubicWeight;
-        quadraticWeight = _quadraticWeight;
-        baseWeight = _baseWeight;
-        emit CurveWeightsUpdated();
-    }
-
-    /**
-     * @notice Compute bonding curve parameters from profile and NFT count
-     * @dev Fixed shape, scaled amplitude. Computes normalizationFactor dynamically
-     *      to keep math in safe uint256 range, then scales coefficients to hit targetETH.
-     * @param nftCount Number of NFTs in the collection
-     * @param profileId Graduation profile ID
-     * @return params Computed BondingCurveParams
-     */
-    function computeCurveParams(
-        uint256 nftCount,
-        uint256 profileId
-    ) public view returns (ERC404BondingInstance.BondingCurveParams memory params) {
-        GraduationProfile memory profile = profiles[profileId];
-        require(profile.active, "Profile not active");
-
-        uint256 totalSupply = nftCount * profile.unitPerNFT * 1e18;
-        uint256 liquidityReserve = (totalSupply * profile.liquidityReserveBps) / 10000;
-        uint256 maxBondingSupply = totalSupply - liquidityReserve;
-
-        // Compute normalization factor: scale supply down to ~1-1000 range for safe math
-        uint256 normFactor = maxBondingSupply / 1e18;
-        if (normFactor == 0) normFactor = 1;
-
-        // Compute reference integral with unit weights
-        BondingCurveMath.Params memory refParams = BondingCurveMath.Params({
-            initialPrice: baseWeight,
-            quarticCoeff: quarticWeight,
-            cubicCoeff: cubicWeight,
-            quadraticCoeff: quadraticWeight,
-            normalizationFactor: normFactor
-        });
-
-        uint256 referenceArea = BondingCurveMath.calculateCost(refParams, 0, maxBondingSupply);
-        require(referenceArea > 0, "Reference area is zero");
-
-        // Scale factor: targetETH / referenceArea (in wad)
-        uint256 scaleFactor = profile.targetETH.divWad(referenceArea);
-
-        // Apply scale to each coefficient
-        params = ERC404BondingInstance.BondingCurveParams({
-            initialPrice: baseWeight.mulWad(scaleFactor),
-            quarticCoeff: quarticWeight.mulWad(scaleFactor),
-            cubicCoeff: cubicWeight.mulWad(scaleFactor),
-            quadraticCoeff: quadraticWeight.mulWad(scaleFactor),
-            normalizationFactor: normFactor
-        });
     }
 }

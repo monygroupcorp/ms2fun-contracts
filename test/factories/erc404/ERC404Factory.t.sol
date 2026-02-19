@@ -5,38 +5,20 @@ import {Test, console} from "forge-std/Test.sol";
 import {ERC404Factory} from "../../../src/factories/erc404/ERC404Factory.sol";
 import {ERC404BondingInstance} from "../../../src/factories/erc404/ERC404BondingInstance.sol";
 import {ERC404StakingModule} from "../../../src/factories/erc404/ERC404StakingModule.sol";
+import {LaunchManager} from "../../../src/factories/erc404/LaunchManager.sol";
+import {CurveParamsComputer} from "../../../src/factories/erc404/CurveParamsComputer.sol";
 import {MockMasterRegistry} from "../../mocks/MockMasterRegistry.sol";
 import {PromotionBadges} from "../../../src/promotion/PromotionBadges.sol";
 import {BondingCurveMath} from "../../../src/factories/erc404/libraries/BondingCurveMath.sol";
 
-/**
- * @title MockVault
- * @notice Simple mock vault for testing ERC404Factory
- */
 contract MockVault {
     address public owner;
-
-    constructor() {
-        owner = msg.sender;
-    }
-
-    // Mock other vault functions that might be called
+    constructor() { owner = msg.sender; }
     receive() external payable {}
 }
 
-/**
- * @title MockHook
- * @notice Simple mock hook for testing ERC404Factory
- */
-contract MockHook {
-    // Minimal mock hook contract
-}
+contract MockHook {}
 
-/**
- * @title ERC404FactoryTest
- * @notice Comprehensive test suite for ERC404Factory
- * @dev Tests instance creation, parameter management, fee handling, and event emission
- */
 contract MockMasterRegistryForStakingF {
     mapping(address => bool) public instances;
     function setInstance(address a, bool v) external { instances[a] = v; }
@@ -45,25 +27,24 @@ contract MockMasterRegistryForStakingF {
 
 contract ERC404FactoryTest is Test {
     ERC404Factory public factory;
+    LaunchManager public launchMgr;
+    CurveParamsComputer public curveComp;
     MockMasterRegistry public mockRegistry;
     MockVault public mockVault;
     MockHook public mockHook;
     MockMasterRegistryForStakingF public stakingRegistry;
     ERC404StakingModule public stakingModule;
 
-    // Test addresses
-    address public owner = address(0x1);
     address public protocolAdmin = address(0x9);
     address public creator1 = address(0x2);
     address public creator2 = address(0x3);
     address public nonOwner = address(0x5);
 
-    // Mock infrastructure addresses
     address public mockV4PoolManager = address(0x1111111111111111111111111111111111111111);
     address public mockWETH = address(0x2222222222222222222222222222222222222222);
     address public mockInstanceTemplate = address(0x4444444444444444444444444444444444444444);
+    address public mockGMR = address(0x5555555555555555555555555555555555555555);
 
-    // Test parameters
     uint256 constant INSTANCE_CREATION_FEE = 0.01 ether;
     uint256 constant DEFAULT_NFT_COUNT = 10;
     uint256 constant DEFAULT_PROFILE_ID = 1;
@@ -82,34 +63,30 @@ contract ERC404FactoryTest is Test {
     function setUp() public {
         vm.startPrank(protocolAdmin);
 
-        // Deploy mock registry
         mockRegistry = new MockMasterRegistry();
-
-        // Deploy mock vault
         mockVault = new MockVault();
-
-        // Deploy mock hook
         mockHook = new MockHook();
-
-        // Deploy staking module
         stakingRegistry = new MockMasterRegistryForStakingF();
         stakingModule = new ERC404StakingModule(address(stakingRegistry));
+        launchMgr = new LaunchManager(protocolAdmin);
+        curveComp = new CurveParamsComputer(protocolAdmin);
 
-        // Deploy factory (no hookFactory needed anymore)
         factory = new ERC404Factory(
             address(mockRegistry),
             mockInstanceTemplate,
             mockV4PoolManager,
             mockWETH,
-            protocolAdmin,      // protocol address (gets PROTOCOL_ROLE + owner)
-            address(0xC1EA),    // creator address (gets CREATOR_ROLE)
-            2000,               // creatorFeeBps
-            40,                 // creatorGraduationFeeBps
-            address(stakingModule), // staking module
-            address(0x600) // mockLiquidityDeployer
+            protocolAdmin,
+            address(0xC1EA),
+            2000,
+            40,
+            address(stakingModule),
+            address(0x600),
+            mockGMR,
+            address(launchMgr),
+            address(curveComp)
         );
 
-        // Setup default graduation profile (Standard: 15 ETH target, 1M tokens/NFT)
         factory.setProfile(DEFAULT_PROFILE_ID, ERC404Factory.GraduationProfile({
             targetETH: 15 ether,
             unitPerNFT: 1e6,
@@ -119,11 +96,9 @@ contract ERC404FactoryTest is Test {
             active: true
         }));
 
-        // Setup default tier configuration
         bytes32[] memory passwordHashes = new bytes32[](2);
         passwordHashes[0] = keccak256("password1");
         passwordHashes[1] = keccak256("password2");
-
         uint256[] memory volumeCaps = new uint256[](2);
         volumeCaps[0] = 1000 * 1e18;
         volumeCaps[1] = 10000 * 1e18;
@@ -145,269 +120,148 @@ contract ERC404FactoryTest is Test {
     function test_createInstance_successfulCreation() public {
         vm.deal(creator1, 1 ether);
         vm.startPrank(creator1);
-
         address instance = factory.createInstance{value: INSTANCE_CREATION_FEE}(
-            "TestToken",
-            "TEST",
-            "ipfs://metadata",
-            DEFAULT_NFT_COUNT,
-            DEFAULT_PROFILE_ID,
-            defaultTierConfig,
-            creator1,
-            address(mockVault),
-            address(mockHook),
-            "" // styleUri
+            "TestToken", "TEST", "ipfs://metadata",
+            DEFAULT_NFT_COUNT, DEFAULT_PROFILE_ID, defaultTierConfig,
+            creator1, address(mockVault), address(mockHook), ""
         );
-
         assertTrue(instance != address(0), "Instance should be created");
-
         vm.stopPrank();
     }
 
     function test_createInstance_withVaultAndHook() public {
         vm.deal(creator1, 1 ether);
         vm.startPrank(creator1);
-
         address instance = factory.createInstance{value: INSTANCE_CREATION_FEE}(
-            "TestToken",
-            "TEST",
-            "ipfs://metadata",
-            DEFAULT_NFT_COUNT,
-            DEFAULT_PROFILE_ID,
-            defaultTierConfig,
-            creator1,
-            address(mockVault),
-            address(mockHook),
-            "" // styleUri
+            "TestToken", "TEST", "ipfs://metadata",
+            DEFAULT_NFT_COUNT, DEFAULT_PROFILE_ID, defaultTierConfig,
+            creator1, address(mockVault), address(mockHook), ""
         );
-
-        // Vault/hook tracking removed - now derived from InstanceCreated events
-
+        assertTrue(instance != address(0));
         vm.stopPrank();
     }
 
     function test_createInstance_vaultRequired() public {
         vm.deal(creator1, 1 ether);
         vm.startPrank(creator1);
-
         vm.expectRevert("Vault required for ultraalignment");
         factory.createInstance{value: INSTANCE_CREATION_FEE}(
-            "TestToken",
-            "TEST",
-            "ipfs://metadata",
-            DEFAULT_NFT_COUNT,
-            DEFAULT_PROFILE_ID,
-            defaultTierConfig,
-            creator1,
-            address(0), // No vault - should revert
-            address(mockHook),
-            "" // styleUri
+            "TestToken", "TEST", "ipfs://metadata",
+            DEFAULT_NFT_COUNT, DEFAULT_PROFILE_ID, defaultTierConfig,
+            creator1, address(0), address(mockHook), ""
         );
-
         vm.stopPrank();
     }
 
     function test_createInstance_hookRequired() public {
         vm.deal(creator1, 1 ether);
         vm.startPrank(creator1);
-
         vm.expectRevert("Hook required for ultraalignment");
         factory.createInstance{value: INSTANCE_CREATION_FEE}(
-            "TestToken",
-            "TEST",
-            "ipfs://metadata",
-            DEFAULT_NFT_COUNT,
-            DEFAULT_PROFILE_ID,
-            defaultTierConfig,
-            creator1,
-            address(mockVault),
-            address(0), // No hook - should revert
-            "" // styleUri
+            "TestToken", "TEST", "ipfs://metadata",
+            DEFAULT_NFT_COUNT, DEFAULT_PROFILE_ID, defaultTierConfig,
+            creator1, address(mockVault), address(0), ""
         );
-
         vm.stopPrank();
     }
 
     function test_createInstance_insufficientFee() public {
         vm.deal(creator1, 0.001 ether);
         vm.startPrank(creator1);
-
         vm.expectRevert("Insufficient fee");
         factory.createInstance{value: 0.001 ether}(
-            "TestToken",
-            "TEST",
-            "ipfs://metadata",
-            DEFAULT_NFT_COUNT,
-            DEFAULT_PROFILE_ID,
-            defaultTierConfig,
-            creator1,
-            address(mockVault),
-            address(mockHook),
-            "" // styleUri
+            "TestToken", "TEST", "ipfs://metadata",
+            DEFAULT_NFT_COUNT, DEFAULT_PROFILE_ID, defaultTierConfig,
+            creator1, address(mockVault), address(mockHook), ""
         );
-
         vm.stopPrank();
     }
 
     function test_createInstance_invalidName() public {
         vm.deal(creator1, 1 ether);
         vm.startPrank(creator1);
-
         vm.expectRevert("Invalid name");
         factory.createInstance{value: INSTANCE_CREATION_FEE}(
-            "",
-            "TEST",
-            "ipfs://metadata",
-            DEFAULT_NFT_COUNT,
-            DEFAULT_PROFILE_ID,
-            defaultTierConfig,
-            creator1,
-            address(mockVault),
-            address(mockHook),
-            "" // styleUri
+            "", "TEST", "ipfs://metadata",
+            DEFAULT_NFT_COUNT, DEFAULT_PROFILE_ID, defaultTierConfig,
+            creator1, address(mockVault), address(mockHook), ""
         );
-
         vm.stopPrank();
     }
 
     function test_createInstance_invalidSymbol() public {
         vm.deal(creator1, 1 ether);
         vm.startPrank(creator1);
-
         vm.expectRevert("Invalid symbol");
         factory.createInstance{value: INSTANCE_CREATION_FEE}(
-            "TestToken",
-            "",
-            "ipfs://metadata",
-            DEFAULT_NFT_COUNT,
-            DEFAULT_PROFILE_ID,
-            defaultTierConfig,
-            creator1,
-            address(mockVault),
-            address(mockHook),
-            "" // styleUri
+            "TestToken", "", "ipfs://metadata",
+            DEFAULT_NFT_COUNT, DEFAULT_PROFILE_ID, defaultTierConfig,
+            creator1, address(mockVault), address(mockHook), ""
         );
-
         vm.stopPrank();
     }
 
     function test_createInstance_invalidNftCount() public {
         vm.deal(creator1, 1 ether);
         vm.startPrank(creator1);
-
         vm.expectRevert("Invalid NFT count");
         factory.createInstance{value: INSTANCE_CREATION_FEE}(
-            "TestToken",
-            "TEST",
-            "ipfs://metadata",
-            0,  // Invalid NFT count
-            DEFAULT_PROFILE_ID,
-            defaultTierConfig,
-            creator1,
-            address(mockVault),
-            address(mockHook),
-            "" // styleUri
+            "TestToken", "TEST", "ipfs://metadata",
+            0, DEFAULT_PROFILE_ID, defaultTierConfig,
+            creator1, address(mockVault), address(mockHook), ""
         );
-
         vm.stopPrank();
     }
 
     function test_createInstance_invalidCreator() public {
         vm.deal(creator1, 1 ether);
         vm.startPrank(creator1);
-
         vm.expectRevert("Invalid creator");
         factory.createInstance{value: INSTANCE_CREATION_FEE}(
-            "TestToken",
-            "TEST",
-            "ipfs://metadata",
-            DEFAULT_NFT_COUNT,
-            DEFAULT_PROFILE_ID,
-            defaultTierConfig,
-            address(0),  // Invalid creator
-            address(mockVault),
-            address(mockHook),
-            "" // styleUri
+            "TestToken", "TEST", "ipfs://metadata",
+            DEFAULT_NFT_COUNT, DEFAULT_PROFILE_ID, defaultTierConfig,
+            address(0), address(mockVault), address(mockHook), ""
         );
-
         vm.stopPrank();
     }
 
     function test_createInstance_v4PoolManagerNotSet() public {
         vm.startPrank(protocolAdmin);
-
-        // Create factory with zero v4PoolManager
         ERC404Factory factoryBadPoolManager = new ERC404Factory(
-            address(mockRegistry),
-            mockInstanceTemplate,
-            address(0),  // Zero pool manager
-            mockWETH,
-            protocolAdmin,
-            address(0xC1EA),
-            2000,
-            40,
-            address(stakingModule),
-            address(0x600) // mockLiquidityDeployer
+            address(mockRegistry), mockInstanceTemplate, address(0), mockWETH,
+            protocolAdmin, address(0xC1EA), 2000, 40,
+            address(stakingModule), address(0x600), mockGMR, address(launchMgr), address(curveComp)
         );
-
         vm.stopPrank();
 
         vm.deal(creator1, 1 ether);
         vm.startPrank(creator1);
-
         vm.expectRevert("V4 pool manager not set");
         factoryBadPoolManager.createInstance{value: INSTANCE_CREATION_FEE}(
-            "TestToken",
-            "TEST",
-            "ipfs://metadata",
-            DEFAULT_NFT_COUNT,
-            DEFAULT_PROFILE_ID,
-            defaultTierConfig,
-            creator1,
-            address(mockVault),
-            address(mockHook),
-            "" // styleUri
+            "TestToken", "TEST", "ipfs://metadata",
+            DEFAULT_NFT_COUNT, DEFAULT_PROFILE_ID, defaultTierConfig,
+            creator1, address(mockVault), address(mockHook), ""
         );
-
         vm.stopPrank();
     }
 
     function test_createInstance_wethNotSet() public {
         vm.startPrank(protocolAdmin);
-
-        // Create factory with zero WETH
         ERC404Factory factoryBadWeth = new ERC404Factory(
-            address(mockRegistry),
-            mockInstanceTemplate,
-            mockV4PoolManager,
-            address(0),  // Zero WETH
-            protocolAdmin,
-            address(0xC1EA),
-            2000,
-            40,
-            address(stakingModule),
-            address(0x600) // mockLiquidityDeployer
+            address(mockRegistry), mockInstanceTemplate, mockV4PoolManager, address(0),
+            protocolAdmin, address(0xC1EA), 2000, 40,
+            address(stakingModule), address(0x600), mockGMR, address(launchMgr), address(curveComp)
         );
-
         vm.stopPrank();
 
         vm.deal(creator1, 1 ether);
         vm.startPrank(creator1);
-
         vm.expectRevert("WETH not set");
         factoryBadWeth.createInstance{value: INSTANCE_CREATION_FEE}(
-            "TestToken",
-            "TEST",
-            "ipfs://metadata",
-            DEFAULT_NFT_COUNT,
-            DEFAULT_PROFILE_ID,
-            defaultTierConfig,
-            creator1,
-            address(mockVault),
-            address(mockHook),
-            "" // styleUri
+            "TestToken", "TEST", "ipfs://metadata",
+            DEFAULT_NFT_COUNT, DEFAULT_PROFILE_ID, defaultTierConfig,
+            creator1, address(mockVault), address(mockHook), ""
         );
-
         vm.stopPrank();
     }
 
@@ -415,7 +269,7 @@ contract ERC404FactoryTest is Test {
     // Fee Management Tests
     // ========================
 
-    function test_instanceCreationFee_defaultValue() public {
+    function test_instanceCreationFee_defaultValue() public view {
         assertEq(factory.instanceCreationFee(), INSTANCE_CREATION_FEE);
     }
 
@@ -428,10 +282,8 @@ contract ERC404FactoryTest is Test {
 
     function test_setInstanceCreationFee_nonOwnerFails() public {
         vm.startPrank(nonOwner);
-
         vm.expectRevert();
         factory.setInstanceCreationFee(0.02 ether);
-
         vm.stopPrank();
     }
 
@@ -439,59 +291,41 @@ contract ERC404FactoryTest is Test {
     // Infrastructure Tests
     // ========================
 
-    function test_masterRegistry_initialization() public {
+    function test_masterRegistry_initialization() public view {
         assertEq(address(factory.masterRegistry()), address(mockRegistry));
     }
 
-    function test_v4PoolManager_initialization() public {
+    function test_v4PoolManager_initialization() public view {
         assertEq(factory.v4PoolManager(), mockV4PoolManager);
     }
 
-    function test_weth_initialization() public {
+    function test_weth_initialization() public view {
         assertEq(factory.weth(), mockWETH);
     }
 
-    function test_getFeatures() public {
-        bytes32[] memory features = factory.getFeatures();
-        assertTrue(features.length > 0, "Factory should have features");
+    function test_getFeatures() public view {
+        bytes32[] memory factoryFeatures = factory.getFeatures();
+        assertTrue(factoryFeatures.length > 0, "Factory should have features");
     }
-
-    // ========================
-    // Parameter Variation Tests
-    // ========================
 
     // ========================
     // Excess Fee Refund Tests
     // ========================
 
     function test_createInstance_excessFeeRefund() public {
-        uint256 excessAmount = 0.5 ether;
-        uint256 totalSent = INSTANCE_CREATION_FEE + excessAmount;
-
+        uint256 totalSent = INSTANCE_CREATION_FEE + 0.5 ether;
         vm.deal(creator1, totalSent);
         uint256 balanceBefore = creator1.balance;
 
         vm.startPrank(creator1);
-
         factory.createInstance{value: totalSent}(
-            "TestToken",
-            "TEST",
-            "ipfs://metadata",
-            DEFAULT_NFT_COUNT,
-            DEFAULT_PROFILE_ID,
-            defaultTierConfig,
-            creator1,
-            address(mockVault),
-            address(mockHook),
-            "" // styleUri
+            "TestToken", "TEST", "ipfs://metadata",
+            DEFAULT_NFT_COUNT, DEFAULT_PROFILE_ID, defaultTierConfig,
+            creator1, address(mockVault), address(mockHook), ""
         );
-
-        uint256 balanceAfter = creator1.balance;
-
-        // Should have refunded the excess amount
-        assertEq(balanceAfter, balanceBefore - INSTANCE_CREATION_FEE, "Excess should be refunded");
-
         vm.stopPrank();
+
+        assertEq(creator1.balance, balanceBefore - INSTANCE_CREATION_FEE, "Excess should be refunded");
     }
 
     // ========================
@@ -503,65 +337,36 @@ contract ERC404FactoryTest is Test {
         vm.deal(creator2, 1 ether);
 
         vm.startPrank(creator1);
-
         address instance1 = factory.createInstance{value: INSTANCE_CREATION_FEE}(
-            "Token1",
-            "TK1",
-            "ipfs://metadata1",
-            DEFAULT_NFT_COUNT,
-            DEFAULT_PROFILE_ID,
-            defaultTierConfig,
-            creator1,
-            address(mockVault),
-            address(mockHook),
-            "" // styleUri
+            "Token1", "TK1", "ipfs://metadata1",
+            DEFAULT_NFT_COUNT, DEFAULT_PROFILE_ID, defaultTierConfig,
+            creator1, address(mockVault), address(mockHook), ""
         );
-
         vm.stopPrank();
 
         vm.startPrank(creator2);
-
         address instance2 = factory.createInstance{value: INSTANCE_CREATION_FEE}(
-            "Token2",
-            "TK2",
-            "ipfs://metadata2",
-            DEFAULT_NFT_COUNT,
-            DEFAULT_PROFILE_ID,
-            defaultTierConfig,
-            creator2,
-            address(mockVault),
-            address(mockHook),
-            "" // styleUri
+            "Token2", "TK2", "ipfs://metadata2",
+            DEFAULT_NFT_COUNT, DEFAULT_PROFILE_ID, defaultTierConfig,
+            creator2, address(mockVault), address(mockHook), ""
         );
-
         vm.stopPrank();
 
-        assertTrue(instance1 != address(0), "First instance should be created");
-        assertTrue(instance2 != address(0), "Second instance should be created");
-        assertTrue(instance1 != instance2, "Instances should have different addresses");
+        assertTrue(instance1 != address(0));
+        assertTrue(instance2 != address(0));
+        assertTrue(instance1 != instance2);
     }
 
     function test_createInstance_eventEmission() public {
         vm.deal(creator1, 1 ether);
         vm.startPrank(creator1);
-
-        // Note: event signature changed to include vault
         vm.expectEmit(false, true, true, false);
         emit InstanceCreated(address(0), creator1, "EventToken", "EVT", address(mockVault), address(mockHook));
-
         factory.createInstance{value: INSTANCE_CREATION_FEE}(
-            "EventToken",
-            "EVT",
-            "ipfs://metadata",
-            DEFAULT_NFT_COUNT,
-            DEFAULT_PROFILE_ID,
-            defaultTierConfig,
-            creator1,
-            address(mockVault),
-            address(mockHook),
-            "" // styleUri
+            "EventToken", "EVT", "ipfs://metadata",
+            DEFAULT_NFT_COUNT, DEFAULT_PROFILE_ID, defaultTierConfig,
+            creator1, address(mockVault), address(mockHook), ""
         );
-
         vm.stopPrank();
     }
 
@@ -570,80 +375,38 @@ contract ERC404FactoryTest is Test {
     // ========================
 
     function test_createInstance_nonReentrant() public {
-        // This test verifies that reentrancy guard prevents recursive calls
-        // The factory uses ReentrancyGuard so multiple sequential calls should work
-        // but nested calls should fail
-
         vm.deal(creator1, 2 ether);
         vm.startPrank(creator1);
 
-        // First call should succeed
         address instance1 = factory.createInstance{value: INSTANCE_CREATION_FEE}(
-            "Token1",
-            "TK1",
-            "ipfs://metadata1",
-            DEFAULT_NFT_COUNT,
-            DEFAULT_PROFILE_ID,
-            defaultTierConfig,
-            creator1,
-            address(mockVault),
-            address(mockHook),
-            "" // styleUri
+            "Token1", "TK1", "ipfs://metadata1",
+            DEFAULT_NFT_COUNT, DEFAULT_PROFILE_ID, defaultTierConfig,
+            creator1, address(mockVault), address(mockHook), ""
         );
+        assertTrue(instance1 != address(0));
 
-        assertTrue(instance1 != address(0), "First instance should be created");
-
-        // Second sequential call should also succeed (different transaction)
         address instance2 = factory.createInstance{value: INSTANCE_CREATION_FEE}(
-            "Token2",
-            "TK2",
-            "ipfs://metadata2",
-            DEFAULT_NFT_COUNT,
-            DEFAULT_PROFILE_ID,
-            defaultTierConfig,
-            creator1,
-            address(mockVault),
-            address(mockHook),
-            "" // styleUri
+            "Token2", "TK2", "ipfs://metadata2",
+            DEFAULT_NFT_COUNT, DEFAULT_PROFILE_ID, defaultTierConfig,
+            creator1, address(mockVault), address(mockHook), ""
         );
-
-        assertTrue(instance2 != address(0), "Second instance should also be created");
-
+        assertTrue(instance2 != address(0));
         vm.stopPrank();
     }
 
-    // ========================
-    // Instance Template Tests
-    // ========================
-
-    function test_instanceTemplate_initialization() public {
+    function test_instanceTemplate_initialization() public view {
         assertEq(factory.instanceTemplate(), mockInstanceTemplate);
     }
-
-    // ========================
-    // Different Creator Tests
-    // ========================
 
     function test_createInstance_differentCreator() public {
         vm.deal(creator1, 1 ether);
         vm.startPrank(creator1);
-
-        // creator1 pays but creator2 is the owner
         address instance = factory.createInstance{value: INSTANCE_CREATION_FEE}(
-            "TestToken",
-            "TEST",
-            "ipfs://metadata",
-            DEFAULT_NFT_COUNT,
-            DEFAULT_PROFILE_ID,
-            defaultTierConfig,
-            creator2,  // Different creator
-            address(mockVault),
-            address(mockHook),
-            "" // styleUri
+            "TestToken", "TEST", "ipfs://metadata",
+            DEFAULT_NFT_COUNT, DEFAULT_PROFILE_ID, defaultTierConfig,
+            creator2, address(mockVault), address(mockHook), ""
         );
-
-        assertTrue(instance != address(0), "Instance should be created with different creator");
-
+        assertTrue(instance != address(0));
         vm.stopPrank();
     }
 
@@ -673,32 +436,19 @@ contract ERC404FactoryTest is Test {
     }
 
     function test_WithdrawProtocolFees() public {
-        // Create an instance to accumulate creation fees
         vm.deal(creator1, 1 ether);
         vm.startPrank(creator1);
         factory.createInstance{value: INSTANCE_CREATION_FEE}(
-            "FeeToken",
-            "FEE",
-            "ipfs://metadata",
-            DEFAULT_NFT_COUNT,
-            DEFAULT_PROFILE_ID,
-            defaultTierConfig,
-            creator1,
-            address(mockVault),
-            address(mockHook),
-            ""
+            "FeeToken", "FEE", "ipfs://metadata",
+            DEFAULT_NFT_COUNT, DEFAULT_PROFILE_ID, defaultTierConfig,
+            creator1, address(mockVault), address(mockHook), ""
         );
         vm.stopPrank();
 
-        // Set treasury and withdraw
         address treasury = address(0xBEEF);
         vm.startPrank(protocolAdmin);
         factory.setProtocolTreasury(treasury);
-
-        uint256 factoryBalance = address(factory).balance;
-        assertEq(factoryBalance, INSTANCE_CREATION_FEE);
-
-        // With 20% creator fee, protocol gets 80%
+        assertEq(address(factory).balance, INSTANCE_CREATION_FEE);
         uint256 expectedProtocolFees = (INSTANCE_CREATION_FEE * 8000) / 10000;
         factory.withdrawProtocolFees();
         assertEq(factory.accumulatedProtocolFees(), 0);
@@ -746,7 +496,7 @@ contract ERC404FactoryTest is Test {
         vm.stopPrank();
     }
 
-    function test_BondingFeeBps_DefaultValue() public {
+    function test_BondingFeeBps_DefaultValue() public view {
         assertEq(factory.bondingFeeBps(), 100);
     }
 
@@ -754,7 +504,7 @@ contract ERC404FactoryTest is Test {
     // Graduation Fee BPS Tests
     // ========================
 
-    function test_GraduationFeeBps_DefaultValue() public {
+    function test_GraduationFeeBps_DefaultValue() public view {
         assertEq(factory.graduationFeeBps(), 200);
     }
 
@@ -809,27 +559,19 @@ contract ERC404FactoryTest is Test {
         vm.deal(creator1, 1 ether);
         vm.startPrank(creator1);
         address instance = factory.createInstance{value: INSTANCE_CREATION_FEE}(
-            "GradFeeToken",
-            "GFT",
-            "ipfs://metadata",
-            DEFAULT_NFT_COUNT,
-            DEFAULT_PROFILE_ID,
-            defaultTierConfig,
-            creator1,
-            address(mockVault),
-            address(mockHook),
-            ""
+            "GradFeeToken", "GFT", "ipfs://metadata",
+            DEFAULT_NFT_COUNT, DEFAULT_PROFILE_ID, defaultTierConfig,
+            creator1, address(mockVault), address(mockHook), ""
         );
         vm.stopPrank();
-
-        assertEq(ERC404BondingInstance(payable(instance)).graduationFeeBps(), 350, "Instance should store factory's graduation fee");
+        assertEq(ERC404BondingInstance(payable(instance)).graduationFeeBps(), 350);
     }
 
     // ========================
     // POL BPS Tests
     // ========================
 
-    function test_PolBps_DefaultValue() public {
+    function test_PolBps_DefaultValue() public view {
         assertEq(factory.polBps(), 100);
     }
 
@@ -884,318 +626,187 @@ contract ERC404FactoryTest is Test {
         vm.deal(creator1, 1 ether);
         vm.startPrank(creator1);
         address instance = factory.createInstance{value: INSTANCE_CREATION_FEE}(
-            "POLToken",
-            "POL",
-            "ipfs://metadata",
-            DEFAULT_NFT_COUNT,
-            DEFAULT_PROFILE_ID,
-            defaultTierConfig,
-            creator1,
-            address(mockVault),
-            address(mockHook),
-            ""
+            "POLToken", "POL", "ipfs://metadata",
+            DEFAULT_NFT_COUNT, DEFAULT_PROFILE_ID, defaultTierConfig,
+            creator1, address(mockVault), address(mockHook), ""
         );
         vm.stopPrank();
-
-        assertEq(ERC404BondingInstance(payable(instance)).polBps(), 250, "Instance should store factory's POL bps");
+        assertEq(ERC404BondingInstance(payable(instance)).polBps(), 250);
     }
 
     // ========================
-    // Tiered Creation Tests
+    // Tiered Creation Tests (via LaunchManager)
     // ========================
 
     function test_setTierConfig() public {
         vm.startPrank(protocolAdmin);
-
-        ERC404Factory.TierConfig memory config = ERC404Factory.TierConfig({
-            fee: 0.05 ether,
-            featuredDuration: 7 days,
-            featuredPosition: 10,
-            badge: PromotionBadges.BadgeType.NONE,
-            badgeDuration: 0
+        LaunchManager.TierConfig memory config = LaunchManager.TierConfig({
+            fee: 0.05 ether, featuredDuration: 7 days, featuredPosition: 10,
+            badge: PromotionBadges.BadgeType.NONE, badgeDuration: 0
         });
-
-        factory.setTierConfig(ERC404Factory.CreationTier.PREMIUM, config);
+        launchMgr.setTierConfig(LaunchManager.CreationTier.PREMIUM, config);
 
         (uint256 fee, uint256 featuredDuration, uint256 featuredPosition, PromotionBadges.BadgeType badge, uint256 badgeDuration) =
-            factory.tierConfigs(ERC404Factory.CreationTier.PREMIUM);
-
+            launchMgr.tierConfigs(LaunchManager.CreationTier.PREMIUM);
         assertEq(fee, 0.05 ether);
         assertEq(featuredDuration, 7 days);
         assertEq(featuredPosition, 10);
         assertEq(uint256(badge), uint256(PromotionBadges.BadgeType.NONE));
         assertEq(badgeDuration, 0);
-
         vm.stopPrank();
     }
 
     function test_setTierConfig_revertZeroFee() public {
         vm.startPrank(protocolAdmin);
-
-        ERC404Factory.TierConfig memory config = ERC404Factory.TierConfig({
-            fee: 0,
-            featuredDuration: 0,
-            featuredPosition: 0,
-            badge: PromotionBadges.BadgeType.NONE,
-            badgeDuration: 0
+        LaunchManager.TierConfig memory config = LaunchManager.TierConfig({
+            fee: 0, featuredDuration: 0, featuredPosition: 0,
+            badge: PromotionBadges.BadgeType.NONE, badgeDuration: 0
         });
-
         vm.expectRevert("Fee must be positive");
-        factory.setTierConfig(ERC404Factory.CreationTier.PREMIUM, config);
-
+        launchMgr.setTierConfig(LaunchManager.CreationTier.PREMIUM, config);
         vm.stopPrank();
     }
 
     function test_setTierConfig_revertNonOwner() public {
         vm.startPrank(nonOwner);
-
-        ERC404Factory.TierConfig memory config = ERC404Factory.TierConfig({
-            fee: 0.05 ether,
-            featuredDuration: 0,
-            featuredPosition: 0,
-            badge: PromotionBadges.BadgeType.NONE,
-            badgeDuration: 0
+        LaunchManager.TierConfig memory config = LaunchManager.TierConfig({
+            fee: 0.05 ether, featuredDuration: 0, featuredPosition: 0,
+            badge: PromotionBadges.BadgeType.NONE, badgeDuration: 0
         });
-
         vm.expectRevert();
-        factory.setTierConfig(ERC404Factory.CreationTier.PREMIUM, config);
-
+        launchMgr.setTierConfig(LaunchManager.CreationTier.PREMIUM, config);
         vm.stopPrank();
     }
 
     function test_createInstance_standardTierBackwardCompat() public {
-        // Old createInstance signature should still work (STANDARD tier)
         vm.deal(creator1, 1 ether);
         vm.startPrank(creator1);
-
         address instance = factory.createInstance{value: INSTANCE_CREATION_FEE}(
-            "StandardToken",
-            "STD",
-            "ipfs://metadata",
-            DEFAULT_NFT_COUNT,
-            DEFAULT_PROFILE_ID,
-            defaultTierConfig,
-            creator1,
-            address(mockVault),
-            address(mockHook),
-            ""
+            "StandardToken", "STD", "ipfs://metadata",
+            DEFAULT_NFT_COUNT, DEFAULT_PROFILE_ID, defaultTierConfig,
+            creator1, address(mockVault), address(mockHook), ""
         );
-
-        assertTrue(instance != address(0), "Standard tier should create instance");
-
+        assertTrue(instance != address(0));
         vm.stopPrank();
     }
 
     function test_createInstance_premiumTier() public {
-        // Configure PREMIUM tier
         vm.startPrank(protocolAdmin);
-        factory.setTierConfig(
-            ERC404Factory.CreationTier.PREMIUM,
-            ERC404Factory.TierConfig({
-                fee: 0.05 ether,
-                featuredDuration: 0, // No queue placement for this test
-                featuredPosition: 0,
-                badge: PromotionBadges.BadgeType.NONE,
-                badgeDuration: 0
-            })
-        );
+        launchMgr.setTierConfig(LaunchManager.CreationTier.PREMIUM, LaunchManager.TierConfig({
+            fee: 0.05 ether, featuredDuration: 0, featuredPosition: 0,
+            badge: PromotionBadges.BadgeType.NONE, badgeDuration: 0
+        }));
         vm.stopPrank();
 
         vm.deal(creator1, 1 ether);
         vm.startPrank(creator1);
-
         address instance = factory.createInstance{value: 0.05 ether}(
-            "PremiumToken",
-            "PREM",
-            "ipfs://metadata",
-            DEFAULT_NFT_COUNT,
-            DEFAULT_PROFILE_ID,
-            defaultTierConfig,
-            creator1,
-            address(mockVault),
-            address(mockHook),
-            "",
+            "PremiumToken", "PREM", "ipfs://metadata",
+            DEFAULT_NFT_COUNT, DEFAULT_PROFILE_ID, defaultTierConfig,
+            creator1, address(mockVault), address(mockHook), "",
             ERC404Factory.CreationTier.PREMIUM
         );
-
-        assertTrue(instance != address(0), "Premium tier should create instance");
-        assertEq(address(factory).balance, 0.05 ether, "Factory should hold premium fee");
-
+        assertTrue(instance != address(0));
+        assertEq(address(factory).balance, 0.05 ether);
         vm.stopPrank();
     }
 
     function test_createInstance_premiumTier_insufficientFee() public {
         vm.startPrank(protocolAdmin);
-        factory.setTierConfig(
-            ERC404Factory.CreationTier.PREMIUM,
-            ERC404Factory.TierConfig({
-                fee: 0.05 ether,
-                featuredDuration: 0,
-                featuredPosition: 0,
-                badge: PromotionBadges.BadgeType.NONE,
-                badgeDuration: 0
-            })
-        );
+        launchMgr.setTierConfig(LaunchManager.CreationTier.PREMIUM, LaunchManager.TierConfig({
+            fee: 0.05 ether, featuredDuration: 0, featuredPosition: 0,
+            badge: PromotionBadges.BadgeType.NONE, badgeDuration: 0
+        }));
         vm.stopPrank();
 
         vm.deal(creator1, 1 ether);
         vm.startPrank(creator1);
-
         vm.expectRevert("Insufficient fee");
         factory.createInstance{value: 0.01 ether}(
-            "PremiumToken",
-            "PREM",
-            "ipfs://metadata",
-            DEFAULT_NFT_COUNT,
-            DEFAULT_PROFILE_ID,
-            defaultTierConfig,
-            creator1,
-            address(mockVault),
-            address(mockHook),
-            "",
+            "PremiumToken", "PREM", "ipfs://metadata",
+            DEFAULT_NFT_COUNT, DEFAULT_PROFILE_ID, defaultTierConfig,
+            creator1, address(mockVault), address(mockHook), "",
             ERC404Factory.CreationTier.PREMIUM
         );
-
         vm.stopPrank();
     }
 
     function test_createInstance_tierNotConfigured() public {
         vm.deal(creator1, 1 ether);
         vm.startPrank(creator1);
-
         vm.expectRevert("Tier not configured");
         factory.createInstance{value: 0.1 ether}(
-            "LaunchToken",
-            "LNCH",
-            "ipfs://metadata",
-            DEFAULT_NFT_COUNT,
-            DEFAULT_PROFILE_ID,
-            defaultTierConfig,
-            creator1,
-            address(mockVault),
-            address(mockHook),
-            "",
+            "LaunchToken", "LNCH", "ipfs://metadata",
+            DEFAULT_NFT_COUNT, DEFAULT_PROFILE_ID, defaultTierConfig,
+            creator1, address(mockVault), address(mockHook), "",
             ERC404Factory.CreationTier.LAUNCH
         );
-
         vm.stopPrank();
     }
 
     function test_createInstance_premiumTier_refundsExcess() public {
         vm.startPrank(protocolAdmin);
-        factory.setTierConfig(
-            ERC404Factory.CreationTier.PREMIUM,
-            ERC404Factory.TierConfig({
-                fee: 0.05 ether,
-                featuredDuration: 0,
-                featuredPosition: 0,
-                badge: PromotionBadges.BadgeType.NONE,
-                badgeDuration: 0
-            })
-        );
+        launchMgr.setTierConfig(LaunchManager.CreationTier.PREMIUM, LaunchManager.TierConfig({
+            fee: 0.05 ether, featuredDuration: 0, featuredPosition: 0,
+            badge: PromotionBadges.BadgeType.NONE, badgeDuration: 0
+        }));
         vm.stopPrank();
 
         uint256 sent = 0.5 ether;
         vm.deal(creator1, sent);
         uint256 balanceBefore = creator1.balance;
-
         vm.startPrank(creator1);
         factory.createInstance{value: sent}(
-            "RefundToken",
-            "RFND",
-            "ipfs://metadata",
-            DEFAULT_NFT_COUNT,
-            DEFAULT_PROFILE_ID,
-            defaultTierConfig,
-            creator1,
-            address(mockVault),
-            address(mockHook),
-            "",
+            "RefundToken", "RFND", "ipfs://metadata",
+            DEFAULT_NFT_COUNT, DEFAULT_PROFILE_ID, defaultTierConfig,
+            creator1, address(mockVault), address(mockHook), "",
             ERC404Factory.CreationTier.PREMIUM
         );
         vm.stopPrank();
-
-        assertEq(creator1.balance, balanceBefore - 0.05 ether, "Excess should be refunded for premium tier");
+        assertEq(creator1.balance, balanceBefore - 0.05 ether);
     }
 
     function test_createInstance_gracefulDegradation_noQueueOrBadges() public {
-        // Configure LAUNCH tier with perks but don't set queue/badge contracts
         vm.startPrank(protocolAdmin);
-        factory.setTierConfig(
-            ERC404Factory.CreationTier.LAUNCH,
-            ERC404Factory.TierConfig({
-                fee: 0.1 ether,
-                featuredDuration: 14 days,
-                featuredPosition: 5,
-                badge: PromotionBadges.BadgeType.HIGHLIGHT,
-                badgeDuration: 14 days
-            })
-        );
-        // Note: promotionBadges and featuredQueueManager are address(0)
+        launchMgr.setTierConfig(LaunchManager.CreationTier.LAUNCH, LaunchManager.TierConfig({
+            fee: 0.1 ether, featuredDuration: 14 days, featuredPosition: 5,
+            badge: PromotionBadges.BadgeType.HIGHLIGHT, badgeDuration: 14 days
+        }));
         vm.stopPrank();
 
         vm.deal(creator1, 1 ether);
         vm.startPrank(creator1);
-
-        // Should succeed — perks are skipped when contracts not set
         address instance = factory.createInstance{value: 0.1 ether}(
-            "LaunchToken",
-            "LNCH",
-            "ipfs://metadata",
-            DEFAULT_NFT_COUNT,
-            DEFAULT_PROFILE_ID,
-            defaultTierConfig,
-            creator1,
-            address(mockVault),
-            address(mockHook),
-            "",
+            "LaunchToken", "LNCH", "ipfs://metadata",
+            DEFAULT_NFT_COUNT, DEFAULT_PROFILE_ID, defaultTierConfig,
+            creator1, address(mockVault), address(mockHook), "",
             ERC404Factory.CreationTier.LAUNCH
         );
-
-        assertTrue(instance != address(0), "Should create instance even without perk contracts");
-
+        assertTrue(instance != address(0));
         vm.stopPrank();
     }
 
     function test_createInstance_launchTier_withBadgeAssignment() public {
-        // Deploy real PromotionBadges
         vm.startPrank(protocolAdmin);
         PromotionBadges badges = new PromotionBadges(address(0xBEEF));
-        badges.setAuthorizedFactory(address(factory), true);
-        factory.setPromotionBadges(address(badges));
-
-        factory.setTierConfig(
-            ERC404Factory.CreationTier.LAUNCH,
-            ERC404Factory.TierConfig({
-                fee: 0.1 ether,
-                featuredDuration: 0, // No queue for this test
-                featuredPosition: 0,
-                badge: PromotionBadges.BadgeType.HIGHLIGHT,
-                badgeDuration: 14 days
-            })
-        );
+        badges.setAuthorizedFactory(address(launchMgr), true);
+        launchMgr.setPromotionBadges(address(badges));
+        launchMgr.setTierConfig(LaunchManager.CreationTier.LAUNCH, LaunchManager.TierConfig({
+            fee: 0.1 ether, featuredDuration: 0, featuredPosition: 0,
+            badge: PromotionBadges.BadgeType.HIGHLIGHT, badgeDuration: 14 days
+        }));
         vm.stopPrank();
 
         vm.deal(creator1, 1 ether);
         vm.startPrank(creator1);
-
         address instance = factory.createInstance{value: 0.1 ether}(
-            "BadgeToken",
-            "BDG",
-            "ipfs://metadata",
-            DEFAULT_NFT_COUNT,
-            DEFAULT_PROFILE_ID,
-            defaultTierConfig,
-            creator1,
-            address(mockVault),
-            address(mockHook),
-            "",
+            "BadgeToken", "BDG", "ipfs://metadata",
+            DEFAULT_NFT_COUNT, DEFAULT_PROFILE_ID, defaultTierConfig,
+            creator1, address(mockVault), address(mockHook), "",
             ERC404Factory.CreationTier.LAUNCH
         );
-
         vm.stopPrank();
 
-        // Verify badge was assigned
         (PromotionBadges.BadgeType badgeType, uint256 expiresAt) = badges.getActiveBadge(instance);
         assertEq(uint256(badgeType), uint256(PromotionBadges.BadgeType.HIGHLIGHT));
         assertEq(expiresAt, block.timestamp + 14 days);
@@ -1220,17 +831,14 @@ contract ERC404FactoryTest is Test {
     }
 
     function test_creatorRole_canWithdrawCreatorFees() public {
-        // First create an instance to accumulate fees
         vm.deal(creator1, 1 ether);
         vm.startPrank(creator1);
         factory.createInstance{value: INSTANCE_CREATION_FEE}(
             "FeeToken", "FEE", "ipfs://metadata",
-            DEFAULT_NFT_COUNT, DEFAULT_PROFILE_ID,
-            defaultTierConfig,
+            DEFAULT_NFT_COUNT, DEFAULT_PROFILE_ID, defaultTierConfig,
             creator1, address(mockVault), address(mockHook), ""
         );
         vm.stopPrank();
-
         vm.startPrank(address(0xC1EA));
         factory.withdrawCreatorFees();
         vm.stopPrank();
@@ -1249,16 +857,10 @@ contract ERC404FactoryTest is Test {
 
     function test_setProfile_protocolOnly() public {
         vm.startPrank(protocolAdmin);
-        ERC404Factory.GraduationProfile memory profile = ERC404Factory.GraduationProfile({
-            targetETH: 15 ether,
-            unitPerNFT: 1e6,
-            poolFee: 3000,
-            tickSpacing: 60,
-            liquidityReserveBps: 2000,
-            active: true
-        });
-        factory.setProfile(1, profile);
-
+        factory.setProfile(1, ERC404Factory.GraduationProfile({
+            targetETH: 15 ether, unitPerNFT: 1e6, poolFee: 3000,
+            tickSpacing: 60, liquidityReserveBps: 2000, active: true
+        }));
         (uint256 targetETH, uint256 unitPerNFT, uint24 poolFee, int24 tickSpacing, uint256 liquidityReserveBps, bool active) = factory.profiles(1);
         assertEq(targetETH, 15 ether);
         assertEq(unitPerNFT, 1e6);
@@ -1271,52 +873,28 @@ contract ERC404FactoryTest is Test {
 
     function test_setProfile_creatorCannotSet() public {
         vm.startPrank(address(0xC1EA));
-        ERC404Factory.GraduationProfile memory profile = ERC404Factory.GraduationProfile({
-            targetETH: 15 ether,
-            unitPerNFT: 1e6,
-            poolFee: 3000,
-            tickSpacing: 60,
-            liquidityReserveBps: 2000,
-            active: true
-        });
         vm.expectRevert();
-        factory.setProfile(1, profile);
+        factory.setProfile(1, ERC404Factory.GraduationProfile({
+            targetETH: 15 ether, unitPerNFT: 1e6, poolFee: 3000,
+            tickSpacing: 60, liquidityReserveBps: 2000, active: true
+        }));
         vm.stopPrank();
     }
 
     function test_setProfile_allThreeProfiles() public {
         vm.startPrank(protocolAdmin);
-
-        // Profile 0: Niche
         factory.setProfile(0, ERC404Factory.GraduationProfile({
-            targetETH: 5 ether,
-            unitPerNFT: 1e9,
-            poolFee: 10000,
-            tickSpacing: 200,
-            liquidityReserveBps: 2000,
-            active: true
+            targetETH: 5 ether, unitPerNFT: 1e9, poolFee: 10000,
+            tickSpacing: 200, liquidityReserveBps: 2000, active: true
         }));
-
-        // Profile 1: Standard
         factory.setProfile(1, ERC404Factory.GraduationProfile({
-            targetETH: 15 ether,
-            unitPerNFT: 1e6,
-            poolFee: 3000,
-            tickSpacing: 60,
-            liquidityReserveBps: 2000,
-            active: true
+            targetETH: 15 ether, unitPerNFT: 1e6, poolFee: 3000,
+            tickSpacing: 60, liquidityReserveBps: 2000, active: true
         }));
-
-        // Profile 2: Ambitious
         factory.setProfile(2, ERC404Factory.GraduationProfile({
-            targetETH: 30 ether,
-            unitPerNFT: 1e3,
-            poolFee: 3000,
-            tickSpacing: 60,
-            liquidityReserveBps: 2000,
-            active: true
+            targetETH: 30 ether, unitPerNFT: 1e3, poolFee: 3000,
+            tickSpacing: 60, liquidityReserveBps: 2000, active: true
         }));
-
         (uint256 t0,,,,, bool a0) = factory.profiles(0);
         (uint256 t1,,,,, bool a1) = factory.profiles(1);
         (uint256 t2,,,,, bool a2) = factory.profiles(2);
@@ -1328,154 +906,85 @@ contract ERC404FactoryTest is Test {
     }
 
     // ========================
-    // Coefficient Computation Tests
+    // Curve Params Tests (now on CurveParamsComputer)
     // ========================
 
-    function test_computeCurveParams_standardProfile() public {
-        vm.startPrank(protocolAdmin);
-        factory.setProfile(1, ERC404Factory.GraduationProfile({
-            targetETH: 15 ether,
-            unitPerNFT: 1e6,
-            poolFee: 3000,
-            tickSpacing: 60,
-            liquidityReserveBps: 2000,
-            active: true
-        }));
-        vm.stopPrank();
-
+    function test_computeCurveParams_standardProfile() public view {
         uint256 nftCount = 100;
-        ERC404BondingInstance.BondingCurveParams memory params = factory.computeCurveParams(nftCount, 1);
-
+        ERC404BondingInstance.BondingCurveParams memory params = curveComp.computeCurveParams(nftCount, 15 ether, 1e6, 2000);
         uint256 totalSupply = nftCount * 1e6 * 1e18;
-        uint256 liquidityReserve = (totalSupply * 2000) / 10000;
-        uint256 maxBondingSupply = totalSupply - liquidityReserve;
-
+        uint256 maxBondingSupply = totalSupply - (totalSupply * 2000) / 10000;
         BondingCurveMath.Params memory bcParams = BondingCurveMath.Params({
-            initialPrice: params.initialPrice,
-            quarticCoeff: params.quarticCoeff,
-            cubicCoeff: params.cubicCoeff,
-            quadraticCoeff: params.quadraticCoeff,
+            initialPrice: params.initialPrice, quarticCoeff: params.quarticCoeff,
+            cubicCoeff: params.cubicCoeff, quadraticCoeff: params.quadraticCoeff,
             normalizationFactor: params.normalizationFactor
         });
-
         uint256 totalCost = BondingCurveMath.calculateCost(bcParams, 0, maxBondingSupply);
         assertApproxEqRel(totalCost, 15 ether, 0.01e18);
     }
 
-    function test_computeCurveParams_nicheProfile() public {
-        vm.startPrank(protocolAdmin);
-        factory.setProfile(0, ERC404Factory.GraduationProfile({
-            targetETH: 5 ether,
-            unitPerNFT: 1e9,
-            poolFee: 10000,
-            tickSpacing: 200,
-            liquidityReserveBps: 2000,
-            active: true
-        }));
-        vm.stopPrank();
-
+    function test_computeCurveParams_nicheProfile() public view {
         uint256 nftCount = 50;
-        ERC404BondingInstance.BondingCurveParams memory params = factory.computeCurveParams(nftCount, 0);
-
+        ERC404BondingInstance.BondingCurveParams memory params = curveComp.computeCurveParams(nftCount, 5 ether, 1e9, 2000);
         uint256 totalSupply = nftCount * 1e9 * 1e18;
-        uint256 liquidityReserve = (totalSupply * 2000) / 10000;
-        uint256 maxBondingSupply = totalSupply - liquidityReserve;
-
+        uint256 maxBondingSupply = totalSupply - (totalSupply * 2000) / 10000;
         BondingCurveMath.Params memory bcParams = BondingCurveMath.Params({
-            initialPrice: params.initialPrice,
-            quarticCoeff: params.quarticCoeff,
-            cubicCoeff: params.cubicCoeff,
-            quadraticCoeff: params.quadraticCoeff,
+            initialPrice: params.initialPrice, quarticCoeff: params.quarticCoeff,
+            cubicCoeff: params.cubicCoeff, quadraticCoeff: params.quadraticCoeff,
             normalizationFactor: params.normalizationFactor
         });
-
         uint256 totalCost = BondingCurveMath.calculateCost(bcParams, 0, maxBondingSupply);
         assertApproxEqRel(totalCost, 5 ether, 0.01e18);
     }
 
-    function test_computeCurveParams_ambitiousProfile() public {
-        vm.startPrank(protocolAdmin);
-        factory.setProfile(2, ERC404Factory.GraduationProfile({
-            targetETH: 30 ether,
-            unitPerNFT: 1e3,
-            poolFee: 3000,
-            tickSpacing: 60,
-            liquidityReserveBps: 2000,
-            active: true
-        }));
-        vm.stopPrank();
-
+    function test_computeCurveParams_ambitiousProfile() public view {
         uint256 nftCount = 500;
-        ERC404BondingInstance.BondingCurveParams memory params = factory.computeCurveParams(nftCount, 2);
-
+        ERC404BondingInstance.BondingCurveParams memory params = curveComp.computeCurveParams(nftCount, 30 ether, 1e3, 2000);
         uint256 totalSupply = nftCount * 1e3 * 1e18;
-        uint256 liquidityReserve = (totalSupply * 2000) / 10000;
-        uint256 maxBondingSupply = totalSupply - liquidityReserve;
-
+        uint256 maxBondingSupply = totalSupply - (totalSupply * 2000) / 10000;
         BondingCurveMath.Params memory bcParams = BondingCurveMath.Params({
-            initialPrice: params.initialPrice,
-            quarticCoeff: params.quarticCoeff,
-            cubicCoeff: params.cubicCoeff,
-            quadraticCoeff: params.quadraticCoeff,
+            initialPrice: params.initialPrice, quarticCoeff: params.quarticCoeff,
+            cubicCoeff: params.cubicCoeff, quadraticCoeff: params.quadraticCoeff,
             normalizationFactor: params.normalizationFactor
         });
-
         uint256 totalCost = BondingCurveMath.calculateCost(bcParams, 0, maxBondingSupply);
         assertApproxEqRel(totalCost, 30 ether, 0.01e18);
     }
 
     // ========================
-    // New createInstance (nftCount + profileId) Tests
+    // createInstance with profile Tests
     // ========================
 
     function _setupStandardProfile() internal {
         vm.startPrank(protocolAdmin);
         factory.setProfile(1, ERC404Factory.GraduationProfile({
-            targetETH: 15 ether,
-            unitPerNFT: 1e6,
-            poolFee: 3000,
-            tickSpacing: 60,
-            liquidityReserveBps: 2000,
-            active: true
+            targetETH: 15 ether, unitPerNFT: 1e6, poolFee: 3000,
+            tickSpacing: 60, liquidityReserveBps: 2000, active: true
         }));
         vm.stopPrank();
     }
 
     function test_createInstance_withProfile() public {
         _setupStandardProfile();
-
         vm.deal(creator1, 1 ether);
         vm.startPrank(creator1);
-
         address instance = factory.createInstance{value: INSTANCE_CREATION_FEE}(
-            "TestToken",
-            "TEST",
-            "ipfs://metadata",
-            100,  // nftCount (100 NFTs)
-            1,    // profileId (standard)
-            defaultTierConfig,
-            creator1,
-            address(mockVault),
-            address(mockHook),
-            ""
+            "TestToken", "TEST", "ipfs://metadata",
+            100, 1, defaultTierConfig,
+            creator1, address(mockVault), address(mockHook), ""
         );
-
         assertTrue(instance != address(0));
-
-        // Verify computed values
         ERC404BondingInstance inst = ERC404BondingInstance(payable(instance));
-        assertEq(inst.MAX_SUPPLY(), 100 * 1e6 * 1e18); // 100 NFTs * 1M unit * 1e18
+        assertEq(inst.MAX_SUPPLY(), 100 * 1e6 * 1e18);
         assertEq(inst.UNIT(), 1e6 * 1e18);
         assertEq(inst.poolFee(), 3000);
         assertEq(inst.tickSpacing(), 60);
-
         vm.stopPrank();
     }
 
     function test_createInstance_inactiveProfileReverts() public {
         vm.deal(creator1, 1 ether);
         vm.startPrank(creator1);
-
         vm.expectRevert("Profile not active");
         factory.createInstance{value: INSTANCE_CREATION_FEE}(
             "TestToken", "TEST", "ipfs://metadata",
@@ -1489,7 +998,6 @@ contract ERC404FactoryTest is Test {
         _setupStandardProfile();
         vm.deal(creator1, 1 ether);
         vm.startPrank(creator1);
-
         vm.expectRevert("Invalid NFT count");
         factory.createInstance{value: INSTANCE_CREATION_FEE}(
             "TestToken", "TEST", "ipfs://metadata",

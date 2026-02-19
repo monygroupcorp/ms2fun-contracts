@@ -6,7 +6,10 @@ import {MasterRegistryV1} from "../../src/master/MasterRegistryV1.sol";
 import {MasterRegistry} from "../../src/master/MasterRegistry.sol";
 import {ERC404Factory} from "../../src/factories/erc404/ERC404Factory.sol";
 import {ERC404StakingModule} from "../../src/factories/erc404/ERC404StakingModule.sol";
+import {LaunchManager} from "../../src/factories/erc404/LaunchManager.sol";
+import {CurveParamsComputer} from "../../src/factories/erc404/CurveParamsComputer.sol";
 import {ERC1155Factory} from "../../src/factories/erc1155/ERC1155Factory.sol";
+import {GlobalMessageRegistry} from "../../src/registry/GlobalMessageRegistry.sol";
 import {ERC404BondingInstance} from "../../src/factories/erc404/ERC404BondingInstance.sol";
 import {UltraAlignmentVault} from "../../src/vaults/UltraAlignmentVault.sol";
 import {MockEXECToken} from "../mocks/MockEXECToken.sol";
@@ -109,6 +112,13 @@ contract NamespaceCollisionTest is Test {
         stakingRegistry = new MockMasterRegistryForStakingN();
         stakingModule = new ERC404StakingModule(address(stakingRegistry));
 
+        // Deploy global message registry
+        GlobalMessageRegistry globalMsgRegistry = new GlobalMessageRegistry(owner, address(registry));
+
+        // Deploy LaunchManager and CurveParamsComputer
+        LaunchManager launchManager = new LaunchManager(owner);
+        CurveParamsComputer curveComputer = new CurveParamsComputer(owner);
+
         // Deploy ERC404Factory
         erc404Factory = new ERC404Factory(
             address(registry),
@@ -120,7 +130,10 @@ contract NamespaceCollisionTest is Test {
             2000,
             40,
             address(stakingModule),
-            address(0x600) // mockLiquidityDeployer
+            address(0x600),     // mockLiquidityDeployer
+            address(globalMsgRegistry),
+            address(launchManager),
+            address(curveComputer)
         );
 
         // Deploy ERC1155Factory
@@ -128,7 +141,8 @@ contract NamespaceCollisionTest is Test {
             address(registry),
             mockInstanceTemplate,
             address(0xC1EA),
-            2000
+            2000,
+            address(globalMsgRegistry)
         );
 
         // Set protocol treasury on both factories

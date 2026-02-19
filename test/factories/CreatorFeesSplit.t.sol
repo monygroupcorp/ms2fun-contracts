@@ -7,9 +7,12 @@ import {ERC1155Instance} from "../../src/factories/erc1155/ERC1155Instance.sol";
 import {ERC404Factory} from "../../src/factories/erc404/ERC404Factory.sol";
 import {ERC404BondingInstance} from "../../src/factories/erc404/ERC404BondingInstance.sol";
 import {ERC404StakingModule} from "../../src/factories/erc404/ERC404StakingModule.sol";
+import {LaunchManager} from "../../src/factories/erc404/LaunchManager.sol";
+import {CurveParamsComputer} from "../../src/factories/erc404/CurveParamsComputer.sol";
 import {UltraAlignmentVault} from "../../src/vaults/UltraAlignmentVault.sol";
 import {MockEXECToken} from "../mocks/MockEXECToken.sol";
 import {MockMasterRegistry} from "../mocks/MockMasterRegistry.sol";
+import {GlobalMessageRegistry} from "../../src/registry/GlobalMessageRegistry.sol";
 import {MockFactory} from "../mocks/MockFactory.sol";
 import {IFactory} from "../../src/interfaces/IFactory.sol";
 import {Currency} from "v4-core/types/Currency.sol";
@@ -89,14 +92,22 @@ contract CreatorFeesSplitTest is Test {
         stakingRegistry = new MockMasterRegistryForStakingC();
         stakingModule = new ERC404StakingModule(address(stakingRegistry));
 
+        // Deploy global message registry
+        GlobalMessageRegistry globalMsgRegistry = new GlobalMessageRegistry(owner, address(mockRegistry));
+
         // Deploy ERC1155Factory with creator fee
         erc1155Factory = new ERC1155Factory(
             address(mockRegistry),
             mockInstanceTemplate,
             factoryCreator,
-            CREATOR_FEE_BPS
+            CREATOR_FEE_BPS,
+            address(globalMsgRegistry)
         );
         erc1155Factory.setProtocolTreasury(treasury);
+
+        // Deploy LaunchManager and CurveParamsComputer
+        LaunchManager launchManager = new LaunchManager(owner);
+        CurveParamsComputer curveComputer = new CurveParamsComputer(owner);
 
         // Deploy ERC404Factory with creator fee and graduation fee
         erc404Factory = new ERC404Factory(
@@ -109,7 +120,10 @@ contract CreatorFeesSplitTest is Test {
             CREATOR_FEE_BPS,
             CREATOR_GRAD_FEE_BPS,
             address(stakingModule),
-            address(0x600) // mockLiquidityDeployer
+            address(0x600),     // mockLiquidityDeployer
+            address(globalMsgRegistry),
+            address(launchManager),
+            address(curveComputer)
         );
         erc404Factory.setProtocolTreasury(treasury);
     }
@@ -296,7 +310,8 @@ contract CreatorFeesSplitTest is Test {
             address(mockRegistry),
             mockInstanceTemplate,
             factoryCreator,
-            0 // 0% creator fee
+            0, // 0% creator fee
+            address(new GlobalMessageRegistry(owner, address(mockRegistry)))
         );
         zeroFeeFactory.setProtocolTreasury(treasury);
 

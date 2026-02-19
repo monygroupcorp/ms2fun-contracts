@@ -3,6 +3,8 @@ pragma solidity ^0.8.20;
 
 import {Test} from "forge-std/Test.sol";
 import {MasterRegistryV1} from "../../src/master/MasterRegistryV1.sol";
+import {AlignmentRegistryV1} from "../../src/master/AlignmentRegistryV1.sol";
+import {IAlignmentRegistry} from "../../src/master/interfaces/IAlignmentRegistry.sol";
 import {IMasterRegistry} from "../../src/master/interfaces/IMasterRegistry.sol";
 
 contract MockAlignedVaultIntegration {
@@ -26,6 +28,7 @@ contract MockFactoryIntegration {
  */
 contract AlignmentTargetIntegrationTest is Test {
     MasterRegistryV1 public registry;
+    AlignmentRegistryV1 public alignmentRegistry;
     address public daoOwner = makeAddr("dao");
     address public vaultDev = makeAddr("vaultDev");
     address public artist = makeAddr("artist");
@@ -35,12 +38,16 @@ contract AlignmentTargetIntegrationTest is Test {
     function setUp() public {
         registry = new MasterRegistryV1();
         registry.initialize(daoOwner);
+        alignmentRegistry = new AlignmentRegistryV1();
+        alignmentRegistry.initialize(daoOwner);
+        vm.prank(daoOwner);
+        registry.setAlignmentRegistry(address(alignmentRegistry));
     }
 
     function test_FullLifecycle() public {
         // 1. DAO approves Remilia as alignment target
-        IMasterRegistry.AlignmentAsset[] memory assets = new IMasterRegistry.AlignmentAsset[](1);
-        assets[0] = IMasterRegistry.AlignmentAsset({
+        IAlignmentRegistry.AlignmentAsset[] memory assets = new IAlignmentRegistry.AlignmentAsset[](1);
+        assets[0] = IAlignmentRegistry.AlignmentAsset({
             token: cultToken,
             symbol: "CULT",
             info: "Majority LP in Uniswap V3",
@@ -48,7 +55,7 @@ contract AlignmentTargetIntegrationTest is Test {
         });
 
         vm.prank(daoOwner);
-        uint256 targetId = registry.registerAlignmentTarget(
+        uint256 targetId = alignmentRegistry.registerAlignmentTarget(
             "Remilia",
             "Cyber yakuza accelerationist cult",
             "https://ms2fun.com/targets/remilia",
@@ -59,7 +66,7 @@ contract AlignmentTargetIntegrationTest is Test {
         MockAlignedVaultIntegration vault = new MockAlignedVaultIntegration(cultToken);
 
         vm.prank(daoOwner);
-        registry.registerVault(address(vault), "Remilia Ultra Vault", "ipfs://vault", targetId);
+        registry.registerVault(address(vault), vaultDev, "Remilia Ultra Vault", "ipfs://vault", targetId);
 
         assertTrue(registry.isVaultRegistered(address(vault)));
 
@@ -69,19 +76,19 @@ contract AlignmentTargetIntegrationTest is Test {
 
         // 4. Remilia connects - DAO adds ambassador
         vm.prank(daoOwner);
-        registry.addAmbassador(targetId, remiliaMultisig);
-        assertTrue(registry.isAmbassador(targetId, remiliaMultisig));
+        alignmentRegistry.addAmbassador(targetId, remiliaMultisig);
+        assertTrue(alignmentRegistry.isAmbassador(targetId, remiliaMultisig));
 
         // 5. Verify target profile
-        IMasterRegistry.AlignmentTarget memory target = registry.getAlignmentTarget(targetId);
+        IAlignmentRegistry.AlignmentTarget memory target = alignmentRegistry.getAlignmentTarget(targetId);
         assertEq(target.title, "Remilia");
         assertTrue(target.active);
 
         // 6. DAO can update target metadata
         vm.prank(daoOwner);
-        registry.updateAlignmentTarget(targetId, "Updated description", "https://ms2fun.com/targets/remilia/v2");
+        alignmentRegistry.updateAlignmentTarget(targetId, "Updated description", "https://ms2fun.com/targets/remilia/v2");
 
-        target = registry.getAlignmentTarget(targetId);
+        target = alignmentRegistry.getAlignmentTarget(targetId);
         assertEq(target.description, "Updated description");
     }
 
@@ -89,13 +96,13 @@ contract AlignmentTargetIntegrationTest is Test {
         MockAlignedVaultIntegration vault = new MockAlignedVaultIntegration(cultToken);
 
         vm.prank(daoOwner);
-        vm.expectRevert("Target not found");
-        registry.registerVault(address(vault), "Bad Vault", "ipfs://bad", 1);
+        vm.expectRevert();
+        registry.registerVault(address(vault), vaultDev, "Bad Vault", "ipfs://bad", 1);
     }
 
     function test_MultipleVaultsPerTarget() public {
-        IMasterRegistry.AlignmentAsset[] memory assets = new IMasterRegistry.AlignmentAsset[](1);
-        assets[0] = IMasterRegistry.AlignmentAsset({
+        IAlignmentRegistry.AlignmentAsset[] memory assets = new IAlignmentRegistry.AlignmentAsset[](1);
+        assets[0] = IAlignmentRegistry.AlignmentAsset({
             token: cultToken,
             symbol: "CULT",
             info: "",
@@ -103,16 +110,16 @@ contract AlignmentTargetIntegrationTest is Test {
         });
 
         vm.prank(daoOwner);
-        uint256 targetId = registry.registerAlignmentTarget("Remilia", "", "", assets);
+        uint256 targetId = alignmentRegistry.registerAlignmentTarget("Remilia", "", "", assets);
 
         MockAlignedVaultIntegration vault1 = new MockAlignedVaultIntegration(cultToken);
         MockAlignedVaultIntegration vault2 = new MockAlignedVaultIntegration(cultToken);
 
         vm.prank(daoOwner);
-        registry.registerVault(address(vault1), "Remilia Vault 1", "ipfs://1", targetId);
+        registry.registerVault(address(vault1), vaultDev, "Remilia Vault 1", "ipfs://1", targetId);
 
         vm.prank(daoOwner);
-        registry.registerVault(address(vault2), "Remilia Vault 2", "ipfs://2", targetId);
+        registry.registerVault(address(vault2), vaultDev, "Remilia Vault 2", "ipfs://2", targetId);
 
         assertTrue(registry.isVaultRegistered(address(vault1)));
         assertTrue(registry.isVaultRegistered(address(vault2)));

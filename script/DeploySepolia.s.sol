@@ -5,6 +5,8 @@ import {Script, console} from "forge-std/Script.sol";
 import {MasterRegistryV1} from "../src/master/MasterRegistryV1.sol";
 import {MasterRegistry} from "../src/master/MasterRegistry.sol";
 import {IMasterRegistry} from "../src/master/interfaces/IMasterRegistry.sol";
+import {AlignmentRegistryV1} from "../src/master/AlignmentRegistryV1.sol";
+import {IAlignmentRegistry} from "../src/master/interfaces/IAlignmentRegistry.sol";
 import {FeaturedQueueManager} from "../src/master/FeaturedQueueManager.sol";
 import {GlobalMessageRegistry} from "../src/registry/GlobalMessageRegistry.sol";
 import {ProtocolTreasuryV1} from "../src/treasury/ProtocolTreasuryV1.sol";
@@ -15,6 +17,8 @@ import {UltraAlignmentVault} from "../src/vaults/UltraAlignmentVault.sol";
 import {ERC404Factory} from "../src/factories/erc404/ERC404Factory.sol";
 import {ERC404StakingModule} from "../src/factories/erc404/ERC404StakingModule.sol";
 import {LiquidityDeployerModule} from "../src/factories/erc404/LiquidityDeployerModule.sol";
+import {LaunchManager} from "../src/factories/erc404/LaunchManager.sol";
+import {CurveParamsComputer} from "../src/factories/erc404/CurveParamsComputer.sol";
 import {ERC1155Factory} from "../src/factories/erc1155/ERC1155Factory.sol";
 import {ERC721AuctionFactory} from "../src/factories/erc721/ERC721AuctionFactory.sol";
 import {PromotionBadges} from "../src/promotion/PromotionBadges.sol";
@@ -43,10 +47,14 @@ contract DeploySepolia is Script {
     ShareOffering public shareOffering;
     StipendConductor public stipendConductor;
 
+    AlignmentRegistryV1 public alignmentRegistry;
     MockERC20 public testToken;
     uint256 public alignmentTargetId;
 
     UltraAlignmentVault public vault;
+
+    LaunchManager public launchManager;
+    CurveParamsComputer public curveParamsComputer;
 
     ERC404Factory public erc404Factory;
     ERC1155Factory public erc1155Factory;
@@ -94,6 +102,11 @@ contract DeploySepolia is Script {
         // 5. GlobalMessageRegistry
         globalMessageRegistry = new GlobalMessageRegistry(deployer, masterRegistry);
 
+        // 6. AlignmentRegistryV1
+        alignmentRegistry = new AlignmentRegistryV1();
+        alignmentRegistry.initialize(deployer);
+        MasterRegistryV1(masterRegistry).setAlignmentRegistry(address(alignmentRegistry));
+
         // ============ Phase 2: DAO Layer ============
 
         // 6. Safe: use env var or deploy MockSafe
@@ -130,15 +143,15 @@ contract DeploySepolia is Script {
         // 10. Deploy MockERC20
         testToken = new MockERC20("TestToken", "TEST");
 
-        // 11. Register alignment target
-        IMasterRegistry.AlignmentAsset[] memory assets = new IMasterRegistry.AlignmentAsset[](1);
-        assets[0] = IMasterRegistry.AlignmentAsset({
+        // 11. Register alignment target via AlignmentRegistry
+        IAlignmentRegistry.AlignmentAsset[] memory assets = new IAlignmentRegistry.AlignmentAsset[](1);
+        assets[0] = IAlignmentRegistry.AlignmentAsset({
             token: address(testToken),
             symbol: "TEST",
             info: "Test alignment token for Sepolia",
             metadataURI: ""
         });
-        alignmentTargetId = MasterRegistryV1(masterRegistry).registerAlignmentTarget(
+        alignmentTargetId = alignmentRegistry.registerAlignmentTarget(
             "Test Community",
             "Test alignment target for Sepolia",
             "",
@@ -163,6 +176,7 @@ contract DeploySepolia is Script {
         // 13. Register vault
         MasterRegistryV1(masterRegistry).registerVault(
             address(vault),
+            deployer,           // creator
             "Test Vault",
             "https://sepolia.ms2.fun/vault",
             alignmentTargetId
@@ -170,9 +184,11 @@ contract DeploySepolia is Script {
 
         // ============ Phase 5: Factories ============
 
-        // 14. ERC404StakingModule + LiquidityDeployerModule + ERC404Factory
+        // 14. ERC404StakingModule + LiquidityDeployerModule + LaunchManager + CurveParamsComputer + ERC404Factory
         ERC404StakingModule erc404StakingModule = new ERC404StakingModule(masterRegistry);
         LiquidityDeployerModule erc404LiquidityDeployer = new LiquidityDeployerModule();
+        launchManager = new LaunchManager(deployer);
+        curveParamsComputer = new CurveParamsComputer(deployer);
         erc404Factory = new ERC404Factory(
             masterRegistry,
             address(0),     // instanceTemplate (not used for direct deploy)
@@ -183,7 +199,10 @@ contract DeploySepolia is Script {
             500,            // creatorFeeBps (5%)
             100,            // creatorGraduationFeeBps (1%)
             address(erc404StakingModule),
-            address(erc404LiquidityDeployer)
+            address(erc404LiquidityDeployer),
+            address(globalMessageRegistry),
+            address(launchManager),
+            address(curveParamsComputer)
         );
         erc404Factory.setProtocolTreasury(address(treasury));
         erc404Factory.setProfile(1, ERC404Factory.GraduationProfile({
@@ -200,7 +219,8 @@ contract DeploySepolia is Script {
             masterRegistry,
             address(0),     // instanceTemplate
             deployer,       // creator
-            500             // creatorFeeBps (5%)
+            500,            // creatorFeeBps (5%)
+            address(globalMessageRegistry)
         );
         erc1155Factory.setProtocolTreasury(address(treasury));
 
@@ -208,7 +228,8 @@ contract DeploySepolia is Script {
         erc721Factory = new ERC721AuctionFactory(
             masterRegistry,
             deployer,       // creator
-            500             // creatorFeeBps (5%)
+            500,            // creatorFeeBps (5%)
+            address(globalMessageRegistry)
         );
         erc721Factory.setProtocolTreasury(address(treasury));
 
@@ -216,22 +237,21 @@ contract DeploySepolia is Script {
 
         // 17. PromotionBadges
         promotionBadges = new PromotionBadges(address(treasury));
-        promotionBadges.setAuthorizedFactory(address(erc404Factory), true);
+        // ERC404 perks now go via LaunchManager (authorized to call PromotionBadges)
+        promotionBadges.setAuthorizedFactory(address(launchManager), true);
         promotionBadges.setAuthorizedFactory(address(erc1155Factory), true);
         promotionBadges.setAuthorizedFactory(address(erc721Factory), true);
 
         // ============ Phase 7: Wiring ============
 
-        // 18-19. MasterRegistry wiring
-        MasterRegistryV1(masterRegistry).setGlobalMessageRegistry(address(globalMessageRegistry));
-        MasterRegistryV1(masterRegistry).setFeaturedQueueManager(address(queueManager));
-
-        // 20. QueueManager treasury
+        // 18. QueueManager treasury
         queueManager.setProtocolTreasury(address(treasury));
 
         // 21. Factory wiring (promotionBadges + featuredQueueManager)
-        erc404Factory.setPromotionBadges(address(promotionBadges));
-        erc404Factory.setFeaturedQueueManager(address(queueManager));
+        // ERC404: tier perks wired via LaunchManager
+        launchManager.setPromotionBadges(address(promotionBadges));
+        launchManager.setFeaturedQueueManager(address(queueManager));
+        // ERC1155 + ERC721 still wire directly
         erc1155Factory.setPromotionBadges(address(promotionBadges));
         erc1155Factory.setFeaturedQueueManager(address(queueManager));
         erc721Factory.setPromotionBadges(address(promotionBadges));
