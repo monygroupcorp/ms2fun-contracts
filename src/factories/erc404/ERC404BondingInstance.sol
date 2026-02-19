@@ -9,49 +9,24 @@ import { SafeTransferLib } from "solady/utils/SafeTransferLib.sol";
 import { FixedPointMathLib } from "solady/utils/FixedPointMathLib.sol";
 import { BondingCurveMath } from "./libraries/BondingCurveMath.sol";
 import { ERC404StakingModule } from "./ERC404StakingModule.sol";
-import { LiquidityDeployer } from "./libraries/LiquidityDeployer.sol";
+import { LiquidityDeployerModule } from "./LiquidityDeployerModule.sol";
 import { IPoolManager } from "v4-core/interfaces/IPoolManager.sol";
 import { PoolKey } from "v4-core/types/PoolKey.sol";
 import { Currency, CurrencyLibrary } from "v4-core/types/Currency.sol";
 import { IHooks } from "v4-core/interfaces/IHooks.sol";
-import { IUnlockCallback } from "v4-core/interfaces/callback/IUnlockCallback.sol";
-import { BalanceDelta } from "v4-core/types/BalanceDelta.sol";
-import { LiquidityAmounts } from "../../libraries/v4/LiquidityAmounts.sol";
-import { TickMath } from "v4-core/libraries/TickMath.sol";
-import { StateLibrary } from "v4-core/libraries/StateLibrary.sol";
-import { PoolId } from "v4-core/types/PoolId.sol";
-import { CurrencySettler } from "../../libraries/v4/CurrencySettler.sol";
 import { IAlignmentVault } from "../../interfaces/IAlignmentVault.sol";
 import { IGlobalMessageRegistry } from "../../registry/interfaces/IGlobalMessageRegistry.sol";
 import { IMasterRegistry } from "../../master/interfaces/IMasterRegistry.sol";
-import { IERC20 } from "../../shared/interfaces/IERC20.sol";
-
-interface IWETH {
-    function deposit() external payable;
-    function transfer(address to, uint256 value) external returns (bool);
-    function approve(address spender, uint256 amount) external returns (bool);
-}
-
-interface IProtocolTreasuryPOL {
-    function receivePOL(
-        PoolKey calldata poolKey,
-        int24 tickLower,
-        int24 tickUpper,
-        uint256 amount0,
-        uint256 amount1
-    ) external;
-}
+import { IInstanceLifecycle, TYPE_ERC404, STATE_BONDING, STATE_PAUSED, STATE_GRADUATED } from "../../interfaces/IInstanceLifecycle.sol";
 
 /**
  * @title ERC404BondingInstance
  * @notice ERC404 token with bonding curve, password-protected tiers, and V4 liquidity deployment
  * @dev Extends DN404 with bonding curve mechanics, message system, and Uniswap V4 integration
  */
-contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IUnlockCallback {
+contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IInstanceLifecycle {
     using BondingCurveMath for BondingCurveMath.Params;
     using CurrencyLibrary for Currency;
-    using StateLibrary for IPoolManager;
-    using CurrencySettler for Currency;
 
     // ┌─────────────────────────┐
     // │         Types           │
@@ -138,6 +113,9 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IUnlockCallba
     // Staking delegation
     ERC404StakingModule public immutable stakingModule;
 
+    // V4 liquidity deployment singleton
+    LiquidityDeployerModule public immutable liquidityDeployer;
+
     // Events
     event BondingSale(address indexed user, uint256 amount, uint256 cost, bool isBuy);
     event BondingOpenTimeSet(uint256 openTime);
@@ -182,7 +160,8 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IUnlockCallba
         uint24 _poolFee,
         int24 _tickSpacing,
         uint256 _unit,
-        address _stakingModule
+        address _stakingModule,
+        address _liquidityDeployer
     ) {
         require(_maxSupply > 0, "Invalid max supply");
         require(_liquidityReservePercent < 100, "Invalid reserve percent");
@@ -235,6 +214,8 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IUnlockCallba
         UNIT = _unit;
         require(_stakingModule != address(0), "Invalid staking module");
         stakingModule = ERC404StakingModule(_stakingModule);
+        require(_liquidityDeployer != address(0), "Invalid liquidity deployer");
+        liquidityDeployer = LiquidityDeployerModule(payable(_liquidityDeployer));
 
         // Initialize password hash mapping
         for (uint256 i = 0; i < _tierConfig.passwordHashes.length; i++) {
@@ -290,6 +271,7 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IUnlockCallba
         }
         bondingActive = _active;
         emit BondingActiveChanged(_active);
+        emit StateChanged(_active ? STATE_BONDING : STATE_PAUSED);
     }
 
     /**
@@ -541,6 +523,12 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IUnlockCallba
         SafeTransferLib.safeTransferETH(msg.sender, refund);
 
         emit BondingSale(msg.sender, amount, refund, false);
+    }
+
+    // ── IInstanceLifecycle ─────────────────────────────────────────────────────
+
+    function instanceType() external pure override returns (bytes32) {
+        return TYPE_ERC404;
     }
 
     // ┌─────────────────────────┐
@@ -850,8 +838,15 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IUnlockCallba
             require(msg.sender == owner(), "Only owner can deploy before maturity/full");
         }
 
-        LiquidityDeployer.DeployParams memory p = LiquidityDeployer.DeployParams({
-            ethReserve: reserve,
+        // CEI: capture and zero reserve before external calls
+        uint256 ethToSend = reserve;
+        reserve = 0;
+
+        // Transfer LIQUIDITY_RESERVE tokens to the module (module settles on behalf of this address)
+        _transfer(address(this), address(liquidityDeployer), LIQUIDITY_RESERVE);
+
+        LiquidityDeployerModule.DeployParams memory p = LiquidityDeployerModule.DeployParams({
+            ethReserve: ethToSend,
             tokenReserve: LIQUIDITY_RESERVE,
             graduationFeeBps: graduationFeeBps,
             creatorGraduationFeeBps: creatorGraduationFeeBps,
@@ -860,112 +855,18 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IUnlockCallba
             factoryCreator: factoryCreator,
             weth: weth,
             token: address(this),
+            instance: address(this),
             poolFee: poolFee,
             tickSpacing: tickSpacing,
             v4Hook: v4Hook,
             v4PoolManager: v4PoolManager
         });
 
-        LiquidityDeployer.AmountsResult memory r = LiquidityDeployer.computeAmounts(p);
-
-        // Determine token ordering
-        Currency currency0 = Currency.wrap(address(this));
-        Currency currency1 = Currency.wrap(weth);
-        bool token0IsThis = currency0 < currency1;
-        if (!token0IsThis) (currency0, currency1) = (currency1, currency0);
-
-        uint160 sqrtPriceX96 = LiquidityDeployer.computeSqrtPrice(r.ethForPool, r.tokensForPool, token0IsThis);
-
-        int24 tickLower = TickMath.minUsableTick(tickSpacing);
-        int24 tickUpper = TickMath.maxUsableTick(tickSpacing);
-
-        PoolKey memory poolKey = PoolKey({
-            currency0: currency0,
-            currency1: currency1,
-            fee: poolFee,
-            tickSpacing: tickSpacing,
-            hooks: v4Hook
-        });
-
-        IWETH(weth).deposit{value: r.ethForPool}();
-        if (!token0IsThis) IERC20(weth).approve(address(v4PoolManager), r.ethForPool);
-
-        v4PoolManager.initialize(poolKey, sqrtPriceX96);
-
-        uint256 amount0 = token0IsThis ? r.tokensForPool : r.ethForPool;
-        uint256 amount1 = token0IsThis ? r.ethForPool : r.tokensForPool;
-
-        LiquidityDeployer.UnlockCallbackParams memory cb = LiquidityDeployer.UnlockCallbackParams({
-            poolKey: poolKey,
-            tickLower: tickLower,
-            tickUpper: tickUpper,
-            amount0: amount0,
-            amount1: amount1,
-            sender: address(this)
-        });
-
-        v4PoolManager.unlock(abi.encode(cb));
-
-        // Send graduation fees
-        if (r.graduationFee > 0) {
-            uint256 protocolCut = r.graduationFee - r.creatorGradCut;
-            if (protocolCut > 0) SafeTransferLib.safeTransferETH(protocolTreasury, protocolCut);
-            if (r.creatorGradCut > 0) {
-                SafeTransferLib.safeTransferETH(factoryCreator, r.creatorGradCut);
-                emit CreatorGraduationFeePaid(factoryCreator, r.creatorGradCut);
-            }
-            emit GraduationFeePaid(protocolTreasury, r.graduationFee - r.creatorGradCut);
-        }
-
-        if (r.polETH > 0 && r.polTokens > 0) {
-            _deployProtocolLiquidity(poolKey, tickLower, tickUpper, r.polTokens, r.polETH, token0IsThis);
-        }
+        liquidity = liquidityDeployer.deployLiquidity{value: ethToSend}(p);
 
         liquidityPool = address(v4PoolManager);
-        reserve = 0;
-        emit LiquidityDeployed(liquidityPool, r.tokensForPool, r.ethForPool);
-    }
-
-    /// @notice Unlock callback for V4 liquidity deployment — delegates to LiquidityDeployer
-    function unlockCallback(bytes calldata data) external returns (bytes memory) {
-        require(msg.sender == address(v4PoolManager), "Not pool manager");
-        return LiquidityDeployer.handleUnlockCallback(v4PoolManager, data);
-    }
-
-    function _deployProtocolLiquidity(
-        PoolKey memory poolKey,
-        int24 tickLower,
-        int24 tickUpper,
-        uint256 polTokenAmount,
-        uint256 polETHAmount,
-        bool token0IsThis
-    ) internal {
-        // Wrap POL ETH to WETH
-        IWETH(weth).deposit{value: polETHAmount}();
-
-        // Transfer WETH to treasury
-        IWETH(weth).transfer(protocolTreasury, polETHAmount);
-
-        // Transfer project tokens to treasury
-        _transfer(address(this), protocolTreasury, polTokenAmount);
-
-        // Determine amounts in currency order
-        uint256 polAmount0;
-        uint256 polAmount1;
-        if (token0IsThis) {
-            polAmount0 = polTokenAmount;
-            polAmount1 = polETHAmount;
-        } else {
-            polAmount0 = polETHAmount;
-            polAmount1 = polTokenAmount;
-        }
-
-        // Treasury deploys its own V4 position
-        IProtocolTreasuryPOL(protocolTreasury).receivePOL(
-            poolKey, tickLower, tickUpper, polAmount0, polAmount1
-        );
-
-        emit ProtocolLiquidityDeployed(protocolTreasury, polTokenAmount, polETHAmount);
+        emit LiquidityDeployed(liquidityPool, LIQUIDITY_RESERVE, ethToSend);
+        emit StateChanged(STATE_GRADUATED);
     }
 
     // ┌─────────────────────────┐

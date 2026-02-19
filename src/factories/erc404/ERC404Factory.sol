@@ -9,6 +9,8 @@ import {FeatureUtils} from "../../master/libraries/FeatureUtils.sol";
 import {IAlignmentVault} from "../../interfaces/IAlignmentVault.sol";
 import {IFactory} from "../../interfaces/IFactory.sol";
 import {ERC404BondingInstance} from "./ERC404BondingInstance.sol";
+import {ERC404StakingModule} from "./ERC404StakingModule.sol";
+import {LiquidityDeployerModule} from "./LiquidityDeployerModule.sol";
 import {PromotionBadges} from "../../promotion/PromotionBadges.sol";
 import {FeaturedQueueManager} from "../../master/FeaturedQueueManager.sol";
 import {BondingCurveMath} from "./libraries/BondingCurveMath.sol";
@@ -59,6 +61,8 @@ contract ERC404Factory is OwnableRoles, ReentrancyGuard, IFactory {
     mapping(CreationTier => TierConfig) public tierConfigs;
     PromotionBadges public promotionBadges;
     FeaturedQueueManager public featuredQueueManager;
+    ERC404StakingModule public immutable stakingModule;
+    LiquidityDeployerModule public immutable liquidityDeployer;
 
     // Feature matrix
     bytes32[] public features = [
@@ -117,9 +121,13 @@ contract ERC404Factory is OwnableRoles, ReentrancyGuard, IFactory {
         address _protocol,
         address _creator,
         uint256 _creatorFeeBps,
-        uint256 _creatorGraduationFeeBps
+        uint256 _creatorGraduationFeeBps,
+        address _stakingModule,
+        address _liquidityDeployer
     ) {
         require(_protocol != address(0), "Invalid protocol");
+        require(_stakingModule != address(0), "Invalid staking module");
+        require(_liquidityDeployer != address(0), "Invalid liquidity deployer");
         _initializeOwner(_protocol);
         _grantRoles(_protocol, PROTOCOL_ROLE);
         _grantRoles(_creator, CREATOR_ROLE);
@@ -133,6 +141,8 @@ contract ERC404Factory is OwnableRoles, ReentrancyGuard, IFactory {
         v4PoolManager = _v4PoolManager;
         weth = _weth;
         instanceCreationFee = 0.01 ether;
+        stakingModule = ERC404StakingModule(_stakingModule);
+        liquidityDeployer = LiquidityDeployerModule(payable(_liquidityDeployer));
     }
 
     /**
@@ -275,7 +285,9 @@ contract ERC404Factory is OwnableRoles, ReentrancyGuard, IFactory {
             creatorGraduationFeeBps,
             profile.poolFee,
             profile.tickSpacing,
-            unit
+            unit,
+            address(stakingModule),
+            address(liquidityDeployer)
         ));
 
         // Register with master registry

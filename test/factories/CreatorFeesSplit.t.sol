@@ -6,6 +6,7 @@ import {ERC1155Factory} from "../../src/factories/erc1155/ERC1155Factory.sol";
 import {ERC1155Instance} from "../../src/factories/erc1155/ERC1155Instance.sol";
 import {ERC404Factory} from "../../src/factories/erc404/ERC404Factory.sol";
 import {ERC404BondingInstance} from "../../src/factories/erc404/ERC404BondingInstance.sol";
+import {ERC404StakingModule} from "../../src/factories/erc404/ERC404StakingModule.sol";
 import {UltraAlignmentVault} from "../../src/vaults/UltraAlignmentVault.sol";
 import {MockEXECToken} from "../mocks/MockEXECToken.sol";
 import {MockMasterRegistry} from "../mocks/MockMasterRegistry.sol";
@@ -29,12 +30,20 @@ contract MockVaultMinimal {
  * @title CreatorFeesSplitTest
  * @notice Tests for creator incentive fee splitting across factories and vault
  */
+contract MockMasterRegistryForStakingC {
+    mapping(address => bool) public instances;
+    function setInstance(address a, bool v) external { instances[a] = v; }
+    function isRegisteredInstance(address a) external view returns (bool) { return instances[a]; }
+}
+
 contract CreatorFeesSplitTest is Test {
     ERC1155Factory public erc1155Factory;
     ERC404Factory public erc404Factory;
     UltraAlignmentVault public vault;
     MockEXECToken public token;
     MockMasterRegistry public mockRegistry;
+    MockMasterRegistryForStakingC public stakingRegistry;
+    ERC404StakingModule public stakingModule;
 
     address public owner = address(this);
     address public factoryCreator = address(0xC1EA);
@@ -77,6 +86,8 @@ contract CreatorFeesSplitTest is Test {
         vault.setV4PoolKey(mockPoolKey);
 
         mockRegistry = new MockMasterRegistry();
+        stakingRegistry = new MockMasterRegistryForStakingC();
+        stakingModule = new ERC404StakingModule(address(stakingRegistry));
 
         // Deploy ERC1155Factory with creator fee
         erc1155Factory = new ERC1155Factory(
@@ -96,7 +107,9 @@ contract CreatorFeesSplitTest is Test {
             owner,              // protocol
             factoryCreator,
             CREATOR_FEE_BPS,
-            CREATOR_GRAD_FEE_BPS
+            CREATOR_GRAD_FEE_BPS,
+            address(stakingModule),
+            address(0x600) // mockLiquidityDeployer
         );
         erc404Factory.setProtocolTreasury(treasury);
     }

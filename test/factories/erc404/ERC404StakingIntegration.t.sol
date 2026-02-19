@@ -190,7 +190,8 @@ contract ERC404StakingIntegrationTest is Test {
             3000,           // poolFee
             60,             // tickSpacing
             TOKEN_UNIT,     // unit (1 NFT = TOKEN_UNIT tokens)
-            address(stakingModule)
+            address(stakingModule),
+            address(0x600)  // mockLiquidityDeployer
         );
 
         vm.stopPrank();

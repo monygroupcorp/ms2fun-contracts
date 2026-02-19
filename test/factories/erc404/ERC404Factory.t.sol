@@ -4,6 +4,7 @@ pragma solidity ^0.8.24;
 import {Test, console} from "forge-std/Test.sol";
 import {ERC404Factory} from "../../../src/factories/erc404/ERC404Factory.sol";
 import {ERC404BondingInstance} from "../../../src/factories/erc404/ERC404BondingInstance.sol";
+import {ERC404StakingModule} from "../../../src/factories/erc404/ERC404StakingModule.sol";
 import {MockMasterRegistry} from "../../mocks/MockMasterRegistry.sol";
 import {PromotionBadges} from "../../../src/promotion/PromotionBadges.sol";
 import {BondingCurveMath} from "../../../src/factories/erc404/libraries/BondingCurveMath.sol";
@@ -36,11 +37,19 @@ contract MockHook {
  * @notice Comprehensive test suite for ERC404Factory
  * @dev Tests instance creation, parameter management, fee handling, and event emission
  */
+contract MockMasterRegistryForStakingF {
+    mapping(address => bool) public instances;
+    function setInstance(address a, bool v) external { instances[a] = v; }
+    function isRegisteredInstance(address a) external view returns (bool) { return instances[a]; }
+}
+
 contract ERC404FactoryTest is Test {
     ERC404Factory public factory;
     MockMasterRegistry public mockRegistry;
     MockVault public mockVault;
     MockHook public mockHook;
+    MockMasterRegistryForStakingF public stakingRegistry;
+    ERC404StakingModule public stakingModule;
 
     // Test addresses
     address public owner = address(0x1);
@@ -82,6 +91,10 @@ contract ERC404FactoryTest is Test {
         // Deploy mock hook
         mockHook = new MockHook();
 
+        // Deploy staking module
+        stakingRegistry = new MockMasterRegistryForStakingF();
+        stakingModule = new ERC404StakingModule(address(stakingRegistry));
+
         // Deploy factory (no hookFactory needed anymore)
         factory = new ERC404Factory(
             address(mockRegistry),
@@ -91,7 +104,9 @@ contract ERC404FactoryTest is Test {
             protocolAdmin,      // protocol address (gets PROTOCOL_ROLE + owner)
             address(0xC1EA),    // creator address (gets CREATOR_ROLE)
             2000,               // creatorFeeBps
-            40                  // creatorGraduationFeeBps
+            40,                 // creatorGraduationFeeBps
+            address(stakingModule), // staking module
+            address(0x600) // mockLiquidityDeployer
         );
 
         // Setup default graduation profile (Standard: 15 ETH target, 1M tokens/NFT)
@@ -330,7 +345,9 @@ contract ERC404FactoryTest is Test {
             protocolAdmin,
             address(0xC1EA),
             2000,
-            40
+            40,
+            address(stakingModule),
+            address(0x600) // mockLiquidityDeployer
         );
 
         vm.stopPrank();
@@ -367,7 +384,9 @@ contract ERC404FactoryTest is Test {
             protocolAdmin,
             address(0xC1EA),
             2000,
-            40
+            40,
+            address(stakingModule),
+            address(0x600) // mockLiquidityDeployer
         );
 
         vm.stopPrank();

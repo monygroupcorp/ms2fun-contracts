@@ -5,6 +5,7 @@ import {Test, console} from "forge-std/Test.sol";
 import {MasterRegistryV1} from "../../src/master/MasterRegistryV1.sol";
 import {MasterRegistry} from "../../src/master/MasterRegistry.sol";
 import {ERC404Factory} from "../../src/factories/erc404/ERC404Factory.sol";
+import {ERC404StakingModule} from "../../src/factories/erc404/ERC404StakingModule.sol";
 import {ERC1155Factory} from "../../src/factories/erc1155/ERC1155Factory.sol";
 import {ERC404BondingInstance} from "../../src/factories/erc404/ERC404BondingInstance.sol";
 import {UltraAlignmentVault} from "../../src/vaults/UltraAlignmentVault.sol";
@@ -27,6 +28,12 @@ contract MockHook {
  * @dev Proves that two projects cannot have the same name, regardless of whether
  *      they were created via ERC404Factory or ERC1155Factory
  */
+contract MockMasterRegistryForStakingN {
+    mapping(address => bool) public instances;
+    function setInstance(address a, bool v) external { instances[a] = v; }
+    function isRegisteredInstance(address a) external view returns (bool) { return instances[a]; }
+}
+
 contract NamespaceCollisionTest is Test {
     MasterRegistryV1 public implementation;
     MasterRegistry public proxy;
@@ -37,6 +44,8 @@ contract NamespaceCollisionTest is Test {
 
     UltraAlignmentVault public vault;
     MockHook public mockHook;
+    MockMasterRegistryForStakingN public stakingRegistry;
+    ERC404StakingModule public stakingModule;
     MockEXECToken public execToken;
 
     address public owner = address(0x1);
@@ -55,14 +64,13 @@ contract NamespaceCollisionTest is Test {
     function setUp() public {
         vm.startPrank(owner);
 
-        // Deploy EXEC token for governance
+        // Deploy EXEC token (used as alignment token for vault)
         execToken = new MockEXECToken(1000000e18);
 
         // Deploy MasterRegistry with proxy
         implementation = new MasterRegistryV1();
         bytes memory initData = abi.encodeWithSignature(
-            "initialize(address,address)",
-            address(execToken),
+            "initialize(address)",
             owner
         );
         proxy = new MasterRegistry(address(implementation), initData);
@@ -97,6 +105,10 @@ contract NamespaceCollisionTest is Test {
         // Deploy mock hook
         mockHook = new MockHook();
 
+        // Deploy staking module
+        stakingRegistry = new MockMasterRegistryForStakingN();
+        stakingModule = new ERC404StakingModule(address(stakingRegistry));
+
         // Deploy ERC404Factory
         erc404Factory = new ERC404Factory(
             address(registry),
@@ -106,7 +118,9 @@ contract NamespaceCollisionTest is Test {
             owner,              // protocol
             address(0xC1EA),
             2000,
-            40
+            40,
+            address(stakingModule),
+            address(0x600) // mockLiquidityDeployer
         );
 
         // Deploy ERC1155Factory
@@ -132,22 +146,22 @@ contract NamespaceCollisionTest is Test {
         });
         erc404Factory.setProfile(1, profile);
 
-        // Register both factories with MasterRegistry (as dictator)
-        // Note: titles must be alphanumeric, hyphens, underscores only (no spaces)
-        bytes32[] memory features = new bytes32[](0);
+        // Register both factories with MasterRegistry
         registry.registerFactory(
             address(erc404Factory),
             "ERC404",
             "ERC404-Factory",
             "ERC404 Factory",
-            "ipfs://erc404-factory"
+            "ipfs://erc404-factory",
+            new bytes32[](0)
         );
         registry.registerFactory(
             address(erc1155Factory),
             "ERC1155",
             "ERC1155-Factory",
             "ERC1155 Factory",
-            "ipfs://erc1155-factory"
+            "ipfs://erc1155-factory",
+            new bytes32[](0)
         );
 
         bytes32[] memory passwordHashes = new bytes32[](2);

@@ -4,6 +4,7 @@ pragma solidity ^0.8.20;
 import {Script, console} from "forge-std/Script.sol";
 import {ERC404Factory} from "../src/factories/erc404/ERC404Factory.sol";
 import {ERC404StakingModule} from "../src/factories/erc404/ERC404StakingModule.sol";
+import {LiquidityDeployerModule} from "../src/factories/erc404/LiquidityDeployerModule.sol";
 
 contract DeployERC404Factory is Script {
     function run() external {
@@ -21,7 +22,9 @@ contract DeployERC404Factory is Script {
         address protocol = vm.envAddress("PROTOCOL");
         ERC404StakingModule stakingModule = new ERC404StakingModule(masterRegistry);
         console.log("ERC404StakingModule deployed at:", address(stakingModule));
-        ERC404Factory factory = new ERC404Factory(masterRegistry, instanceTemplate, v4PoolManager, weth, protocol, creator, creatorFeeBps, creatorGraduationFeeBps, address(stakingModule));
+        LiquidityDeployerModule liquidityDeployer = new LiquidityDeployerModule();
+        console.log("LiquidityDeployerModule deployed at:", address(liquidityDeployer));
+        ERC404Factory factory = new ERC404Factory(masterRegistry, instanceTemplate, v4PoolManager, weth, protocol, creator, creatorFeeBps, creatorGraduationFeeBps, address(stakingModule), address(liquidityDeployer));
         console.log("ERC404Factory deployed at:", address(factory));
 
         // Set up default graduation profile (profileId = 1)

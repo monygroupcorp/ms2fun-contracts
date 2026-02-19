@@ -3,7 +3,14 @@ pragma solidity ^0.8.24;
 
 import { Test } from "forge-std/Test.sol";
 import { ERC404BondingInstance } from "src/factories/erc404/ERC404BondingInstance.sol";
+import { ERC404StakingModule } from "src/factories/erc404/ERC404StakingModule.sol";
 import { IPoolManager } from "v4-core/interfaces/IPoolManager.sol";
+
+contract MockMasterRegistryForStakingR {
+    mapping(address => bool) public instances;
+    function setInstance(address a, bool v) external { instances[a] = v; }
+    function isRegisteredInstance(address a) external view returns (bool) { return instances[a]; }
+}
 
 /**
  * @title ERC404Reroll Tests
@@ -11,6 +18,8 @@ import { IPoolManager } from "v4-core/interfaces/IPoolManager.sol";
  */
 contract ERC404RerollTest is Test {
     ERC404BondingInstance token;
+    MockMasterRegistryForStakingR stakingRegistry;
+    ERC404StakingModule stakingModule;
     address mockPoolManager = address(0x1);
     address mockHook = address(0x2);
     address mockWETH = address(0x3);
@@ -25,6 +34,9 @@ contract ERC404RerollTest is Test {
     uint256 constant UNIT = 1_000_000 ether; // 1M tokens = 1 NFT
 
     function setUp() public {
+        stakingRegistry = new MockMasterRegistryForStakingR();
+        stakingModule = new ERC404StakingModule(address(stakingRegistry));
+
         // Mock WETH with deposit/approve/transfer functions
         vm.mockCall(
             mockWETH,
@@ -84,7 +96,9 @@ contract ERC404RerollTest is Test {
             40, // creatorGraduationFeeBps (0.4%)
             3000, // poolFee
             60, // tickSpacing
-            1_000_000 ether // unit
+            1_000_000 ether, // unit
+            address(stakingModule), // staking module
+            address(0x600) // mockLiquidityDeployer
         );
 
         // Fund users with ETH

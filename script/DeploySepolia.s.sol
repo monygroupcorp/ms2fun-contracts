@@ -14,6 +14,7 @@ import {StipendConductor} from "../src/dao/conductors/StipendConductor.sol";
 import {UltraAlignmentVault} from "../src/vaults/UltraAlignmentVault.sol";
 import {ERC404Factory} from "../src/factories/erc404/ERC404Factory.sol";
 import {ERC404StakingModule} from "../src/factories/erc404/ERC404StakingModule.sol";
+import {LiquidityDeployerModule} from "../src/factories/erc404/LiquidityDeployerModule.sol";
 import {ERC1155Factory} from "../src/factories/erc1155/ERC1155Factory.sol";
 import {ERC721AuctionFactory} from "../src/factories/erc721/ERC721AuctionFactory.sol";
 import {PromotionBadges} from "../src/promotion/PromotionBadges.sol";
@@ -169,8 +170,9 @@ contract DeploySepolia is Script {
 
         // ============ Phase 5: Factories ============
 
-        // 14. ERC404StakingModule + ERC404Factory
+        // 14. ERC404StakingModule + LiquidityDeployerModule + ERC404Factory
         ERC404StakingModule erc404StakingModule = new ERC404StakingModule(masterRegistry);
+        LiquidityDeployerModule erc404LiquidityDeployer = new LiquidityDeployerModule();
         erc404Factory = new ERC404Factory(
             masterRegistry,
             address(0),     // instanceTemplate (not used for direct deploy)
@@ -180,7 +182,8 @@ contract DeploySepolia is Script {
             deployer,       // creator
             500,            // creatorFeeBps (5%)
             100,            // creatorGraduationFeeBps (1%)
-            address(erc404StakingModule)
+            address(erc404StakingModule),
+            address(erc404LiquidityDeployer)
         );
         erc404Factory.setProtocolTreasury(address(treasury));
         erc404Factory.setProfile(1, ERC404Factory.GraduationProfile({

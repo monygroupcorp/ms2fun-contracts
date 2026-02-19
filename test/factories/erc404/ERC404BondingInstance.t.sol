@@ -41,6 +41,7 @@ contract ERC404BondingInstanceTest is Test {
     address public mockWETH = address(0x300);
     address public mockMasterRegistry = address(0x400);
     address public mockHookFactory = address(0x500);
+    address public mockLiquidityDeployer = address(0x600);
 
     MockMasterRegistryForStaking public stakingRegistry;
     ERC404StakingModule public stakingModule;
@@ -108,7 +109,8 @@ contract ERC404BondingInstanceTest is Test {
             3000, // poolFee
             60, // tickSpacing
             1_000_000 ether, // unit
-            address(stakingModule) // staking module
+            address(stakingModule), // staking module
+            mockLiquidityDeployer // liquidity deployer module
         );
 
         vm.stopPrank();
@@ -314,7 +316,8 @@ contract ERC404BondingInstanceTest is Test {
             3000, // poolFee
             60, // tickSpacing
             1_000_000 ether, // unit
-            address(stakingModule) // staking module
+            address(stakingModule), // staking module
+            mockLiquidityDeployer // liquidity deployer module
         );
         uint256 futureTime = block.timestamp + 1 days;
         zeroFeeInstance.setBondingOpenTime(futureTime);
@@ -363,7 +366,8 @@ contract ERC404BondingInstanceTest is Test {
             3000, // poolFee
             60, // tickSpacing
             1_000_000 ether, // unit
-            address(stakingModule) // staking module
+            address(stakingModule), // staking module
+            mockLiquidityDeployer // liquidity deployer module
         );
         uint256 futureTime = block.timestamp + 1 days;
         noTreasuryInstance.setBondingOpenTime(futureTime);
@@ -455,7 +459,8 @@ contract ERC404BondingInstanceTest is Test {
             3000, // poolFee
             60, // tickSpacing
             1_000_000 ether, // unit
-            address(stakingModule) // staking module
+            address(stakingModule), // staking module
+            mockLiquidityDeployer // liquidity deployer module
         );
         vm.stopPrank();
 
@@ -488,7 +493,8 @@ contract ERC404BondingInstanceTest is Test {
             3000, // poolFee
             60, // tickSpacing
             1_000_000 ether, // unit
-            address(stakingModule) // staking module
+            address(stakingModule), // staking module
+            mockLiquidityDeployer // liquidity deployer module
         );
         vm.stopPrank();
 
@@ -570,7 +576,8 @@ contract ERC404BondingInstanceTest is Test {
             3000, // poolFee
             60, // tickSpacing
             1_000_000 ether, // unit
-            address(stakingModule) // staking module
+            address(stakingModule), // staking module
+            mockLiquidityDeployer // liquidity deployer module
         );
         vm.stopPrank();
 
@@ -628,7 +635,8 @@ contract ERC404BondingInstanceTest is Test {
             3000, // poolFee
             60, // tickSpacing
             1_000_000 ether, // unit
-            address(stakingModule) // staking module
+            address(stakingModule), // staking module
+            mockLiquidityDeployer // liquidity deployer module
         );
         vm.stopPrank();
 
@@ -666,7 +674,8 @@ contract ERC404BondingInstanceTest is Test {
             3000, // poolFee
             60, // tickSpacing
             1_000_000 ether, // unit
-            address(stakingModule) // staking module
+            address(stakingModule), // staking module
+            mockLiquidityDeployer // liquidity deployer module
         );
         vm.stopPrank();
 
@@ -730,7 +739,8 @@ contract ERC404BondingInstanceTest is Test {
             3000,
             60,
             1_000_000 ether, // unit
-            address(stakingModule) // staking module
+            address(stakingModule), // staking module
+            mockLiquidityDeployer // liquidity deployer module
         );
         uint256 futureTime = block.timestamp + 1 days;
         noHookInstance.setBondingOpenTime(futureTime);
