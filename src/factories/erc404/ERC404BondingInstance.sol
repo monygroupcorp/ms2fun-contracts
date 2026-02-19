@@ -8,6 +8,8 @@ import { ReentrancyGuard } from "solady/utils/ReentrancyGuard.sol";
 import { SafeTransferLib } from "solady/utils/SafeTransferLib.sol";
 import { FixedPointMathLib } from "solady/utils/FixedPointMathLib.sol";
 import { BondingCurveMath } from "./libraries/BondingCurveMath.sol";
+import { ERC404StakingModule } from "./ERC404StakingModule.sol";
+import { LiquidityDeployer } from "./libraries/LiquidityDeployer.sol";
 import { IPoolManager } from "v4-core/interfaces/IPoolManager.sol";
 import { PoolKey } from "v4-core/types/PoolKey.sol";
 import { Currency, CurrencyLibrary } from "v4-core/types/Currency.sol";
@@ -20,9 +22,7 @@ import { StateLibrary } from "v4-core/libraries/StateLibrary.sol";
 import { PoolId } from "v4-core/types/PoolId.sol";
 import { CurrencySettler } from "../../libraries/v4/CurrencySettler.sol";
 import { IAlignmentVault } from "../../interfaces/IAlignmentVault.sol";
-import { GlobalMessageRegistry } from "../../registry/GlobalMessageRegistry.sol";
-import { GlobalMessagePacking } from "../../libraries/GlobalMessagePacking.sol";
-import { GlobalMessageTypes } from "../../libraries/GlobalMessageTypes.sol";
+import { IGlobalMessageRegistry } from "../../registry/interfaces/IGlobalMessageRegistry.sol";
 import { IMasterRegistry } from "../../master/interfaces/IMasterRegistry.sol";
 import { IERC20 } from "../../shared/interfaces/IERC20.sol";
 
@@ -101,7 +101,7 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IUnlockCallba
     address public immutable weth;
     IAlignmentVault public immutable vault;
     IMasterRegistry public immutable masterRegistry;
-    GlobalMessageRegistry private cachedGlobalRegistry; // Lazy-loaded from masterRegistry
+    IGlobalMessageRegistry private cachedGlobalRegistry; // Lazy-loaded from masterRegistry
 
     // Protocol revenue
     address public immutable protocolTreasury;
@@ -135,12 +135,8 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IUnlockCallba
     // Reroll system
     mapping(address => uint256) public rerollEscrow;  // user => tokens held for reroll
 
-    // Staking system (optional holder alignment rewards)
-    bool public stakingEnabled;
-    mapping(address => uint256) public stakedBalance;     // user => staked token amount
-    uint256 public totalStaked;                            // total tokens staked across all users
-    uint256 public totalFeesAccumulatedFromVault;          // cumulative total fees received from vault (share-based accounting)
-    mapping(address => uint256) public stakerFeesAlreadyClaimed; // user => cumulative fees already claimed (share-based accounting)
+    // Staking delegation
+    ERC404StakingModule public immutable stakingModule;
 
     // Events
     event BondingSale(address indexed user, uint256 amount, uint256 cost, bool isBuy);
@@ -151,9 +147,7 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IUnlockCallba
     event RerollInitiated(address indexed user, uint256 tokenAmount, uint256[] exemptedNFTIds);
     event RerollCompleted(address indexed user, uint256 tokensReturned);
     event StakingEnabled();
-    event Staked(address indexed user, uint256 amount, uint256 newStakedBalance, uint256 newTotalStaked);
-    event Unstaked(address indexed user, uint256 amount, uint256 newStakedBalance, uint256 newTotalStaked);
-    event StakerRewardsClaimed(address indexed user, uint256 rewardAmount, uint256 newTrackingPoint);
+    event StakerRewardsClaimed(address indexed user, uint256 rewardAmount);
     event BondingFeePaid(address indexed buyer, uint256 feeAmount);
     event GraduationFeePaid(address indexed treasury, uint256 amount);
     event CreatorGraduationFeePaid(address indexed factoryCreator, uint256 amount);
@@ -187,7 +181,8 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IUnlockCallba
         uint256 _creatorGraduationFeeBps,
         uint24 _poolFee,
         int24 _tickSpacing,
-        uint256 _unit
+        uint256 _unit,
+        address _stakingModule
     ) {
         require(_maxSupply > 0, "Invalid max supply");
         require(_liquidityReservePercent < 100, "Invalid reserve percent");
@@ -238,6 +233,8 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IUnlockCallba
         poolFee = _poolFee;
         tickSpacing = _tickSpacing;
         UNIT = _unit;
+        require(_stakingModule != address(0), "Invalid staking module");
+        stakingModule = ERC404StakingModule(_stakingModule);
 
         // Initialize password hash mapping
         for (uint256 i = 0; i < _tierConfig.passwordHashes.length; i++) {
@@ -316,21 +313,13 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IUnlockCallba
      * @dev Caches registry address to avoid repeated external calls
      * @return GlobalMessageRegistry instance
      */
-    function _getGlobalMessageRegistry() private returns (GlobalMessageRegistry) {
+    function _getGlobalMessageRegistry() private returns (IGlobalMessageRegistry) {
         if (address(cachedGlobalRegistry) == address(0)) {
             address registryAddr = masterRegistry.getGlobalMessageRegistry();
             require(registryAddr != address(0), "Global registry not set");
-            cachedGlobalRegistry = GlobalMessageRegistry(registryAddr);
+            cachedGlobalRegistry = IGlobalMessageRegistry(registryAddr);
         }
         return cachedGlobalRegistry;
-    }
-
-    /**
-     * @notice Get global message registry address (public getter for frontend)
-     * @return Address of the GlobalMessageRegistry contract
-     */
-    function getGlobalMessageRegistry() external view returns (address) {
-        return masterRegistry.getGlobalMessageRegistry();
     }
 
     // ┌─────────────────────────┐
@@ -398,7 +387,7 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IUnlockCallba
      * @param maxCost Maximum ETH cost
      * @param mintNFT Whether to mint NFTs
      * @param passwordHash Password hash for tier access (bytes32(0) for public)
-     * @param message Optional message
+     * @param messageData Optional encoded message data
      * @param deadline Timestamp after which this transaction reverts (0 = no deadline)
      */
     function buyBonding(
@@ -406,7 +395,7 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IUnlockCallba
         uint256 maxCost,
         bool mintNFT,
         bytes32 passwordHash,
-        string calldata message,
+        bytes calldata messageData,
         uint256 deadline
     ) external payable nonReentrant {
         require(deadline == 0 || block.timestamp <= deadline, "Transaction expired");
@@ -469,19 +458,9 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IUnlockCallba
             userPurchaseVolume[msg.sender] += amount;
         }
 
-        // Store message in global registry
-        if (bytes(message).length > 0) {
-            GlobalMessageRegistry registry = _getGlobalMessageRegistry();
-
-            uint256 packedData = GlobalMessagePacking.pack(
-                uint32(block.timestamp),
-                GlobalMessageTypes.FACTORY_ERC404,
-                GlobalMessageTypes.ACTION_BUY,
-                0, // contextId: 0 for ERC404 (no editions)
-                uint96(amount / 1e18) // Normalize to whole tokens
-            );
-
-            registry.addMessage(address(this), msg.sender, packedData, message);
+        // Forward message to global registry
+        if (messageData.length > 0) {
+            _getGlobalMessageRegistry().postForAction(msg.sender, address(this), messageData);
         }
 
         // Reset skipNFT
@@ -502,14 +481,14 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IUnlockCallba
      * @param amount Amount of tokens to sell
      * @param minRefund Minimum ETH refund expected
      * @param passwordHash Password hash for tier access
-     * @param message Optional message
+     * @param messageData Optional encoded message data
      * @param deadline Timestamp after which this transaction reverts (0 = no deadline)
      */
     function sellBonding(
         uint256 amount,
         uint256 minRefund,
         bytes32 passwordHash,
-        string calldata message,
+        bytes calldata messageData,
         uint256 deadline
     ) external nonReentrant {
         require(deadline == 0 || block.timestamp <= deadline, "Transaction expired");
@@ -553,19 +532,9 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IUnlockCallba
         totalBondingSupply -= amount;
         reserve -= refund;
 
-        // Store message in global registry
-        if (bytes(message).length > 0) {
-            GlobalMessageRegistry registry = _getGlobalMessageRegistry();
-
-            uint256 packedData = GlobalMessagePacking.pack(
-                uint32(block.timestamp),
-                GlobalMessageTypes.FACTORY_ERC404,
-                GlobalMessageTypes.ACTION_SELL,
-                0, // contextId: 0 for ERC404
-                uint96(amount / 1e18) // Normalize to whole tokens
-            );
-
-            registry.addMessage(address(this), msg.sender, packedData, message);
+        // Forward message to global registry
+        if (messageData.length > 0) {
+            _getGlobalMessageRegistry().postForAction(msg.sender, address(this), messageData);
         }
 
         // Refund ETH (no tax - handled by hook)
@@ -590,174 +559,6 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IUnlockCallba
      */
     function symbol() public view override returns (string memory) {
         return _symbol;
-    }
-
-    /**
-     * @notice Get project/collection name
-     * @return projectName The name of the project/collection
-     * @dev Alias for name() for clarity
-     */
-    function getProjectName() external view returns (string memory projectName) {
-        return _name;
-    }
-
-    /**
-     * @notice Get project symbol
-     * @return projectSymbol The symbol of the project
-     * @dev Alias for symbol() for clarity
-     */
-    function getProjectSymbol() external view returns (string memory projectSymbol) {
-        return _symbol;
-    }
-
-    /**
-     * @notice Get comprehensive project metadata
-     * @return projectName Token name
-     * @return projectSymbol Token symbol
-     * @return maxSupply Maximum token supply
-     * @return liquidityReserve Liquidity reserve amount
-     * @return totalBondingSupply Current bonding supply
-     * @return reserve Current ETH reserve
-     * @return bondingOpenTime Bonding curve open timestamp (0 if not set)
-     * @return bondingActive Whether bonding is currently active
-     * @return liquidityPoolAddress Address of liquidity pool (address(0) if not deployed)
-     * @return factoryAddress Factory address
-     * @return v4HookAddress V4 hook address (address(0) if not set)
-     * @return wethAddress WETH address
-     * @return projectStyleUri Style URI for customization
-     */
-    function getProjectMetadata() external view returns (
-        string memory projectName,
-        string memory projectSymbol,
-        uint256 maxSupply,
-        uint256 liquidityReserve,
-        uint256 totalBondingSupply,
-        uint256 reserve,
-        uint256 bondingOpenTime,
-        bool bondingActive,
-        address liquidityPoolAddress,
-        address factoryAddress,
-        address v4HookAddress,
-        address wethAddress,
-        string memory projectStyleUri
-    ) {
-        return (
-            _name,
-            _symbol,
-            MAX_SUPPLY,
-            LIQUIDITY_RESERVE,
-            totalBondingSupply,
-            reserve,
-            bondingOpenTime,
-            bondingActive,
-            liquidityPool,
-            factory,
-            address(v4Hook),
-            weth,
-            styleUri
-        );
-    }
-
-    /**
-     * @notice Get bonding curve parameters
-     * @return initialPrice Initial price
-     * @return quarticCoeff Quartic coefficient
-     * @return cubicCoeff Cubic coefficient
-     * @return quadraticCoeff Quadratic coefficient
-     * @return normalizationFactor Normalization factor
-     */
-    function getBondingCurveParams() external view returns (
-        uint256 initialPrice,
-        uint256 quarticCoeff,
-        uint256 cubicCoeff,
-        uint256 quadraticCoeff,
-        uint256 normalizationFactor
-    ) {
-        return (
-            curveParams.initialPrice,
-            curveParams.quarticCoeff,
-            curveParams.cubicCoeff,
-            curveParams.quadraticCoeff,
-            curveParams.normalizationFactor
-        );
-    }
-
-    /**
-     * @notice Get tier configuration summary
-     * @return tierType Type of tier system (VOLUME_CAP or TIME_BASED)
-     * @return count Number of tiers configured
-     */
-    function getTierConfigSummary() external view returns (
-        TierType tierType,
-        uint256 count
-    ) {
-        return (tierConfig.tierType, tierCount);
-    }
-
-    /**
-     * @notice Get password hash for a specific tier (1-indexed)
-     * @param tierIndex Tier index (1-indexed)
-     * @return passwordHash Password hash for the tier
-     */
-    function getTierPasswordHash(uint256 tierIndex) external view returns (bytes32 passwordHash) {
-        require(tierIndex > 0 && tierIndex <= tierCount, "Invalid tier index");
-        return tierConfig.passwordHashes[tierIndex - 1];
-    }
-
-    /**
-     * @notice Get volume cap for a specific tier (for VOLUME_CAP mode)
-     * @param tierIndex Tier index (1-indexed)
-     * @return volumeCap Volume cap for the tier
-     */
-    function getTierVolumeCap(uint256 tierIndex) external view returns (uint256 volumeCap) {
-        require(tierIndex > 0 && tierIndex <= tierCount, "Invalid tier index");
-        require(tierConfig.tierType == TierType.VOLUME_CAP, "Not volume cap mode");
-        return tierConfig.volumeCaps[tierIndex - 1];
-    }
-
-    /**
-     * @notice Get tier unlock time for a specific tier (for TIME_BASED mode)
-     * @param tierIndex Tier index (1-indexed)
-     * @return unlockTime Tier unlock time relative to bondingOpenTime
-     */
-    function getTierUnlockTime(uint256 tierIndex) external view returns (uint256 unlockTime) {
-        require(tierIndex > 0 && tierIndex <= tierCount, "Invalid tier index");
-        require(tierConfig.tierType == TierType.TIME_BASED, "Not time based mode");
-        return tierConfig.tierUnlockTimes[tierIndex - 1];
-    }
-
-    /**
-     * @notice Get bonding status information
-     * @return isConfigured Whether bonding open time is set
-     * @return isActive Whether bonding is currently active
-     * @return isEnded Whether liquidity has been deployed (bonding ended)
-     * @return openTime Bonding open timestamp (0 if not set)
-     * @return currentSupply Current bonding supply
-     * @return maxBondingSupply Maximum bonding supply (MAX_SUPPLY - LIQUIDITY_RESERVE)
-     * @return availableSupply Available supply for bonding
-     * @return currentReserve Current ETH reserve
-     */
-    function getBondingStatus() external view returns (
-        bool isConfigured,
-        bool isActive,
-        bool isEnded,
-        uint256 openTime,
-        uint256 currentSupply,
-        uint256 maxBondingSupply,
-        uint256 availableSupply,
-        uint256 currentReserve
-    ) {
-        uint256 maxBonding = MAX_SUPPLY - LIQUIDITY_RESERVE;
-        return (
-            bondingOpenTime != 0,
-            bondingActive,
-            liquidityPool != address(0),
-            bondingOpenTime,
-            totalBondingSupply,
-            maxBonding,
-            maxBonding > totalBondingSupply ? maxBonding - totalBondingSupply : 0,
-            reserve
-        );
     }
 
     /**
@@ -789,25 +590,6 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IUnlockCallba
         }
     }
 
-    /**
-     * @notice Get current pricing information
-     * @param amount Amount of tokens to price
-     * @return buyCost Cost to buy the amount
-     * @return sellRefund Refund for selling the amount
-     * @return currentSupply Current bonding supply
-     */
-    function getPricingInfo(uint256 amount) external view returns (
-        uint256 buyCost,
-        uint256 sellRefund,
-        uint256 currentSupply
-    ) {
-        return (
-            calculateCost(amount),
-            calculateRefund(amount),
-            totalBondingSupply
-        );
-    }
-
     /// @notice Returns data needed for project card display
     /// @dev Implements IInstance interface for QueryAggregator compatibility
     /// @return currentPrice Current bonding curve price
@@ -827,40 +609,6 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IUnlockCallba
         maxSupply = MAX_SUPPLY;
         isActive = bondingActive && bondingOpenTime != 0 && block.timestamp >= bondingOpenTime && liquidityPool == address(0);
         extraData = "";
-    }
-
-    /**
-     * @notice Get liquidity pool information
-     * @return poolAddress Address of the liquidity pool (address(0) if not deployed)
-     * @return isDeployed Whether liquidity has been deployed
-     * @return reserveAmount Amount of tokens in reserve for liquidity
-     */
-    function getLiquidityInfo() external view returns (
-        address poolAddress,
-        bool isDeployed,
-        uint256 reserveAmount
-    ) {
-        return (
-            liquidityPool,
-            liquidityPool != address(0),
-            LIQUIDITY_RESERVE
-        );
-    }
-
-    /**
-     * @notice Get user tier information
-     * @param user User address
-     * @return unlockedTier Highest tier unlocked by user (0 = no tier)
-     * @return purchaseVolume Total purchase volume (for VOLUME_CAP mode)
-     */
-    function getUserTierInfo(address user) external view returns (
-        uint256 unlockedTier,
-        uint256 purchaseVolume
-    ) {
-        return (
-            userTierUnlocked[user],
-            userPurchaseVolume[user]
-        );
     }
 
     /**
@@ -903,14 +651,6 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IUnlockCallba
      */
     function setStyle(string memory uri) external onlyOwner {
         styleUri = uri;
-    }
-
-    /**
-     * @notice Get project style URI
-     * @return uri Style URI
-     */
-    function getStyle() external view returns (string memory uri) {
-        return styleUri;
     }
 
     // ┌─────────────────────────┐
@@ -990,233 +730,44 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IUnlockCallba
     }
 
     // ┌─────────────────────────┐
-    // │  Staking Functionality  │
+    // │  Staking Delegation     │
     // └─────────────────────────┘
 
-    /**
-     * @notice Enable holder staking system (owner only, irreversible)
-     * @dev Once enabled, instance becomes a staking pool where holders earn vault fees
-     *      Instance remains benefactor in vault, but delegates fee distribution to stakers
-     *      This is an aggressive move - owner forfeits direct fee control
-     */
+    /// @notice Enable holder staking (irreversible). Owner forfeits direct vault yield.
     function enableStaking() external onlyOwner {
-        require(!stakingEnabled, "Staking already enabled");
-        stakingEnabled = true;
+        stakingModule.enableStaking();
         emit StakingEnabled();
     }
 
-    /**
-     * @notice Stake tokens to receive proportional share of vault fees
-     * @dev Transfers tokens from caller to contract and tracks stake
-     * @param amount Amount of tokens to stake (must have balance)
-     */
+    /// @notice Stake tokens to receive proportional vault fee yield
     function stake(uint256 amount) external nonReentrant {
-        require(stakingEnabled, "Staking not enabled");
         require(amount > 0, "Amount must be positive");
         require(balanceOf(msg.sender) >= amount, "Insufficient balance");
-
-        // Transfer tokens to contract (locked in staking)
         _transfer(msg.sender, address(this), amount);
-
-        // Update staking state
-        stakedBalance[msg.sender] += amount;
-        totalStaked += amount;
-
-        // Initialize tracking if first time staking
-        // Set their "already claimed" watermark to their current proportional share of accumulated fees
-        // This ensures they only earn fees from this point forward, not retroactively
-        if (stakerFeesAlreadyClaimed[msg.sender] == 0 && totalFeesAccumulatedFromVault > 0) {
-            // Calculate their share of existing fees (which they didn't contribute to earning)
-            // Set this as their "already claimed" amount so they don't get retroactive fees
-            stakerFeesAlreadyClaimed[msg.sender] = (totalFeesAccumulatedFromVault * stakedBalance[msg.sender]) / totalStaked;
-        }
-
-        emit Staked(msg.sender, amount, stakedBalance[msg.sender], totalStaked);
+        stakingModule.recordStake(msg.sender, amount);
     }
 
-    /**
-     * @notice Unstake tokens (no lock duration, instant redemption)
-     * @dev Automatically claims any pending rewards before unstaking
-     *      - Calls claimStakerRewards if user has pending rewards
-     *      - Transfers staked tokens back to caller after claiming
-     * @param amount Amount of tokens to unstake
-     */
+    /// @notice Unstake tokens. Auto-claims pending rewards.
     function unstake(uint256 amount) external nonReentrant {
-        require(stakingEnabled, "Staking not enabled");
         require(amount > 0, "Amount must be positive");
-        require(stakedBalance[msg.sender] >= amount, "Insufficient staked balance");
-
-        // Auto-claim pending rewards before unstaking
-        if (totalStaked > 0) {
-            // Step 1: Update global fee counter by querying vault for TOTAL cumulative fees
-            uint256 vaultTotalFees = vault.calculateClaimableAmount(address(this));
-
-            // Step 2: Claim the delta from vault (transfers ETH to this contract)
-            uint256 deltaReceived = vault.claimFees();
-
-            // Step 3: Update our cumulative total
-            totalFeesAccumulatedFromVault = vaultTotalFees;
-
-            // Step 4: Calculate this user's total entitlement (cumulative)
-            uint256 userTotalEntitlement = (totalFeesAccumulatedFromVault * stakedBalance[msg.sender]) / totalStaked;
-
-            // Step 5: Calculate pending (delta between entitlement and already claimed)
-            uint256 userAlreadyClaimed = stakerFeesAlreadyClaimed[msg.sender];
-
-            if (userTotalEntitlement > userAlreadyClaimed) {
-                uint256 rewardAmount = userTotalEntitlement - userAlreadyClaimed;
-
-                // Update user's watermark
-                stakerFeesAlreadyClaimed[msg.sender] = userTotalEntitlement;
-
-                // Transfer reward
-                SafeTransferLib.safeTransferETH(msg.sender, rewardAmount);
-                emit StakerRewardsClaimed(msg.sender, rewardAmount, userTotalEntitlement);
-            }
-        }
-
-        // Update staking state
-        stakedBalance[msg.sender] -= amount;
-        totalStaked -= amount;
-
-        // Transfer tokens back to user
+        uint256 delta = vault.claimFees();
+        if (delta > 0) stakingModule.recordFeesReceived(delta);
+        uint256 rewardAmount = stakingModule.recordUnstake(msg.sender, amount);
         _transfer(address(this), msg.sender, amount);
-
-        emit Unstaked(msg.sender, amount, stakedBalance[msg.sender], totalStaked);
+        if (rewardAmount > 0) SafeTransferLib.safeTransferETH(msg.sender, rewardAmount);
     }
 
-    /**
-     * @notice Claim proportional share of vault fees accumulated since last personal claim
-     * @dev Share-based accounting ensures accurate fee distribution across multiple stakers claiming at different times
-     *      Algorithm:
-     *      1. Query vault for TOTAL cumulative fees for this instance: vault.calculateClaimableAmount(address(this))
-     *      2. Claim the delta from vault (transfers new ETH to contract): vault.claimFees()
-     *      3. Update instance's cumulative total: totalFeesAccumulatedFromVault
-     *      4. Calculate staker's total entitlement: (totalFeesAccumulatedFromVault × stakerBalance) / totalStaked
-     *      5. Subtract what staker already claimed: pending = entitlement - stakerFeesAlreadyClaimed[staker]
-     *      6. Update staker's watermark: stakerFeesAlreadyClaimed[staker] = entitlement
-     *      7. Transfer pending ETH to staker
-     *
-     *      Example with 2 stakers (50% each):
-     *      - Vault accumulates 100 ETH total for instance
-     *      - Staker A claims: gets 50 ETH (50% of 100), watermark = 50
-     *      - Vault accumulates 100 more ETH (200 total now)
-     *      - Staker B claims: totalFees = 200, entitlement = 100, already claimed = 0, gets 100 ETH
-     *      - Staker A claims again: totalFees = 200, entitlement = 100, already claimed = 50, gets 50 ETH
-     *
-     *      Dust (rounding loss) accumulates in contract, available for owner withdrawal
-     * @return rewardAmount ETH distributed to staker
-     */
+    /// @notice Claim proportional vault fee yield for staked tokens
     function claimStakerRewards() external nonReentrant returns (uint256 rewardAmount) {
-        require(stakingEnabled, "Staking not enabled");
-        require(stakedBalance[msg.sender] > 0, "No staked balance");
-        require(totalStaked > 0, "No stakers");
         require(vault.validateCompliance(address(this)), "Vault requirements not met");
-
-        // Step 1: Claim fees from vault (transfers ETH to this contract)
-        uint256 deltaReceived = vault.claimFees();
-
-        // Step 2: Update our cumulative total by adding the delta received
-        /// @dev Fixed: Changed from `= vaultTotalFees` to `+= deltaReceived` to properly
-        /// accumulate fees across multiple claims. Previously used calculateClaimableAmount()
-        /// which returns current claimable (goes to 0 after claim), not cumulative total.
-        totalFeesAccumulatedFromVault += deltaReceived;
-
-        // Step 3: Calculate this staker's total entitlement (cumulative, not delta)
-        // Formula: (total accumulated fees × this staker's balance) / all staked tokens
-        uint256 userTotalEntitlement = (totalFeesAccumulatedFromVault * stakedBalance[msg.sender]) / totalStaked;
-
-        // Step 4: Calculate pending reward (delta between total entitlement and what they've already claimed)
-        uint256 userAlreadyClaimed = stakerFeesAlreadyClaimed[msg.sender];
-
-        require(userTotalEntitlement > userAlreadyClaimed, "No pending rewards");
-
-        rewardAmount = userTotalEntitlement - userAlreadyClaimed;
-
-        // Step 5: Update staker's watermark to their new cumulative entitlement
-        stakerFeesAlreadyClaimed[msg.sender] = userTotalEntitlement;
-
-        // Step 6: Transfer pending reward to staker
+        uint256 delta = vault.claimFees();
+        if (delta > 0) stakingModule.recordFeesReceived(delta);
+        rewardAmount = stakingModule.computeClaim(msg.sender);
         SafeTransferLib.safeTransferETH(msg.sender, rewardAmount);
-
-        emit StakerRewardsClaimed(msg.sender, rewardAmount, userTotalEntitlement);
-        return rewardAmount;
+        emit StakerRewardsClaimed(msg.sender, rewardAmount);
     }
 
-    /**
-     * @notice Calculate pending rewards for a staker without claiming
-     * @param staker Address of staker
-     * @return pendingReward Estimated reward available to claim
-     */
-    function calculatePendingRewards(address staker) external view returns (uint256 pendingReward) {
-        if (!stakingEnabled || stakedBalance[staker] == 0 || totalStaked == 0) {
-            return 0;
-        }
-
-        // Get current total fees accumulated in vault for this instance (authoritative source)
-        uint256 vaultTotalFees = vault.calculateClaimableAmount(address(this));
-
-        // Calculate staker's total entitlement (cumulative)
-        uint256 stakerTotalEntitlement = (vaultTotalFees * stakedBalance[staker]) / totalStaked;
-
-        // How much has staker already claimed? (cumulative watermark)
-        uint256 stakerAlreadyClaimed = stakerFeesAlreadyClaimed[staker];
-
-        // Pending is the difference between total entitlement and already claimed
-        pendingReward = stakerTotalEntitlement > stakerAlreadyClaimed
-            ? stakerTotalEntitlement - stakerAlreadyClaimed
-            : 0;
-
-        return pendingReward;
-    }
-
-    /**
-     * @notice Get staking information for a user
-     * @param user User address
-     * @return staked Amount staked by user
-     * @return totalStakedGlobal Total tokens staked
-     * @return userProportion User's proportion as bps (basis points)
-     * @return feesAlreadyClaimed Cumulative fees user has already claimed (watermark)
-     */
-    function getStakingInfo(address user) external view returns (
-        uint256 staked,
-        uint256 totalStakedGlobal,
-        uint256 userProportion,
-        uint256 feesAlreadyClaimed
-    ) {
-        staked = stakedBalance[user];
-        totalStakedGlobal = totalStaked;
-        userProportion = totalStaked > 0 ? (staked * 10000) / totalStaked : 0; // in basis points
-        feesAlreadyClaimed = stakerFeesAlreadyClaimed[user];
-    }
-
-    /**
-     * @notice Get global staking statistics
-     * @return enabled Whether staking is enabled
-     * @return globalTotalStaked Total tokens staked
-     * @return totalFeesFromVault Cumulative total fees received from vault (share-based accounting)
-     * @return contractBalance Contract's ETH balance
-     */
-    function getStakingStats() external view returns (
-        bool enabled,
-        uint256 globalTotalStaked,
-        uint256 totalFeesFromVault,
-        uint256 contractBalance
-    ) {
-        return (
-            stakingEnabled,
-            totalStaked,
-            totalFeesAccumulatedFromVault,
-            address(this).balance
-        );
-    }
-
-    /**
-     * @notice Owner withdrawal of unclaimed dust and contract balance
-     * @dev Available to withdraw: contract balance minus totalStaked (staked tokens)
-     *      This recovers rounding dust from fee distributions
-     * @param amount Amount to withdraw
-     */
+    /// @notice Owner withdrawal of ETH dust (contract balance not owed to stakers)
     function withdrawDust(uint256 amount) external onlyOwner nonReentrant {
         uint256 dustAvailable = address(this).balance;
         require(amount <= dustAvailable, "Amount exceeds available balance");
@@ -1268,15 +819,6 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IUnlockCallba
     // │  V4 Liquidity Deploy   │
     // └─────────────────────────┘
 
-    struct LiquidityDeployParams {
-        PoolKey poolKey;
-        int24 tickLower;
-        int24 tickUpper;
-        uint256 amount0;
-        uint256 amount1;
-        address sender;
-    }
-
     /**
      * @notice Deploy liquidity to Uniswap V4
      * @dev Fully deterministic — no caller-supplied parameters.
@@ -1298,81 +840,39 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IUnlockCallba
         require(address(v4Hook) != address(0), "Hook not set");
         require(reserve > 0, "No reserve");
 
-        // Check if permissionless deployment is allowed
         uint256 maxBondingSupply = MAX_SUPPLY - LIQUIDITY_RESERVE;
         bool isFull = totalBondingSupply >= maxBondingSupply;
         bool isMatured = bondingMaturityTime != 0 && block.timestamp >= bondingMaturityTime;
-        bool isPermissionless = isFull || isMatured;
-
-        if (!isPermissionless) {
+        if (!isFull && !isMatured) {
             require(msg.sender == owner(), "Only owner can deploy before maturity/full");
         }
 
-        // Step 1: Compute graduation fee from reserve
-        uint256 ethAvailable = reserve;
-        uint256 graduationFee = 0;
-        uint256 creatorGradCut = 0;
+        LiquidityDeployer.DeployParams memory p = LiquidityDeployer.DeployParams({
+            ethReserve: reserve,
+            tokenReserve: LIQUIDITY_RESERVE,
+            graduationFeeBps: graduationFeeBps,
+            creatorGraduationFeeBps: creatorGraduationFeeBps,
+            polBps: polBps,
+            protocolTreasury: protocolTreasury,
+            factoryCreator: factoryCreator,
+            weth: weth,
+            token: address(this),
+            poolFee: poolFee,
+            tickSpacing: tickSpacing,
+            v4Hook: v4Hook,
+            v4PoolManager: v4PoolManager
+        });
 
-        if (graduationFeeBps > 0 && protocolTreasury != address(0)) {
-            graduationFee = (ethAvailable * graduationFeeBps) / 10000;
-            if (creatorGraduationFeeBps > 0 && factoryCreator != address(0)) {
-                creatorGradCut = (ethAvailable * creatorGraduationFeeBps) / 10000;
-                if (creatorGradCut > graduationFee) creatorGradCut = graduationFee;
-            }
-        }
+        LiquidityDeployer.AmountsResult memory r = LiquidityDeployer.computeAmounts(p);
 
-        uint256 ethAfterGrad = ethAvailable - graduationFee;
-
-        // Step 2: Compute POL amounts
-        uint256 polETH = 0;
-        uint256 polTokens = 0;
-        uint256 tokensAvailable = LIQUIDITY_RESERVE;
-
-        if (polBps > 0 && protocolTreasury != address(0)) {
-            polETH = (ethAfterGrad * polBps) / 10000;
-            polTokens = (tokensAvailable * polBps) / 10000;
-        }
-
-        // Step 3: Final pool amounts
-        uint256 ethForPool = ethAfterGrad - polETH;
-        uint256 tokensForPool = tokensAvailable - polTokens;
-
-        require(ethForPool > 0, "No ETH for pool");
-        require(tokensForPool > 0, "No tokens for pool");
-
-        // Step 4: Determine token ordering and compute sqrtPriceX96
+        // Determine token ordering
         Currency currency0 = Currency.wrap(address(this));
         Currency currency1 = Currency.wrap(weth);
         bool token0IsThis = currency0 < currency1;
+        if (!token0IsThis) (currency0, currency1) = (currency1, currency0);
 
-        if (!token0IsThis) {
-            (currency0, currency1) = (currency1, currency0);
-        }
+        uint160 sqrtPriceX96 = LiquidityDeployer.computeSqrtPrice(r.ethForPool, r.tokensForPool, token0IsThis);
 
-        // Compute sqrtPriceX96 = sqrt(currency1 / currency0) * 2^96
-        uint160 sqrtPriceX96;
-        {
-            uint256 numerator;
-            uint256 denominator;
-            if (token0IsThis) {
-                // currency0 = token, currency1 = WETH
-                numerator = ethForPool;
-                denominator = tokensForPool;
-            } else {
-                // currency0 = WETH, currency1 = token
-                numerator = tokensForPool;
-                denominator = ethForPool;
-            }
-            // sqrtPriceX96 = sqrt((numerator << 192) / denominator)
-            uint256 priceX192 = FixedPointMathLib.fullMulDiv(numerator, 1 << 192, denominator);
-            sqrtPriceX96 = uint160(FixedPointMathLib.sqrt(priceX192));
-        }
-
-        // Ensure sqrtPriceX96 is within V4 bounds
-        if (sqrtPriceX96 < TickMath.MIN_SQRT_PRICE + 1) sqrtPriceX96 = TickMath.MIN_SQRT_PRICE + 1;
-        if (sqrtPriceX96 > TickMath.MAX_SQRT_PRICE - 1) sqrtPriceX96 = TickMath.MAX_SQRT_PRICE - 1;
-
-        // Step 5: Build pool key
         int24 tickLower = TickMath.minUsableTick(tickSpacing);
         int24 tickUpper = TickMath.maxUsableTick(tickSpacing);
 
@@ -1384,122 +884,49 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IUnlockCallba
             hooks: v4Hook
         });
 
-        // Step 6: Wrap ETH to WETH
-        IWETH(weth).deposit{value: ethForPool}();
+        IWETH(weth).deposit{value: r.ethForPool}();
+        if (!token0IsThis) IERC20(weth).approve(address(v4PoolManager), r.ethForPool);
 
-        // Approve pool manager for WETH if needed
-        if (!token0IsThis) {
-            IERC20(weth).approve(address(v4PoolManager), ethForPool);
-        }
-
-        // Step 7: Initialize pool
         v4PoolManager.initialize(poolKey, sqrtPriceX96);
 
-        // Step 8: Add liquidity
-        {
-            uint256 amount0 = token0IsThis ? tokensForPool : ethForPool;
-            uint256 amount1 = token0IsThis ? ethForPool : tokensForPool;
+        uint256 amount0 = token0IsThis ? r.tokensForPool : r.ethForPool;
+        uint256 amount1 = token0IsThis ? r.ethForPool : r.tokensForPool;
 
-            uint160 sqrtPriceAX96 = TickMath.getSqrtPriceAtTick(tickLower);
-            uint160 sqrtPriceBX96 = TickMath.getSqrtPriceAtTick(tickUpper);
-
-            liquidity = LiquidityAmounts.getLiquidityForAmounts(
-                sqrtPriceX96, sqrtPriceAX96, sqrtPriceBX96, amount0, amount1
-            );
-
-            LiquidityDeployParams memory deployParams = LiquidityDeployParams({
-                poolKey: poolKey,
-                tickLower: tickLower,
-                tickUpper: tickUpper,
-                amount0: amount0,
-                amount1: amount1,
-                sender: address(this)
-            });
-
-            v4PoolManager.unlock(abi.encode(deployParams));
-        }
-
-        // Step 9: Send fees
-        if (graduationFee > 0) {
-            uint256 protocolGradCut = graduationFee - creatorGradCut;
-            if (protocolGradCut > 0) {
-                SafeTransferLib.safeTransferETH(protocolTreasury, protocolGradCut);
-            }
-            if (creatorGradCut > 0) {
-                SafeTransferLib.safeTransferETH(factoryCreator, creatorGradCut);
-                emit CreatorGraduationFeePaid(factoryCreator, creatorGradCut);
-            }
-            emit GraduationFeePaid(protocolTreasury, graduationFee - creatorGradCut);
-        }
-
-        // Step 10: Deploy POL
-        if (polETH > 0 && polTokens > 0) {
-            _deployProtocolLiquidity(poolKey, tickLower, tickUpper, polTokens, polETH, token0IsThis);
-        }
-
-        // Step 11: Update state
-        liquidityPool = address(v4PoolManager);
-        reserve = 0; // All reserve ETH has been deployed
-
-        emit LiquidityDeployed(liquidityPool, tokensForPool, ethForPool);
-    }
-
-    /**
-     * @notice Unlock callback for V4 liquidity deployment
-     * @dev Called by PoolManager when unlock() is called
-     * @param data Encoded LiquidityDeployParams
-     * @return Encoded BalanceDelta
-     */
-    function unlockCallback(bytes calldata data) external returns (bytes memory) {
-        require(msg.sender == address(v4PoolManager), "Not pool manager");
-
-        LiquidityDeployParams memory params = abi.decode(data, (LiquidityDeployParams));
-
-        // Calculate liquidity amount
-        PoolId poolId = params.poolKey.toId();
-        (uint160 sqrtPriceX96,,,) = v4PoolManager.getSlot0(poolId);
-        uint160 sqrtPriceAX96 = TickMath.getSqrtPriceAtTick(params.tickLower);
-        uint160 sqrtPriceBX96 = TickMath.getSqrtPriceAtTick(params.tickUpper);
-        
-        uint128 liquidity = LiquidityAmounts.getLiquidityForAmounts(
-            sqrtPriceX96,
-            sqrtPriceAX96,
-            sqrtPriceBX96,
-            params.amount0,
-            params.amount1
-        );
-
-        // Create modify liquidity params
-        IPoolManager.ModifyLiquidityParams memory modifyParams = IPoolManager.ModifyLiquidityParams({
-            tickLower: params.tickLower,
-            tickUpper: params.tickUpper,
-            liquidityDelta: int256(uint256(liquidity)),
-            salt: keccak256(abi.encodePacked(block.timestamp, block.prevrandao))
+        LiquidityDeployer.UnlockCallbackParams memory cb = LiquidityDeployer.UnlockCallbackParams({
+            poolKey: poolKey,
+            tickLower: tickLower,
+            tickUpper: tickUpper,
+            amount0: amount0,
+            amount1: amount1,
+            sender: address(this)
         });
 
-        // Add liquidity
-        (BalanceDelta delta,) = v4PoolManager.modifyLiquidity(params.poolKey, modifyParams, "");
+        v4PoolManager.unlock(abi.encode(cb));
 
-        // Settle currency deltas
-        int256 delta0 = delta.amount0();
-        int256 delta1 = delta.amount1();
-
-        // Negative deltas mean we owe tokens to the pool (settle)
-        if (delta0 < 0) {
-            params.poolKey.currency0.settle(v4PoolManager, params.sender, uint256(-delta0), false);
-        }
-        if (delta1 < 0) {
-            params.poolKey.currency1.settle(v4PoolManager, params.sender, uint256(-delta1), false);
-        }
-        // Positive deltas mean we receive tokens from the pool (take) - shouldn't happen on add
-        if (delta0 > 0) {
-            params.poolKey.currency0.take(v4PoolManager, params.sender, uint256(delta0), false);
-        }
-        if (delta1 > 0) {
-            params.poolKey.currency1.take(v4PoolManager, params.sender, uint256(delta1), false);
+        // Send graduation fees
+        if (r.graduationFee > 0) {
+            uint256 protocolCut = r.graduationFee - r.creatorGradCut;
+            if (protocolCut > 0) SafeTransferLib.safeTransferETH(protocolTreasury, protocolCut);
+            if (r.creatorGradCut > 0) {
+                SafeTransferLib.safeTransferETH(factoryCreator, r.creatorGradCut);
+                emit CreatorGraduationFeePaid(factoryCreator, r.creatorGradCut);
+            }
+            emit GraduationFeePaid(protocolTreasury, r.graduationFee - r.creatorGradCut);
         }
 
-        return abi.encode(delta);
+        if (r.polETH > 0 && r.polTokens > 0) {
+            _deployProtocolLiquidity(poolKey, tickLower, tickUpper, r.polTokens, r.polETH, token0IsThis);
+        }
+
+        liquidityPool = address(v4PoolManager);
+        reserve = 0;
+        emit LiquidityDeployed(liquidityPool, r.tokensForPool, r.ethForPool);
+    }
+
+    /// @notice Unlock callback for V4 liquidity deployment — delegates to LiquidityDeployer
+    function unlockCallback(bytes calldata data) external returns (bytes memory) {
+        require(msg.sender == address(v4PoolManager), "Not pool manager");
+        return LiquidityDeployer.handleUnlockCallback(v4PoolManager, data);
     }
 
     function _deployProtocolLiquidity(

@@ -13,6 +13,7 @@ import {ShareOffering} from "../src/dao/conductors/ShareOffering.sol";
 import {StipendConductor} from "../src/dao/conductors/StipendConductor.sol";
 import {UltraAlignmentVault} from "../src/vaults/UltraAlignmentVault.sol";
 import {ERC404Factory} from "../src/factories/erc404/ERC404Factory.sol";
+import {ERC404StakingModule} from "../src/factories/erc404/ERC404StakingModule.sol";
 import {ERC1155Factory} from "../src/factories/erc1155/ERC1155Factory.sol";
 import {ERC721AuctionFactory} from "../src/factories/erc721/ERC721AuctionFactory.sol";
 import {PromotionBadges} from "../src/promotion/PromotionBadges.sol";
@@ -168,7 +169,8 @@ contract DeploySepolia is Script {
 
         // ============ Phase 5: Factories ============
 
-        // 14. ERC404Factory
+        // 14. ERC404StakingModule + ERC404Factory
+        ERC404StakingModule erc404StakingModule = new ERC404StakingModule(masterRegistry);
         erc404Factory = new ERC404Factory(
             masterRegistry,
             address(0),     // instanceTemplate (not used for direct deploy)
@@ -177,7 +179,8 @@ contract DeploySepolia is Script {
             deployer,       // protocol
             deployer,       // creator
             500,            // creatorFeeBps (5%)
-            100             // creatorGraduationFeeBps (1%)
+            100,            // creatorGraduationFeeBps (1%)
+            address(erc404StakingModule)
         );
         erc404Factory.setProtocolTreasury(address(treasury));
         erc404Factory.setProfile(1, ERC404Factory.GraduationProfile({
@@ -233,13 +236,13 @@ contract DeploySepolia is Script {
 
         // 22-24. Register factories in MasterRegistry
         MasterRegistryV1(masterRegistry).registerFactory(
-            address(erc404Factory), "ERC404", "ERC404-Bonding", "ERC404 Bonding Factory", "https://sepolia.ms2.fun/factory/erc404"
+            address(erc404Factory), "ERC404", "ERC404-Bonding", "ERC404 Bonding Factory", "https://sepolia.ms2.fun/factory/erc404", new bytes32[](0)
         );
         MasterRegistryV1(masterRegistry).registerFactory(
-            address(erc1155Factory), "ERC1155", "ERC1155-Editions", "ERC1155 Edition Factory", "https://sepolia.ms2.fun/factory/erc1155"
+            address(erc1155Factory), "ERC1155", "ERC1155-Editions", "ERC1155 Edition Factory", "https://sepolia.ms2.fun/factory/erc1155", new bytes32[](0)
         );
         MasterRegistryV1(masterRegistry).registerFactory(
-            address(erc721Factory), "ERC721", "ERC721-Auction", "ERC721 Auction Factory", "https://sepolia.ms2.fun/factory/erc721"
+            address(erc721Factory), "ERC721", "ERC721-Auction", "ERC721 Auction Factory", "https://sepolia.ms2.fun/factory/erc721", new bytes32[](0)
         );
     }
 
