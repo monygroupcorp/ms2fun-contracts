@@ -13,22 +13,6 @@ import {PoolId} from "v4-core/types/PoolId.sol";
 import {CurrencySettler} from "../../../libraries/v4/CurrencySettler.sol";
 import {FixedPointMathLib} from "solady/utils/FixedPointMathLib.sol";
 
-interface IWETH {
-    function deposit() external payable;
-    function transfer(address to, uint256 value) external returns (bool);
-    function approve(address spender, uint256 amount) external returns (bool);
-}
-
-interface IProtocolTreasuryPOL {
-    function receivePOL(
-        PoolKey calldata poolKey,
-        int24 tickLower,
-        int24 tickUpper,
-        uint256 amount0,
-        uint256 amount1
-    ) external;
-}
-
 library LiquidityDeployer {
     using CurrencyLibrary for Currency;
     using StateLibrary for IPoolManager;
@@ -51,15 +35,13 @@ library LiquidityDeployer {
         IPoolManager v4PoolManager;
     }
 
-    struct DeployResult {
+    struct AmountsResult {
         uint256 graduationFee;
         uint256 creatorGradCut;
         uint256 ethForPool;
         uint256 tokensForPool;
         uint256 polETH;
         uint256 polTokens;
-        address poolManagerAddress;  // v4PoolManager address, returned as liquidityPool
-        uint128 liquidity;
     }
 
     struct UnlockCallbackParams {
@@ -74,7 +56,7 @@ library LiquidityDeployer {
     /// @notice Compute fee splits and pool amounts from raw reserve values
     function computeAmounts(DeployParams memory p)
         internal pure
-        returns (DeployResult memory r)
+        returns (AmountsResult memory r)
     {
         uint256 ethAvailable = p.ethReserve;
 
@@ -106,6 +88,11 @@ library LiquidityDeployer {
         uint256 tokensForPool,
         bool token0IsThis
     ) internal pure returns (uint160 sqrtPriceX96) {
+        // V4 sqrtPriceX96 = sqrt(currency1 / currency0)
+        // When token0IsThis: currency0 = project token, currency1 = WETH
+        //   → price = sqrt(WETH/token) = sqrt(eth/tokens)
+        // When !token0IsThis: currency0 = WETH, currency1 = project token
+        //   → price = sqrt(token/WETH) = sqrt(tokens/eth)
         uint256 numerator = token0IsThis ? ethForPool : tokensForPool;
         uint256 denominator = token0IsThis ? tokensForPool : ethForPool;
         uint256 priceX192 = FixedPointMathLib.fullMulDiv(numerator, 1 << 192, denominator);
