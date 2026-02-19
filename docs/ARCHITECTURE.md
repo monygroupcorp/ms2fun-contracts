@@ -197,6 +197,10 @@ Creates hybrid ERC20/ERC721 tokens with bonding curves.
 - `creatorGraduationFeeBps` — factory creator's share of graduation fee
 - `polBps` — protocol-owned liquidity percentage (default 100 = 1%)
 
+**Factory family components:**
+- `ERC404StakingModule` — factory-scoped singleton accounting backend for vault yield delegation to token stakers. Holds no ETH or tokens — pure accounting keyed by instance address. Authorized via `MasterRegistry.isRegisteredInstance(msg.sender)`, same pattern as `GlobalMessageRegistry`. Deployed once alongside the factory; address passed immutably into every instance at construction. Enabling staking is irreversible — uses `rewardPerTokenStored` accounting (Synthetix model) to correctly handle stakers joining at different times.
+- `LiquidityDeployer` (library) — V4 liquidity graduation math extracted from the instance for testability and future reuse. Exposes `computeAmounts`, `computeSqrtPrice`, and `handleUnlockCallback`. Can be canonicalized into a protocol-level library in the future as other factory types add graduation.
+
 ### ERC1155 Edition Factory
 
 Creates open-edition or limited-edition NFTs for artists.
@@ -511,12 +515,14 @@ src/
 ├── factories/
 │   ├── erc404/
 │   │   ├── ERC404Factory.sol               # Bonding curve factory
-│   │   ├── ERC404BondingInstance.sol        # Bonding curve instance
+│   │   ├── ERC404BondingInstance.sol        # Bonding curve instance (thin coordinator)
+│   │   ├── ERC404StakingModule.sol          # Singleton yield delegation companion
 │   │   ├── hooks/
-│   │   │   ├── UltraAlignmentV4Hook.sol    # V4 swap tax hook
+│   │   │   ├── UltraAlignmentV4Hook.sol
 │   │   │   └── UltraAlignmentHookFactory.sol
 │   │   └── libraries/
-│   │       └── BondingCurveMath.sol
+│   │       ├── BondingCurveMath.sol
+│   │       └── LiquidityDeployer.sol        # V4 graduation math library
 │   ├── erc1155/
 │   │   ├── ERC1155Factory.sol              # Edition factory
 │   │   ├── ERC1155Instance.sol             # Edition instance
