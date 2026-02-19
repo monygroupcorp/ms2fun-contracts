@@ -774,6 +774,9 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IUnlockCallba
         SafeTransferLib.safeTransferETH(owner(), amount);
     }
 
+    /// @notice Accept ETH — required for vault.claimFees() to send fees back to this contract
+    receive() external payable override {}
+
     // ┌─────────────────────────┐
     // │   Balance Mint Function │
     // └─────────────────────────┘
