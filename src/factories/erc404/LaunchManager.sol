@@ -17,7 +17,7 @@ contract LaunchManager is Ownable {
     struct TierConfig {
         uint256 fee;
         uint256 featuredDuration;    // 0 = no featured placement
-        uint256 featuredPosition;    // Position to place in queue (0 = no placement)
+        uint256 featuredRankBoost;   // ETH allocated to rank score (0 = duration only)
         PromotionBadges.BadgeType badge; // NONE = no badge
         uint256 badgeDuration;       // 0 = no badge
     }
@@ -64,14 +64,18 @@ contract LaunchManager is Ownable {
      * @notice Apply featured queue placement and badge assignment for a newly created instance
      * @param instance The deployed instance address
      * @param tier The creation tier used
+     * @param renter The creator address credited as renter
      */
-    function applyTierPerks(address instance, CreationTier tier) external {
+    function applyTierPerks(address instance, CreationTier tier, address renter) external payable {
         TierConfig memory config = tierConfigs[tier];
 
         if (config.featuredDuration > 0 && address(featuredQueueManager) != address(0)) {
-            featuredQueueManager.rentFeaturedPositionFor(
-                instance, config.featuredPosition, config.featuredDuration
-            );
+            uint256 featuredCost = featuredQueueManager.quoteDurationCost(config.featuredDuration) + config.featuredRankBoost;
+            if (featuredCost > 0) {
+                featuredQueueManager.rentFeaturedFor{value: featuredCost}(
+                    instance, renter, config.featuredDuration, config.featuredRankBoost
+                );
+            }
         }
 
         if (config.badge != PromotionBadges.BadgeType.NONE && address(promotionBadges) != address(0)) {

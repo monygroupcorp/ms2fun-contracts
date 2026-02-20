@@ -120,7 +120,9 @@ contract NamespaceCollisionTest is Test {
         CurveParamsComputer curveComputer = new CurveParamsComputer(owner);
 
         // Deploy ERC404Factory
+        ERC404BondingInstance nsImpl = new ERC404BondingInstance();
         erc404Factory = new ERC404Factory(
+            address(nsImpl),
             address(registry),
             mockInstanceTemplate,
             mockV4PoolManager,

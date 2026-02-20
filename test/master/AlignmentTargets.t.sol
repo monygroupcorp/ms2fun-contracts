@@ -2,7 +2,10 @@
 pragma solidity ^0.8.20;
 
 import {Test} from "forge-std/Test.sol";
+import {Ownable} from "solady/auth/Ownable.sol";
+import {AlignmentRegistryV1} from "../../src/master/AlignmentRegistryV1.sol";
 import {MasterRegistryV1} from "../../src/master/MasterRegistryV1.sol";
+import {IAlignmentRegistry} from "../../src/master/interfaces/IAlignmentRegistry.sol";
 import {IMasterRegistry} from "../../src/master/interfaces/IMasterRegistry.sol";
 
 contract MockVaultForTarget {
@@ -20,7 +23,8 @@ contract MockAlignedVault {
 }
 
 contract AlignmentTargetsTest is Test {
-    MasterRegistryV1 public registry;
+    AlignmentRegistryV1 public alignmentRegistry;
+    MasterRegistryV1 public masterRegistry;
     address public daoOwner = makeAddr("dao");
     address public alice = makeAddr("alice");
     address public cultToken = makeAddr("CULT");
@@ -28,13 +32,20 @@ contract AlignmentTargetsTest is Test {
     address public remiliaMultisig2 = makeAddr("remilia-multisig2");
 
     function setUp() public {
-        registry = new MasterRegistryV1();
-        registry.initialize(daoOwner);
+        alignmentRegistry = new AlignmentRegistryV1();
+        alignmentRegistry.initialize(daoOwner);
+
+        masterRegistry = new MasterRegistryV1();
+        masterRegistry.initialize(daoOwner);
+
+        // Wire alignment registry to master registry
+        vm.prank(daoOwner);
+        masterRegistry.setAlignmentRegistry(address(alignmentRegistry));
     }
 
     function test_RegisterAlignmentTarget_Basic() public {
-        IMasterRegistry.AlignmentAsset[] memory assets = new IMasterRegistry.AlignmentAsset[](1);
-        assets[0] = IMasterRegistry.AlignmentAsset({
+        IAlignmentRegistry.AlignmentAsset[] memory assets = new IAlignmentRegistry.AlignmentAsset[](1);
+        assets[0] = IAlignmentRegistry.AlignmentAsset({
             token: cultToken,
             symbol: "CULT",
             info: "Majority LP in Uniswap V3 pool",
@@ -42,7 +53,7 @@ contract AlignmentTargetsTest is Test {
         });
 
         vm.prank(daoOwner);
-        uint256 targetId = registry.registerAlignmentTarget(
+        uint256 targetId = alignmentRegistry.registerAlignmentTarget(
             "Remilia",
             "Cyber yakuza accelerationist cult",
             "https://ms2fun.com/targets/remilia",
@@ -51,23 +62,23 @@ contract AlignmentTargetsTest is Test {
 
         assertEq(targetId, 1);
 
-        IMasterRegistry.AlignmentTarget memory target = registry.getAlignmentTarget(targetId);
+        IAlignmentRegistry.AlignmentTarget memory target = alignmentRegistry.getAlignmentTarget(targetId);
         assertEq(target.title, "Remilia");
         assertTrue(target.active);
         assertGt(target.approvedAt, 0);
     }
 
     function test_RegisterAlignmentTarget_RevertIfNotOwner() public {
-        IMasterRegistry.AlignmentAsset[] memory assets = new IMasterRegistry.AlignmentAsset[](0);
+        IAlignmentRegistry.AlignmentAsset[] memory assets = new IAlignmentRegistry.AlignmentAsset[](0);
 
         vm.prank(alice);
-        vm.expectRevert("Only owner");
-        registry.registerAlignmentTarget("Test", "Test", "https://test.com", assets);
+        vm.expectRevert(Ownable.Unauthorized.selector);
+        alignmentRegistry.registerAlignmentTarget("Test", "Test", "https://test.com", assets);
     }
 
     function test_DeactivateAlignmentTarget() public {
-        IMasterRegistry.AlignmentAsset[] memory assets = new IMasterRegistry.AlignmentAsset[](1);
-        assets[0] = IMasterRegistry.AlignmentAsset({
+        IAlignmentRegistry.AlignmentAsset[] memory assets = new IAlignmentRegistry.AlignmentAsset[](1);
+        assets[0] = IAlignmentRegistry.AlignmentAsset({
             token: cultToken,
             symbol: "CULT",
             info: "",
@@ -75,17 +86,17 @@ contract AlignmentTargetsTest is Test {
         });
 
         vm.prank(daoOwner);
-        uint256 targetId = registry.registerAlignmentTarget("Remilia", "", "", assets);
+        uint256 targetId = alignmentRegistry.registerAlignmentTarget("Remilia", "", "", assets);
 
         vm.prank(daoOwner);
-        registry.deactivateAlignmentTarget(targetId);
+        alignmentRegistry.deactivateAlignmentTarget(targetId);
 
-        assertFalse(registry.isAlignmentTargetActive(targetId));
+        assertFalse(alignmentRegistry.isAlignmentTargetActive(targetId));
     }
 
     function test_DeactivateAlignmentTarget_RevertIfNotOwner() public {
-        IMasterRegistry.AlignmentAsset[] memory assets = new IMasterRegistry.AlignmentAsset[](1);
-        assets[0] = IMasterRegistry.AlignmentAsset({
+        IAlignmentRegistry.AlignmentAsset[] memory assets = new IAlignmentRegistry.AlignmentAsset[](1);
+        assets[0] = IAlignmentRegistry.AlignmentAsset({
             token: cultToken,
             symbol: "CULT",
             info: "",
@@ -93,16 +104,16 @@ contract AlignmentTargetsTest is Test {
         });
 
         vm.prank(daoOwner);
-        uint256 targetId = registry.registerAlignmentTarget("Remilia", "", "", assets);
+        uint256 targetId = alignmentRegistry.registerAlignmentTarget("Remilia", "", "", assets);
 
         vm.prank(alice);
-        vm.expectRevert("Only owner");
-        registry.deactivateAlignmentTarget(targetId);
+        vm.expectRevert(Ownable.Unauthorized.selector);
+        alignmentRegistry.deactivateAlignmentTarget(targetId);
     }
 
     function test_UpdateAlignmentTarget() public {
-        IMasterRegistry.AlignmentAsset[] memory assets = new IMasterRegistry.AlignmentAsset[](1);
-        assets[0] = IMasterRegistry.AlignmentAsset({
+        IAlignmentRegistry.AlignmentAsset[] memory assets = new IAlignmentRegistry.AlignmentAsset[](1);
+        assets[0] = IAlignmentRegistry.AlignmentAsset({
             token: cultToken,
             symbol: "CULT",
             info: "",
@@ -110,19 +121,19 @@ contract AlignmentTargetsTest is Test {
         });
 
         vm.prank(daoOwner);
-        uint256 targetId = registry.registerAlignmentTarget("Remilia", "old desc", "https://old.com", assets);
+        uint256 targetId = alignmentRegistry.registerAlignmentTarget("Remilia", "old desc", "https://old.com", assets);
 
         vm.prank(daoOwner);
-        registry.updateAlignmentTarget(targetId, "new desc", "https://new.com");
+        alignmentRegistry.updateAlignmentTarget(targetId, "new desc", "https://new.com");
 
-        IMasterRegistry.AlignmentTarget memory target = registry.getAlignmentTarget(targetId);
+        IAlignmentRegistry.AlignmentTarget memory target = alignmentRegistry.getAlignmentTarget(targetId);
         assertEq(target.description, "new desc");
         assertEq(target.metadataURI, "https://new.com");
     }
 
     function test_UpdateAlignmentTarget_RevertIfNotOwner() public {
-        IMasterRegistry.AlignmentAsset[] memory assets = new IMasterRegistry.AlignmentAsset[](1);
-        assets[0] = IMasterRegistry.AlignmentAsset({
+        IAlignmentRegistry.AlignmentAsset[] memory assets = new IAlignmentRegistry.AlignmentAsset[](1);
+        assets[0] = IAlignmentRegistry.AlignmentAsset({
             token: cultToken,
             symbol: "CULT",
             info: "",
@@ -130,36 +141,36 @@ contract AlignmentTargetsTest is Test {
         });
 
         vm.prank(daoOwner);
-        uint256 targetId = registry.registerAlignmentTarget("Remilia", "", "", assets);
+        uint256 targetId = alignmentRegistry.registerAlignmentTarget("Remilia", "", "", assets);
 
         vm.prank(alice);
-        vm.expectRevert("Only owner");
-        registry.updateAlignmentTarget(targetId, "new", "https://new.com");
+        vm.expectRevert(Ownable.Unauthorized.selector);
+        alignmentRegistry.updateAlignmentTarget(targetId, "new", "https://new.com");
     }
 
     // ============ Ambassador Tests ============
 
     function _createRemiliaTarget() internal returns (uint256) {
-        IMasterRegistry.AlignmentAsset[] memory assets = new IMasterRegistry.AlignmentAsset[](1);
-        assets[0] = IMasterRegistry.AlignmentAsset({
+        IAlignmentRegistry.AlignmentAsset[] memory assets = new IAlignmentRegistry.AlignmentAsset[](1);
+        assets[0] = IAlignmentRegistry.AlignmentAsset({
             token: cultToken,
             symbol: "CULT",
             info: "",
             metadataURI: ""
         });
         vm.prank(daoOwner);
-        return registry.registerAlignmentTarget("Remilia", "", "", assets);
+        return alignmentRegistry.registerAlignmentTarget("Remilia", "", "", assets);
     }
 
     function test_AddAmbassador() public {
         uint256 targetId = _createRemiliaTarget();
 
         vm.prank(daoOwner);
-        registry.addAmbassador(targetId, remiliaMultisig);
+        alignmentRegistry.addAmbassador(targetId, remiliaMultisig);
 
-        assertTrue(registry.isAmbassador(targetId, remiliaMultisig));
+        assertTrue(alignmentRegistry.isAmbassador(targetId, remiliaMultisig));
 
-        address[] memory ambassadors = registry.getAmbassadors(targetId);
+        address[] memory ambassadors = alignmentRegistry.getAmbassadors(targetId);
         assertEq(ambassadors.length, 1);
         assertEq(ambassadors[0], remiliaMultisig);
     }
@@ -168,32 +179,32 @@ contract AlignmentTargetsTest is Test {
         uint256 targetId = _createRemiliaTarget();
 
         vm.prank(alice);
-        vm.expectRevert("Only owner");
-        registry.addAmbassador(targetId, remiliaMultisig);
+        vm.expectRevert(Ownable.Unauthorized.selector);
+        alignmentRegistry.addAmbassador(targetId, remiliaMultisig);
     }
 
     function test_RemoveAmbassador() public {
         uint256 targetId = _createRemiliaTarget();
 
         vm.prank(daoOwner);
-        registry.addAmbassador(targetId, remiliaMultisig);
+        alignmentRegistry.addAmbassador(targetId, remiliaMultisig);
 
         vm.prank(daoOwner);
-        registry.removeAmbassador(targetId, remiliaMultisig);
+        alignmentRegistry.removeAmbassador(targetId, remiliaMultisig);
 
-        assertFalse(registry.isAmbassador(targetId, remiliaMultisig));
+        assertFalse(alignmentRegistry.isAmbassador(targetId, remiliaMultisig));
     }
 
     function test_AddMultipleAmbassadors() public {
         uint256 targetId = _createRemiliaTarget();
 
         vm.prank(daoOwner);
-        registry.addAmbassador(targetId, remiliaMultisig);
+        alignmentRegistry.addAmbassador(targetId, remiliaMultisig);
 
         vm.prank(daoOwner);
-        registry.addAmbassador(targetId, remiliaMultisig2);
+        alignmentRegistry.addAmbassador(targetId, remiliaMultisig2);
 
-        address[] memory ambassadors = registry.getAmbassadors(targetId);
+        address[] memory ambassadors = alignmentRegistry.getAmbassadors(targetId);
         assertEq(ambassadors.length, 2);
     }
 
@@ -205,11 +216,11 @@ contract AlignmentTargetsTest is Test {
         MockAlignedVault vault = new MockAlignedVault(cultToken);
 
         vm.prank(daoOwner);
-        registry.registerVault(address(vault), "Remilia Vault", "ipfs://test", targetId);
+        masterRegistry.registerVault(address(vault), daoOwner, "Remilia Vault", "ipfs://test", targetId);
 
-        assertTrue(registry.isVaultRegistered(address(vault)));
+        assertTrue(masterRegistry.isVaultRegistered(address(vault)));
 
-        IMasterRegistry.VaultInfo memory info = registry.getVaultInfo(address(vault));
+        IMasterRegistry.VaultInfo memory info = masterRegistry.getVaultInfo(address(vault));
         assertEq(info.targetId, targetId);
     }
 
@@ -217,21 +228,21 @@ contract AlignmentTargetsTest is Test {
         MockAlignedVault vault = new MockAlignedVault(cultToken);
 
         vm.prank(daoOwner);
-        vm.expectRevert("Target not found");
-        registry.registerVault(address(vault), "Bad Vault", "ipfs://test", 999);
+        vm.expectRevert("Target not active");
+        masterRegistry.registerVault(address(vault), daoOwner, "Bad Vault", "ipfs://test", 999);
     }
 
     function test_RegisterVault_RevertIfTargetInactive() public {
         uint256 targetId = _createRemiliaTarget();
 
         vm.prank(daoOwner);
-        registry.deactivateAlignmentTarget(targetId);
+        alignmentRegistry.deactivateAlignmentTarget(targetId);
 
         MockAlignedVault vault = new MockAlignedVault(cultToken);
 
         vm.prank(daoOwner);
         vm.expectRevert("Target not active");
-        registry.registerVault(address(vault), "Bad Vault", "ipfs://test", targetId);
+        masterRegistry.registerVault(address(vault), daoOwner, "Bad Vault", "ipfs://test", targetId);
     }
 
     function test_RegisterVault_RevertIfTokenNotInTarget() public {
@@ -242,6 +253,6 @@ contract AlignmentTargetsTest is Test {
 
         vm.prank(daoOwner);
         vm.expectRevert("Token not in target assets");
-        registry.registerVault(address(vault), "Bad Vault", "ipfs://test", targetId);
+        masterRegistry.registerVault(address(vault), daoOwner, "Bad Vault", "ipfs://test", targetId);
     }
 }

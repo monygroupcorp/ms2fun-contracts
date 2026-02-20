@@ -3,105 +3,49 @@ pragma solidity ^0.8.20;
 
 import {UUPSUpgradeable} from "solady/utils/UUPSUpgradeable.sol";
 import {Ownable} from "solady/auth/Ownable.sol";
-import {ReentrancyGuard} from "solady/utils/ReentrancyGuard.sol";
 import {IMasterRegistry} from "./interfaces/IMasterRegistry.sol";
+import {IAlignmentRegistry} from "./interfaces/IAlignmentRegistry.sol";
 import {MetadataUtils} from "../shared/libraries/MetadataUtils.sol";
 import {IFactoryInstance} from "../interfaces/IFactoryInstance.sol";
 import {IFactory} from "../interfaces/IFactory.sol";
-import {VaultRegistry} from "../registry/VaultRegistry.sol";
-// Governance imports removed - DAO owner model replaces dictator+governance
-import {GlobalMessageRegistry} from "../registry/GlobalMessageRegistry.sol";
+import {IInstanceLifecycle} from "../interfaces/IInstanceLifecycle.sol";
 
 /**
  * @title MasterRegistryV1
- * @notice Simplified implementation of the Master Registry contract
- * @dev UUPS upgradeable contract for managing factory registration and instance tracking
- *
- * Core Features:
- * - Factory registration (pre-approved factories only)
- * - Instance tracking and registration
- * - Creator instance lookups
- * - Name collision prevention
- * - Queue-based featured promotion system
- * - Time-based expiration with auto-renewal
- *
- * Additional Modules:
- * - Vault/hook registry → VaultRegistry
+ * @notice Central registry for factories, instances, and vaults
+ * @dev UUPS upgradeable. Owner is the DAO (GrandCentral + Safe).
+ *      Alignment target curation is handled by AlignmentRegistryV1.
  */
-contract MasterRegistryV1 is UUPSUpgradeable, Ownable, ReentrancyGuard, IMasterRegistry {
-    // Constants
-    uint256 public constant APPLICATION_FEE = 0.1 ether;
-
-    // State variables
+contract MasterRegistryV1 is UUPSUpgradeable, Ownable, IMasterRegistry {
+    // ── Core State ──
     uint256 public nextFactoryId;
     bool private _initialized;
 
-    // Dictator Governance
-    address public dictator;
-    uint256 public abdicationInitiatedAt;
-    uint256 public constant ABDICATION_TIMELOCK = 48 hours;
-
-    // Mappings
+    // ── Factory Registry ──
     mapping(uint256 => address) public factoryIdToAddress;
     mapping(address => FactoryInfo) public factoryInfo;
     mapping(address => bool) public registeredFactories;
-    mapping(bytes32 => bool) public nameHashes; // For name collision prevention
+
+    // ── Instance Registry ──
     mapping(address => IMasterRegistry.InstanceInfo) public instanceInfo;
+    mapping(bytes32 => bool) public nameHashes;
 
-    // Phase 2 Registry Contracts
-    address public vaultRegistry;
-    address public governanceModule;        // Factory approval governance
-    address public vaultGovernanceModule;   // Vault approval governance
-    address public execToken; // EXEC token for governance voting
-    address public globalMessageRegistry; // Global message registry for protocol-wide activity tracking
-    address public featuredQueueManager; // Featured queue manager for rental system
-
-    // Vault Registry - Hook is now managed by vault, not MasterRegistry
+    // ── Vault Registry ──
     mapping(address => IMasterRegistry.VaultInfo) public vaultInfo;
     mapping(address => bool) public registeredVaults;
-    uint256 public vaultRegistrationFee = 0.05 ether;
 
-    // Alignment Target System
-    uint256 public nextAlignmentTargetId;
-    mapping(uint256 => IMasterRegistry.AlignmentTarget) public alignmentTargets;
-    mapping(uint256 => IMasterRegistry.AlignmentAsset[]) internal alignmentTargetAssets;
-    mapping(uint256 => address[]) public alignmentTargetAmbassadors;
-    mapping(uint256 => mapping(address => bool)) internal _isAmbassador;
-    mapping(address => uint256[]) public tokenToTargetIds;
+    // ── External Modules ──
+    IAlignmentRegistry public alignmentRegistry;
 
-    // Note: Competitive Rental Queue System has been extracted to FeaturedQueueManager
-
-    // Events (FactoryRegistered and InstanceRegistered defined in IMasterRegistry)
+    // Events
     event CreatorInstanceAdded(address indexed creator, address indexed instance);
-    event GovernanceModuleSet(address indexed newModule);
-    event VaultGovernanceModuleSet(address indexed newModule);
-    event VaultRegistrySet(address indexed newRegistry);
 
-    // M-04 Security Fix: Cleanup reward events
-    event CleanupRewardRejected(address indexed caller, uint256 rewardAmount);
-    event InsufficientCleanupRewardBalance(address indexed caller, uint256 rewardAmount, uint256 contractBalance);
-
-    // Dictator Governance Events
-    event AbdicationInitiated(address indexed dictator, uint256 finalizeTime);
-    event AbdicationCancelled(address indexed dictator, uint256 timestamp);
-    event AbdicationFinalized(uint256 timestamp, address factoryGovernance, address vaultGovernance);
-
-    // Featured Queue Manager Events
-    event FeaturedQueueManagerSet(address indexed newManager);
-
-    // Configuration change events (audit fix: missing events)
-    event GlobalMessageRegistrySet(address indexed newRegistry);
-
-    // Note: All competitive queue events are defined in IMasterRegistry interface
-
-    // Constructor
     constructor() {
         _initializeOwner(msg.sender);
     }
 
     /**
      * @notice Initialize the contract with a single owner (DAO address)
-     * @dev Owner-only model: no dictator, no EXEC token, no governance modules
      * @param _owner Address of the DAO or owner
      */
     function initialize(address _owner) public {
@@ -110,100 +54,39 @@ contract MasterRegistryV1 is UUPSUpgradeable, Ownable, ReentrancyGuard, IMasterR
 
         _initialized = true;
         _setOwner(_owner);
-        dictator = address(0); // No dictator in owner-only model
         nextFactoryId = 1;
-
-        // Initialize vault registration fees
-        if (vaultRegistrationFee == 0) {
-            vaultRegistrationFee = 0.05 ether;
-        }
     }
 
-    /**
-     * @notice Legacy 2-param initialize for upgrade compatibility
-     * @dev Ignores param1 (was execToken), delegates to single-param initialize
-     */
-    function initialize(address param1, address param2) public {
-        // Legacy wrapper: param1 was execToken (ignored), param2 is owner
-        // If param2 is address(0), assume single-parameter style where param1 = owner
-        if (param2 == address(0)) {
-            initialize(param1);
-        } else {
-            initialize(param2);
-        }
+    // ============ Alignment Registry Wiring ============
+
+    function setAlignmentRegistry(address _alignmentRegistry) external onlyOwner {
+        require(_alignmentRegistry != address(0), "Invalid registry");
+        alignmentRegistry = IAlignmentRegistry(_alignmentRegistry);
     }
 
-    // ============ Dictator Governance Functions (REMOVED) ============
-    // initiateAbdication, cancelAbdication, finalizeAbdication removed in owner-only rework
-    // State variable slots (dictator, abdicationInitiatedAt, ABDICATION_TIMELOCK) kept for storage layout compatibility
+    // ============ Factory Registration ============
 
     /**
-     * @notice Register a factory (direct registration, admin only)
-     * @dev Factories are registered by the owner (DAO or admin).
-     *
-     * @param factoryAddress Address of the factory contract
-     * @param contractType Type of contract (e.g., "ERC404", "ERC1155")
-     * @param title Human-readable title
-     * @param displayTitle Display title for UI
-     * @param metadataURI URI for metadata
+     * @notice Register a factory (admin only)
      */
     function registerFactory(
         address factoryAddress,
         string memory contractType,
         string memory title,
         string memory displayTitle,
-        string memory metadataURI
-    ) external {
-        _registerFactoryInternal(factoryAddress, contractType, title, displayTitle, metadataURI, new bytes32[](0), msg.sender);
-    }
-
-    function registerFactoryWithFeatures(
-        address factoryAddress,
-        string memory contractType,
-        string memory title,
-        string memory displayTitle,
         string memory metadataURI,
         bytes32[] memory features
-    ) external {
-        _registerFactoryInternal(factoryAddress, contractType, title, displayTitle, metadataURI, features, msg.sender);
-    }
-
-    function registerFactoryWithFeaturesAndCreator(
-        address factoryAddress,
-        string memory contractType,
-        string memory title,
-        string memory displayTitle,
-        string memory metadataURI,
-        bytes32[] memory features,
-        address creator
-    ) external {
-        _registerFactoryInternal(factoryAddress, contractType, title, displayTitle, metadataURI, features, creator);
-    }
-
-    function _registerFactoryInternal(
-        address factoryAddress,
-        string memory contractType,
-        string memory title,
-        string memory displayTitle,
-        string memory metadataURI,
-        bytes32[] memory features,
-        address creator
-    ) internal {
-        require(msg.sender == owner(), "Only owner");
+    ) external onlyOwner {
         require(factoryAddress != address(0), "Invalid factory address");
         require(bytes(contractType).length > 0, "Invalid contract type");
         require(!registeredFactories[factoryAddress], "Factory already registered");
         require(MetadataUtils.isValidName(title), "Invalid title");
         require(MetadataUtils.isValidURI(metadataURI), "Invalid metadata URI");
 
-        // Protocol enforcement: verify factory implements IFactory with creator and protocol roles
         address factoryCreator = IFactory(factoryAddress).creator();
         require(factoryCreator != address(0), "Factory has no creator");
         address factoryProtocol = IFactory(factoryAddress).protocol();
         require(factoryProtocol != address(0), "Factory has no protocol");
-
-        // Use factory's on-chain creator (authoritative source)
-        creator = factoryCreator;
 
         uint256 factoryId = nextFactoryId++;
         factoryIdToAddress[factoryId] = factoryAddress;
@@ -216,7 +99,7 @@ contract MasterRegistryV1 is UUPSUpgradeable, Ownable, ReentrancyGuard, IMasterR
             displayTitle: displayTitle,
             metadataURI: metadataURI,
             features: features,
-            creator: creator,
+            creator: factoryCreator,
             active: true,
             registeredAt: block.timestamp
         });
@@ -226,13 +109,19 @@ contract MasterRegistryV1 is UUPSUpgradeable, Ownable, ReentrancyGuard, IMasterR
         emit FactoryRegistered(factoryAddress, factoryId, contractType);
     }
 
+    // ============ Factory Deactivation ============
+
+    function deactivateFactory(address factoryAddress) external override onlyOwner {
+        require(registeredFactories[factoryAddress], "Factory not registered");
+        require(factoryInfo[factoryAddress].active, "Factory already inactive");
+        factoryInfo[factoryAddress].active = false;
+        emit FactoryDeactivated(factoryAddress, factoryInfo[factoryAddress].factoryId);
+    }
+
+    // ============ Instance Registration ============
+
     /**
      * @notice Register an instance (called by factory)
-     * @param instance Instance address
-     * @param factory Factory address
-     * @param creator Creator address
-     * @param name Instance name
-     * @param metadataURI Metadata URI
      */
     function registerInstance(
         address instance,
@@ -243,21 +132,25 @@ contract MasterRegistryV1 is UUPSUpgradeable, Ownable, ReentrancyGuard, IMasterR
         address vault
     ) external override {
         require(registeredFactories[factory], "Factory not registered");
+        require(factoryInfo[factory].active, "Factory not active");
         require(msg.sender == factory, "Only factory can register instance");
         require(instance != address(0), "Invalid instance");
         require(creator != address(0), "Invalid creator");
         require(MetadataUtils.isValidName(name), "Invalid name");
         require(MetadataUtils.isValidURI(metadataURI), "Invalid metadata URI");
 
-        // Protocol enforcement: verify instance has an immutable vault matching factory's declaration
         address instanceVault = IFactoryInstance(instance).vault();
         require(instanceVault != address(0), "Instance has no vault");
         require(instanceVault == vault, "Vault mismatch");
         require(instanceVault.code.length > 0, "Vault not deployed");
 
-        // Protocol enforcement: verify instance has a protocol treasury
         address instanceTreasury = IFactoryInstance(instance).protocolTreasury();
         require(instanceTreasury != address(0), "Instance has no treasury");
+
+        require(
+            IInstanceLifecycle(instance).instanceType() != bytes32(0),
+            "Instance must implement IInstanceLifecycle"
+        );
 
         bytes32 nameHash = MetadataUtils.toNameHash(name);
         require(!nameHashes[nameHash], "Name already taken");
@@ -279,100 +172,83 @@ contract MasterRegistryV1 is UUPSUpgradeable, Ownable, ReentrancyGuard, IMasterR
         emit CreatorInstanceAdded(creator, instance);
     }
 
-    /**
-     * @notice Get factory info by ID
-     */
+    // ============ Factory Queries ============
+
     function getFactoryInfo(uint256 factoryId) external view returns (FactoryInfo memory) {
         address factoryAddress = factoryIdToAddress[factoryId];
         require(factoryAddress != address(0), "Factory not found");
         return factoryInfo[factoryAddress];
     }
 
-    /**
-     * @notice Get factory info by address
-     */
     function getFactoryInfoByAddress(address factoryAddress) external view returns (FactoryInfo memory) {
         require(registeredFactories[factoryAddress], "Factory not registered");
         return factoryInfo[factoryAddress];
     }
 
-    /**
-     * @notice Get instance info
-     */
     function getInstanceInfo(address instance) external view returns (IMasterRegistry.InstanceInfo memory) {
         require(instanceInfo[instance].instance != address(0), "Instance not found");
         return instanceInfo[instance];
     }
 
-    /**
-     * @notice Get total number of factories
-     */
     function getTotalFactories() external view returns (uint256) {
         return nextFactoryId - 1;
     }
 
-    /**
-     * @notice Check if factory is registered
-     */
     function isFactoryRegistered(address factory) external view returns (bool) {
         return registeredFactories[factory];
     }
 
-    /**
-     * @notice Check if an instance was created by an approved factory
-     * @dev Used by GlobalMessageRegistry to auto-authorize instances
-     * @param instance Instance address to check
-     * @return True if instance was created by a registered factory
-     */
     function isInstanceFromApprovedFactory(address instance) external view override returns (bool) {
         IMasterRegistry.InstanceInfo storage info = instanceInfo[instance];
-        // Instance must exist and its factory must be registered
         return info.instance != address(0) && registeredFactories[info.factory];
     }
 
-    /**
-     * @notice Check if a project name is already taken
-     * @dev Used by factories to check name availability before creating instances
-     * @param name The project name to check
-     * @return True if the name is already taken
-     */
+    function isRegisteredInstance(address instance) external view override returns (bool) {
+        return instanceInfo[instance].instance != address(0);
+    }
+
     function isNameTaken(string memory name) external view override returns (bool) {
         bytes32 nameHash = MetadataUtils.toNameHash(name);
         return nameHashes[nameHash];
     }
 
-    // ============ Competitive Rental Queue System ============
-    // Note: Queue system extracted to FeaturedQueueManager contract
-    // Use featuredQueueManager address to interact with queue functions
+    // ============ Vault Registry ============
 
-    // Phase 2 Features - Vault Registry
-
+    /**
+     * @notice Register a vault (callable by active factory or owner)
+     * @param vault Vault address
+     * @param creator Address credited as vault creator
+     * @param name Vault name
+     * @param metadataURI Metadata URI
+     * @param targetId Alignment target ID
+     */
     function registerVault(
         address vault,
+        address creator,
         string memory name,
         string memory metadataURI,
         uint256 targetId
     ) external override {
-        require(msg.sender == owner(), "Only owner");
+        bool isActiveFactory = registeredFactories[msg.sender] && factoryInfo[msg.sender].active;
+        require(isActiveFactory || msg.sender == owner(), "Not authorized");
+
         require(vault != address(0), "Invalid vault address");
+        require(creator != address(0), "Invalid creator");
         require(bytes(name).length > 0 && bytes(name).length <= 256, "Invalid name");
         require(!registeredVaults[vault], "Vault already registered");
         require(MetadataUtils.isValidURI(metadataURI), "Invalid metadata URI");
         require(vault.code.length > 0, "Vault must be a contract");
 
-        // Alignment target enforcement
-        require(alignmentTargets[targetId].approvedAt > 0, "Target not found");
-        require(alignmentTargets[targetId].active, "Target not active");
-
-        // Verify vault's alignment token is in target's asset list
+        // Alignment validation via AlignmentRegistry
+        require(alignmentRegistry.isAlignmentTargetActive(targetId), "Target not active");
         address vaultToken = _getVaultAlignmentToken(vault);
-        require(_isTokenInTarget(targetId, vaultToken), "Token not in target assets");
+        require(alignmentRegistry.isTokenInTarget(targetId, vaultToken), "Token not in target assets");
 
         registeredVaults[vault] = true;
 
         vaultInfo[vault] = IMasterRegistry.VaultInfo({
             vault: vault,
-            creator: msg.sender,
+            creator: creator,
             name: name,
             metadataURI: metadataURI,
             active: true,
@@ -380,7 +256,7 @@ contract MasterRegistryV1 is UUPSUpgradeable, Ownable, ReentrancyGuard, IMasterR
             targetId: targetId
         });
 
-        emit VaultRegistered(vault, msg.sender, name, targetId);
+        emit VaultRegistered(vault, creator, name, targetId);
     }
 
     function getVaultInfo(address vault) external view override returns (VaultInfo memory) {
@@ -398,123 +274,6 @@ contract MasterRegistryV1 is UUPSUpgradeable, Ownable, ReentrancyGuard, IMasterR
         emit VaultDeactivated(vault);
     }
 
-    // ============ Alignment Target Functions ============
-
-    function registerAlignmentTarget(
-        string memory title,
-        string memory description,
-        string memory metadataURI,
-        IMasterRegistry.AlignmentAsset[] memory assets
-    ) external override returns (uint256) {
-        require(msg.sender == owner(), "Only owner");
-        require(bytes(title).length > 0 && bytes(title).length <= 256, "Invalid title");
-        require(assets.length > 0, "Must have at least one asset");
-
-        uint256 targetId = ++nextAlignmentTargetId;
-
-        alignmentTargets[targetId] = IMasterRegistry.AlignmentTarget({
-            id: targetId,
-            title: title,
-            description: description,
-            metadataURI: metadataURI,
-            approvedAt: block.timestamp,
-            active: true
-        });
-
-        for (uint256 i = 0; i < assets.length; i++) {
-            require(assets[i].token != address(0), "Invalid asset token");
-            alignmentTargetAssets[targetId].push(assets[i]);
-            tokenToTargetIds[assets[i].token].push(targetId);
-        }
-
-        emit AlignmentTargetRegistered(targetId, title);
-        return targetId;
-    }
-
-    function getAlignmentTarget(uint256 targetId) external view override returns (IMasterRegistry.AlignmentTarget memory) {
-        require(alignmentTargets[targetId].approvedAt > 0, "Target not found");
-        return alignmentTargets[targetId];
-    }
-
-    function getAlignmentTargetAssets(uint256 targetId) external view override returns (IMasterRegistry.AlignmentAsset[] memory) {
-        require(alignmentTargets[targetId].approvedAt > 0, "Target not found");
-        return alignmentTargetAssets[targetId];
-    }
-
-    function isAlignmentTargetActive(uint256 targetId) external view override returns (bool) {
-        return alignmentTargets[targetId].active;
-    }
-
-    function isApprovedAlignmentToken(uint256 targetId, address token) external view override returns (bool) {
-        IMasterRegistry.AlignmentAsset[] storage assets = alignmentTargetAssets[targetId];
-        for (uint256 i = 0; i < assets.length; i++) {
-            if (assets[i].token == token) return true;
-        }
-        return false;
-    }
-
-    function deactivateAlignmentTarget(uint256 targetId) external override {
-        require(msg.sender == owner(), "Only owner");
-        require(alignmentTargets[targetId].approvedAt > 0, "Target not found");
-        alignmentTargets[targetId].active = false;
-        emit AlignmentTargetDeactivated(targetId);
-    }
-
-    function updateAlignmentTarget(
-        uint256 targetId,
-        string memory description,
-        string memory metadataURI
-    ) external override {
-        require(msg.sender == owner(), "Only owner");
-        require(alignmentTargets[targetId].approvedAt > 0, "Target not found");
-
-        alignmentTargets[targetId].description = description;
-        alignmentTargets[targetId].metadataURI = metadataURI;
-
-        emit AlignmentTargetUpdated(targetId);
-    }
-
-    // ============ Ambassador Functions ============
-
-    function addAmbassador(uint256 targetId, address ambassador) external override {
-        require(msg.sender == owner(), "Only owner");
-        require(alignmentTargets[targetId].approvedAt > 0, "Target not found");
-        require(ambassador != address(0), "Invalid ambassador");
-        require(!_isAmbassador[targetId][ambassador], "Already ambassador");
-
-        _isAmbassador[targetId][ambassador] = true;
-        alignmentTargetAmbassadors[targetId].push(ambassador);
-
-        emit AmbassadorAdded(targetId, ambassador);
-    }
-
-    function removeAmbassador(uint256 targetId, address ambassador) external override {
-        require(msg.sender == owner(), "Only owner");
-        require(_isAmbassador[targetId][ambassador], "Not ambassador");
-
-        _isAmbassador[targetId][ambassador] = false;
-
-        // Remove from array (swap and pop)
-        address[] storage ambassadors = alignmentTargetAmbassadors[targetId];
-        for (uint256 i = 0; i < ambassadors.length; i++) {
-            if (ambassadors[i] == ambassador) {
-                ambassadors[i] = ambassadors[ambassadors.length - 1];
-                ambassadors.pop();
-                break;
-            }
-        }
-
-        emit AmbassadorRemoved(targetId, ambassador);
-    }
-
-    function getAmbassadors(uint256 targetId) external view override returns (address[] memory) {
-        return alignmentTargetAmbassadors[targetId];
-    }
-
-    function isAmbassador(uint256 targetId, address account) external view override returns (bool) {
-        return _isAmbassador[targetId][account];
-    }
-
     // ============ Internal Helpers ============
 
     function _getVaultAlignmentToken(address vault) internal view returns (address) {
@@ -525,74 +284,7 @@ contract MasterRegistryV1 is UUPSUpgradeable, Ownable, ReentrancyGuard, IMasterR
         return abi.decode(data, (address));
     }
 
-    function _isTokenInTarget(uint256 targetId, address token) internal view returns (bool) {
-        IMasterRegistry.AlignmentAsset[] storage assets = alignmentTargetAssets[targetId];
-        for (uint256 i = 0; i < assets.length; i++) {
-            if (assets[i].token == token) return true;
-        }
-        return false;
-    }
+    // ============ UUPS ============
 
-    // ============ Governance Functions (REMOVED) ============
-    // setGovernanceModule, setVaultGovernanceModule, applyForVault, registerApprovedVault
-    // removed in owner-only rework. State variable slots kept for storage layout compatibility.
-
-    // ============ Global Message Registry ============
-
-    /**
-     * @notice Set global message registry address
-     * @dev Only owner can set the registry
-     * @param _globalMessageRegistry Address of the GlobalMessageRegistry contract
-     */
-    function setGlobalMessageRegistry(address _globalMessageRegistry) external onlyOwner {
-        require(_globalMessageRegistry != address(0), "Invalid registry address");
-        globalMessageRegistry = _globalMessageRegistry;
-        emit GlobalMessageRegistrySet(_globalMessageRegistry);
-    }
-
-    /**
-     * @notice Set featured queue manager address
-     * @dev Only owner can set the queue manager
-     * @param _featuredQueueManager Address of the FeaturedQueueManager contract
-     */
-    function setFeaturedQueueManager(address _featuredQueueManager) external onlyOwner {
-        require(_featuredQueueManager != address(0), "Invalid manager address");
-        featuredQueueManager = _featuredQueueManager;
-        emit FeaturedQueueManagerSet(_featuredQueueManager);
-    }
-
-    /**
-     * @notice Get global message registry address
-     * @return Address of the GlobalMessageRegistry contract
-     */
-    function getGlobalMessageRegistry() external view override returns (address) {
-        return globalMessageRegistry;
-    }
-
-    // Phase 2 Features - Hook Registry
-
-    // Hook registry removed - vaults now manage their own canonical hooks
-
-    // UUPS Upgrade Authorization
     function _authorizeUpgrade(address newImplementation) internal override onlyOwner {}
-
-    // Phase 2 Features - Factory/Vault Application (REMOVED)
-    // applyForFactory, getFactoryApplication removed in owner-only rework.
-    // Factories are now registered directly by DAO owner via registerFactory.
-}
-
-// Governance interfaces removed in owner-only rework
-
-// Data structures (needed by interface)
-struct FactoryInfo {
-    address factoryAddress;
-    uint256 factoryId;
-    string contractType;
-    string title;
-    string displayTitle;
-    string metadataURI;
-    bytes32[] features;
-    address creator;
-    bool active;
-    uint256 registeredAt;
 }

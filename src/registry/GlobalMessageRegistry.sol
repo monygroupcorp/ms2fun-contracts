@@ -3,41 +3,39 @@ pragma solidity ^0.8.24;
 
 import { Ownable } from "solady/auth/Ownable.sol";
 import { SafeTransferLib } from "solady/utils/SafeTransferLib.sol";
-import { GlobalMessagePacking } from "../libraries/GlobalMessagePacking.sol";
 import { IMasterRegistry } from "../master/interfaces/IMasterRegistry.sol";
+import { IGlobalMessageRegistry } from "./interfaces/IGlobalMessageRegistry.sol";
 
 /**
  * @title GlobalMessageRegistry
- * @notice Centralized registry for all protocol messages across instances
- * @dev All message data is emitted via events for off-chain indexing.
- *      Authorization is automatic: any instance created by an approved factory can post messages.
+ * @notice V2 — standalone social layer (post/reply/quote/react) decoupled from trade execution.
+ * @dev Two entry points:
+ *      - postForAction: called by registered instances to forward user messages atomically with actions
+ *      - post: called directly by users, instance acts as channel
+ *      All message data is emitted via events for off-chain indexing.
  */
-contract GlobalMessageRegistry is Ownable {
-    using GlobalMessagePacking for uint256;
+contract GlobalMessageRegistry is Ownable, IGlobalMessageRegistry {
 
     // ┌─────────────────────────┐
     // │      State Variables    │
     // └─────────────────────────┘
 
-    /// @notice Running message counter for unique IDs
     uint256 public messageCount;
-
-    /// @notice MasterRegistry for factory parentage verification
     IMasterRegistry public masterRegistry;
 
     // ┌─────────────────────────┐
     // │         Events          │
     // └─────────────────────────┘
 
-    event MessageAdded(
+    event MessagePosted(
         uint256 indexed messageId,
         address indexed instance,
         address indexed sender,
-        uint8 factoryType,
-        uint8 actionType,
-        uint32 contextId,
-        uint256 timestamp,
-        string message
+        uint8 messageType,
+        uint256 refId,
+        bytes32 actionRef,
+        bytes32 metadata,
+        string content
     );
 
     event MasterRegistrySet(address indexed masterRegistry);
@@ -58,84 +56,134 @@ contract GlobalMessageRegistry is Ownable {
     // └─────────────────────────┘
 
     /**
-     * @notice Add a message to the global registry
-     * @dev Only callable by instances from approved factories (auto-authorized)
-     * @param instance Instance address emitting the message
-     * @param sender User who performed the action
-     * @param packedData Packed metadata (use GlobalMessagePacking.pack())
-     * @param message User-provided message text
-     * @return messageId ID of the created message
+     * @notice Post a message on behalf of a user, called by an instance during an action
+     * @dev Auth: msg.sender must be a registered instance, and instance == msg.sender
+     * @param sender The user performing the action
+     * @param instance The instance forwarding the message (must be msg.sender)
+     * @param messageData ABI-encoded (uint8 messageType, uint256 refId, bytes32 actionRef, bytes32 metadata, string content)
      */
-    function addMessage(
-        address instance,
+    function postForAction(
         address sender,
-        uint256 packedData,
-        string calldata message
-    ) external returns (uint256 messageId) {
-        // Auto-authorize: check if caller is from an approved factory
+        address instance,
+        bytes calldata messageData
+    ) external override {
+        require(instance == msg.sender, "Instance must be caller");
         require(
             masterRegistry.isInstanceFromApprovedFactory(msg.sender),
             "Not from approved factory"
         );
-        require(instance != address(0), "Invalid instance");
         require(sender != address(0), "Invalid sender");
 
-        // Assign message ID
-        messageId = messageCount++;
+        _post(instance, sender, messageData);
+    }
 
-        // Emit event with all data for indexing
-        (uint32 timestamp, uint8 factoryType, uint8 actionType, uint32 contextId, ) =
-            GlobalMessagePacking.unpack(packedData);
+    /**
+     * @notice Post a message directly as a user — any address acts as channel
+     * @dev No auth on `instance` — any address is a valid channel. Indexer decides display.
+     * @param instance The channel address (registered instance, EOA, or any address)
+     * @param messageType POST=0, REPLY=1, QUOTE=2, REACT=3
+     * @param refId Message ID being replied to / quoted / reacted to (0 for POST)
+     * @param actionRef Opaque reference for frontend (e.g., trade hash)
+     * @param metadata Opaque metadata for frontend
+     * @param content Message text
+     */
+    function post(
+        address instance,
+        uint8 messageType,
+        uint256 refId,
+        bytes32 actionRef,
+        bytes32 metadata,
+        string calldata content
+    ) external {
+        uint256 messageId = messageCount++;
 
-        emit MessageAdded(
+        emit MessagePosted(
             messageId,
             instance,
-            sender,
-            factoryType,
-            actionType,
-            contextId,
-            timestamp,
-            message
+            msg.sender,
+            messageType,
+            refId,
+            actionRef,
+            metadata,
+            content
         );
+    }
+
+    struct PostParams {
+        address instance;
+        uint8 messageType;
+        uint256 refId;
+        bytes32 actionRef;
+        bytes32 metadata;
+        string content;
+    }
+
+    /**
+     * @notice Batch multiple posts in a single transaction
+     * @dev All posts are attributed to msg.sender. Useful for batching reactions,
+     *      replies, and posts accumulated during a browsing session.
+     * @param posts Array of post parameters
+     */
+    function postBatch(PostParams[] calldata posts) external {
+        uint256 len = posts.length;
+        require(len > 0, "Empty batch");
+
+        uint256 id = messageCount;
+        for (uint256 i; i < len; ++i) {
+            emit MessagePosted(
+                id++,
+                posts[i].instance,
+                msg.sender,
+                posts[i].messageType,
+                posts[i].refId,
+                posts[i].actionRef,
+                posts[i].metadata,
+                posts[i].content
+            );
+        }
+        messageCount = id;
     }
 
     // ┌─────────────────────────┐
     // │   Configuration         │
     // └─────────────────────────┘
 
-    /**
-     * @notice Set master registry address
-     * @dev Only owner can set the master registry
-     * @param _masterRegistry New master registry address
-     */
     function setMasterRegistry(address _masterRegistry) external onlyOwner {
         require(_masterRegistry != address(0), "Invalid master registry");
         masterRegistry = IMasterRegistry(_masterRegistry);
         emit MasterRegistrySet(_masterRegistry);
     }
 
-    /// @notice Withdraw any ETH sent to this contract (e.g., via selfdestruct)
     function withdrawETH() external onlyOwner {
         uint256 balance = address(this).balance;
         require(balance > 0, "No ETH to withdraw");
         SafeTransferLib.safeTransferETH(msg.sender, balance);
     }
 
-    /**
-     * @notice Check if an instance is authorized to post messages
-     * @dev Checks factory parentage via MasterRegistry (auto-authorization)
-     * @param instance Instance address to check
-     * @return authorized Whether instance is authorized
-     */
-    function isAuthorized(address instance) external view returns (bool authorized) {
-        return masterRegistry.isInstanceFromApprovedFactory(instance);
-    }
+    // ┌─────────────────────────┐
+    // │   Internal              │
+    // └─────────────────────────┘
 
-    /**
-     * @notice Get total message count
-     * @return count Total number of messages
-     */
-    function getMessageCount() external view returns (uint256 count) {
-        return messageCount;
+    function _post(address instance, address sender, bytes calldata messageData) internal {
+        (
+            uint8 messageType,
+            uint256 refId,
+            bytes32 actionRef,
+            bytes32 metadata,
+            string memory content
+        ) = abi.decode(messageData, (uint8, uint256, bytes32, bytes32, string));
+
+        uint256 messageId = messageCount++;
+
+        emit MessagePosted(
+            messageId,
+            instance,
+            sender,
+            messageType,
+            refId,
+            actionRef,
+            metadata,
+            content
+        );
     }
 }

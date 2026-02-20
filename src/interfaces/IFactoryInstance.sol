@@ -12,4 +12,8 @@ interface IFactoryInstance {
     /// @notice Returns the protocol treasury address for fee routing
     /// @return The treasury contract address (must be non-zero)
     function protocolTreasury() external view returns (address);
+
+    /// @notice Returns the global message registry address
+    /// @return The registry contract address
+    function getGlobalMessageRegistry() external view returns (address);
 }

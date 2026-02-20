@@ -43,14 +43,9 @@ contract FullWorkflowIntegrationTest is Test {
         creator = address(0x444);
         purchaser = address(0x555);
 
-        execToken = new MockEXECToken(INITIAL_EXEC_SUPPLY);
-        execToken.transfer(voter1, 2000e18);
-        execToken.transfer(voter2, 1500e18);
-
         implementation = new MasterRegistryV1();
         bytes memory initData = abi.encodeWithSignature(
-            "initialize(address,address)",
-            address(execToken),
+            "initialize(address)",
             owner
         );
         proxyWrapper = new MasterRegistry(address(implementation), initData);
@@ -59,7 +54,6 @@ contract FullWorkflowIntegrationTest is Test {
         // Deploy and setup FeaturedQueueManager
         queueManager = new FeaturedQueueManager();
         queueManager.initialize(proxy, owner);
-        MasterRegistryV1(proxy).setFeaturedQueueManager(address(queueManager));
 
         // Deploy a contract to serve as the mock vault (just needs code at address)
         mockVault = address(new MockInstance(address(0)));
@@ -80,7 +74,8 @@ contract FullWorkflowIntegrationTest is Test {
             "ERC404",
             "my-erc404-factory",
             "My ERC404 Factory",
-            "https://example.com/factory.json"
+            "https://example.com/factory.json",
+            new bytes32[](0)
         );
 
         // Verify factory registered
@@ -102,32 +97,23 @@ contract FullWorkflowIntegrationTest is Test {
             mockVault
         );
 
-        // Step 3: Rent featured position (queue-based)
-        uint256 desiredPosition = 1; // Position 1 (front of queue)
-        uint256 duration = 7 days;
-        uint256 currentPrice = queueManager.calculateRentalCost(desiredPosition, duration);
+        // Step 3: Rent featured slot
+        uint256 duration  = 7 days;
+        uint256 rankBoost = 0.005 ether;
+        uint256 cost      = queueManager.quoteDurationCost(duration) + rankBoost;
 
-        vm.deal(purchaser, currentPrice);
+        vm.deal(purchaser, cost);
         vm.prank(purchaser);
-        queueManager.rentFeaturedPosition{value: currentPrice}(
-            instance,
-            desiredPosition,
-            duration
-        );
+        queueManager.rentFeatured{value: cost}(instance, duration, rankBoost);
 
-        // Verify promotion purchased
-        (
-            IMasterRegistry.RentalSlot memory promo,
-            uint256 position,
-            ,
-            bool isExpired
-        ) = queueManager.getRentalInfo(instance);
+        // Verify slot active
+        (address renter, uint256 effectiveRank, uint256 expiresAt, bool isActive) =
+            queueManager.getRentalInfo(instance);
 
-        assertEq(promo.instance, instance);
-        assertEq(promo.renter, purchaser);
-        assertEq(position, 1); // First in queue
-        assertFalse(isExpired);
-        assertTrue(promo.active);
+        assertEq(renter, purchaser);
+        assertEq(effectiveRank, rankBoost);
+        assertGt(expiresAt, block.timestamp);
+        assertTrue(isActive);
     }
 
     function test_FullWorkflow_MultipleFactoriesAndInstances() public {
@@ -137,7 +123,8 @@ contract FullWorkflowIntegrationTest is Test {
             "ERC404",
             "factory-1",
             "Factory 1",
-            "https://example.com/factory1.json"
+            "https://example.com/factory1.json",
+            new bytes32[](0)
         );
 
         // Register second factory
@@ -148,7 +135,8 @@ contract FullWorkflowIntegrationTest is Test {
             "ERC1155",
             "factory-2",
             "Factory 2",
-            "https://example.com/factory2.json"
+            "https://example.com/factory2.json",
+            new bytes32[](0)
         );
 
         // Verify both factories registered
@@ -196,64 +184,47 @@ contract FullWorkflowIntegrationTest is Test {
     // has been moved to FactoryApprovalGovernance module.
     // See test/governance/FactoryApprovalGovernance.t.sol for governance tests.
 
-    function test_FullWorkflow_DynamicPricing() public {
-        // Setup: Register factory directly
+    function test_FullWorkflow_RankCompetition() public {
+        // Setup: Register factory and three instances
         MasterRegistryV1(proxy).registerFactory(
             address(erc404Factory),
             "ERC404",
             "test-factory",
             "Test Factory",
-            "https://example.com/factory.json"
+            "https://example.com/factory.json",
+            new bytes32[](0)
         );
 
-        address instance = _newInstance();
-        vm.prank(address(erc404Factory));
-        IMasterRegistry(proxy).registerInstance(
-            instance,
-            address(erc404Factory),
-            creator,
-            "test-token",
-            "https://example.com/token.json",
-            mockVault
-        );
+        address inst1 = _newInstance();
+        address inst2 = _newInstance();
+        address inst3 = _newInstance();
 
-        // Rent multiple positions and verify price changes
-        uint256 duration = 7 days;
-        uint256[] memory prices = new uint256[](3);
-        address[] memory instanceAddrs = new address[](3);
-        instanceAddrs[0] = instance;
+        address[] memory instances = new address[](3);
+        instances[0] = inst1; instances[1] = inst2; instances[2] = inst3;
 
-        for (uint256 i = 0; i < 3; i++) {
-            // Each subsequent rental will be for the next position (1, 2, 3)
-            uint256 position = i + 1;
-            prices[i] = queueManager.calculateRentalCost(position, duration);
+        vm.startPrank(address(erc404Factory));
+        IMasterRegistry(proxy).registerInstance(inst1, address(erc404Factory), creator, "token-1", "https://example.com/t1.json", mockVault);
+        IMasterRegistry(proxy).registerInstance(inst2, address(erc404Factory), creator, "token-2", "https://example.com/t2.json", mockVault);
+        IMasterRegistry(proxy).registerInstance(inst3, address(erc404Factory), creator, "token-3", "https://example.com/t3.json", mockVault);
+        vm.stopPrank();
 
-            if (i > 0) {
-                // Register additional instances for different promotions
-                instanceAddrs[i] = _newInstance();
-                vm.prank(address(erc404Factory));
-                IMasterRegistry(proxy).registerInstance(
-                    instanceAddrs[i],
-                    address(erc404Factory),
-                    creator,
-                    string(abi.encodePacked("token-", vm.toString(i))),
-                    string(abi.encodePacked("https://example.com/token", vm.toString(i), ".json")),
-                    mockVault
-                );
-            }
+        // Rent all three with different rank boosts — higher boost = higher rank
+        uint256 duration     = queueManager.minDuration();
+        uint256 durationCost = queueManager.quoteDurationCost(duration);
 
-            vm.deal(purchaser, prices[i] * 2);
-            vm.prank(purchaser);
-            queueManager.rentFeaturedPosition{value: prices[i]}(
-                instanceAddrs[i],
-                position,
-                duration
-            );
-        }
+        vm.deal(purchaser, (durationCost + 0.05 ether) * 3);
+        vm.startPrank(purchaser);
+        queueManager.rentFeatured{value: durationCost + 0.01 ether}(inst1, duration, 0.01 ether);
+        queueManager.rentFeatured{value: durationCost + 0.05 ether}(inst2, duration, 0.05 ether);
+        queueManager.rentFeatured{value: durationCost + 0.03 ether}(inst3, duration, 0.03 ether);
+        vm.stopPrank();
 
-        // Verify prices increased (or at least changed)
-        // Note: Prices may increase due to utilization or demand factors
-        assertGe(prices[2], prices[0]);
+        // Verify rank ordering: inst2 (0.05e) > inst3 (0.03e) > inst1 (0.01e)
+        (address[] memory ranked, uint256 total) = queueManager.getFeaturedInstances(0, 10);
+        assertEq(total, 3);
+        assertEq(ranked[0], inst2);
+        assertEq(ranked[1], inst3);
+        assertEq(ranked[2], inst1);
     }
 
     function test_FullWorkflow_MetadataValidation() public {
@@ -274,7 +245,8 @@ contract FullWorkflowIntegrationTest is Test {
                 "ERC404",
                 string(abi.encodePacked("factory-", vm.toString(i))),
                 "Test Factory",
-                validURIs[i]
+                validURIs[i],
+                new bytes32[](0)
             );
         }
 

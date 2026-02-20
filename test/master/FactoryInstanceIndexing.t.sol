@@ -4,7 +4,6 @@ pragma solidity ^0.8.20;
 import {Test, console} from "forge-std/Test.sol";
 import {MasterRegistryV1} from "../../src/master/MasterRegistryV1.sol";
 import {MasterRegistry} from "../../src/master/MasterRegistry.sol";
-import {MockEXECToken} from "../mocks/MockEXECToken.sol";
 import {MockFactory} from "../mocks/MockFactory.sol";
 import {MockInstance} from "../mocks/MockInstance.sol";
 import {IMasterRegistry} from "../../src/master/interfaces/IMasterRegistry.sol";
@@ -18,7 +17,6 @@ contract FactoryInstanceIndexingTest is Test {
     MasterRegistryV1 public implementation;
     MasterRegistry public proxyWrapper;
     address public proxy;
-    MockEXECToken public execToken;
     MockFactory public erc404Factory;
     MockFactory public erc1155Factory;
 
@@ -30,9 +28,6 @@ contract FactoryInstanceIndexingTest is Test {
     address public creator2;
     address public mockVault;
 
-    uint256 constant APPLICATION_FEE = 0.1 ether;
-    uint256 constant INITIAL_EXEC_SUPPLY = 100000e18;
-
     function setUp() public {
         owner = address(this);
         applicant1 = address(0x111);
@@ -41,13 +36,9 @@ contract FactoryInstanceIndexingTest is Test {
         creator1 = address(0x666);
         creator2 = address(0x777);
 
-        execToken = new MockEXECToken(INITIAL_EXEC_SUPPLY);
-        execToken.transfer(voter1, 2000e18);
-
         implementation = new MasterRegistryV1();
         bytes memory initData = abi.encodeWithSignature(
-            "initialize(address,address)",
-            address(execToken),
+            "initialize(address)",
             owner
         );
         proxyWrapper = new MasterRegistry(address(implementation), initData);
@@ -74,7 +65,8 @@ contract FactoryInstanceIndexingTest is Test {
             "ERC404",
             "erc404-factory",
             "ERC404 Factory",
-            "https://example.com/erc404.json"
+            "https://example.com/erc404.json",
+            new bytes32[](0)
         );
 
         // Register ERC1155 factory directly
@@ -83,7 +75,8 @@ contract FactoryInstanceIndexingTest is Test {
             "ERC1155",
             "erc1155-factory",
             "ERC1155 Factory",
-            "https://example.com/erc1155.json"
+            "https://example.com/erc1155.json",
+            new bytes32[](0)
         );
 
         // Verify indexing
@@ -109,14 +102,13 @@ contract FactoryInstanceIndexingTest is Test {
         features[1] = keccak256("LIQUIDITY_POOL");
         features[2] = keccak256("CHAT");
 
-        MasterRegistryV1(proxy).registerFactoryWithFeaturesAndCreator(
+        MasterRegistryV1(proxy).registerFactory(
             address(erc404Factory),
             "ERC404",
             "featured-factory",
             "Featured Factory",
             "https://example.com/featured.json",
-            features,
-            applicant1
+            features
         );
 
         // Retrieve and verify metadata
@@ -139,7 +131,8 @@ contract FactoryInstanceIndexingTest is Test {
             "ERC404",
             "test-factory",
             "Test Factory",
-            "https://example.com/metadata.json"
+            "https://example.com/metadata.json",
+            new bytes32[](0)
         );
 
         // Register multiple instances
@@ -181,7 +174,8 @@ contract FactoryInstanceIndexingTest is Test {
             "ERC404",
             "test-factory",
             "Test Factory",
-            "https://example.com/metadata.json"
+            "https://example.com/metadata.json",
+            new bytes32[](0)
         );
 
         // Register instance with metadata
@@ -221,7 +215,8 @@ contract FactoryInstanceIndexingTest is Test {
             "ERC404",
             "erc404-factory",
             "ERC404 Factory",
-            "https://example.com/erc404.json"
+            "https://example.com/erc404.json",
+            new bytes32[](0)
         );
 
         MasterRegistryV1(proxy).registerFactory(
@@ -229,7 +224,8 @@ contract FactoryInstanceIndexingTest is Test {
             "ERC1155",
             "erc1155-factory",
             "ERC1155 Factory",
-            "https://example.com/erc1155.json"
+            "https://example.com/erc1155.json",
+            new bytes32[](0)
         );
 
         // Register instances from different factories
@@ -273,7 +269,8 @@ contract FactoryInstanceIndexingTest is Test {
             "ERC404",
             "test-factory",
             "Test Factory",
-            "https://example.com/metadata.json"
+            "https://example.com/metadata.json",
+            new bytes32[](0)
         );
 
         // Register instance with lowercase name
@@ -308,7 +305,7 @@ contract FactoryInstanceIndexingTest is Test {
         features[0] = keccak256("FEATURE_A");
         features[1] = keccak256("FEATURE_B");
 
-        MasterRegistryV1(proxy).registerFactoryWithFeatures(
+        MasterRegistryV1(proxy).registerFactory(
             address(erc404Factory),
             "ERC404",
             "featured-factory",

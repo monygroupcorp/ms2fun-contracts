@@ -2,9 +2,12 @@
 pragma solidity ^0.8.24;
 
 import { Test } from "forge-std/Test.sol";
-import { ERC404BondingInstance } from "src/factories/erc404/ERC404BondingInstance.sol";
+import { ERC404BondingInstance, InsufficientTokenBalance, TokenAmountMustBePositive, TokenAmountMustRepresentNFT } from "src/factories/erc404/ERC404BondingInstance.sol";
 import { ERC404StakingModule } from "src/factories/erc404/ERC404StakingModule.sol";
+import { CurveParamsComputer } from "src/factories/erc404/CurveParamsComputer.sol";
+import { BondingCurveMath } from "src/factories/erc404/libraries/BondingCurveMath.sol";
 import { IPoolManager } from "v4-core/interfaces/IPoolManager.sol";
+import { LibClone } from "solady/utils/LibClone.sol";
 
 contract MockMasterRegistryForStakingR {
     mapping(address => bool) public instances;
@@ -20,6 +23,7 @@ contract ERC404RerollTest is Test {
     ERC404BondingInstance token;
     MockMasterRegistryForStakingR stakingRegistry;
     ERC404StakingModule stakingModule;
+    CurveParamsComputer curveComputer;
     address mockPoolManager = address(0x1);
     address mockHook = address(0x2);
     address mockWETH = address(0x3);
@@ -36,6 +40,7 @@ contract ERC404RerollTest is Test {
     function setUp() public {
         stakingRegistry = new MockMasterRegistryForStakingR();
         stakingModule = new ERC404StakingModule(address(stakingRegistry));
+        curveComputer = new CurveParamsComputer(address(this));
 
         // Mock WETH with deposit/approve/transfer functions
         vm.mockCall(
@@ -55,7 +60,7 @@ contract ERC404RerollTest is Test {
         );
 
         // Create bonding instance
-        ERC404BondingInstance.BondingCurveParams memory curveParams = ERC404BondingInstance.BondingCurveParams({
+        BondingCurveMath.Params memory curveParams = BondingCurveMath.Params({
             initialPrice: 0.0001 ether,
             quarticCoeff: 1,  // represents 1 / 10^10
             cubicCoeff: 1,    // represents 1 / 10^8
@@ -73,7 +78,9 @@ contract ERC404RerollTest is Test {
         tierConfig.volumeCaps[0] = 100_000_000 ether;
 
         // Note: Factory must match msg.sender for DN404Mirror linking to work
-        token = new ERC404BondingInstance(
+        ERC404BondingInstance impl2 = new ERC404BondingInstance();
+        token = ERC404BondingInstance(payable(LibClone.clone(address(impl2))));
+        token.initialize(
             "TestToken",
             "TEST",
             MAX_SUPPLY,
@@ -98,7 +105,8 @@ contract ERC404RerollTest is Test {
             60, // tickSpacing
             1_000_000 ether, // unit
             address(stakingModule), // staking module
-            address(0x600) // mockLiquidityDeployer
+            address(0x600), // mockLiquidityDeployer
+            address(curveComputer) // curve computer
         );
 
         // Fund users with ETH
@@ -119,9 +127,7 @@ contract ERC404RerollTest is Test {
             token.transfer(user, needed - currentBalance);
         }
 
-        // Mint NFTs for the user
-        vm.prank(user);
-        token.balanceMint(nftCount);
+        // NFTs are auto-minted because _skipNFTDefault returns false
     }
 
     // ┌─────────────────────────┐
@@ -167,7 +173,7 @@ contract ERC404RerollTest is Test {
         uint256[] memory exemptedIds = new uint256[](0);
 
         vm.prank(user1);
-        vm.expectRevert("Insufficient token balance");
+        vm.expectRevert(InsufficientTokenBalance.selector);
         token.rerollSelectedNFTs(rerollAmount, exemptedIds);
     }
 
@@ -175,7 +181,7 @@ contract ERC404RerollTest is Test {
         uint256[] memory exemptedIds = new uint256[](0);
 
         vm.prank(user1);
-        vm.expectRevert("Token amount must be > 0");
+        vm.expectRevert(TokenAmountMustBePositive.selector);
         token.rerollSelectedNFTs(0, exemptedIds);
     }
 
@@ -187,7 +193,7 @@ contract ERC404RerollTest is Test {
         uint256[] memory exemptedIds = new uint256[](0);
 
         vm.prank(user1);
-        vm.expectRevert("Token amount must represent at least 1 NFT");
+        vm.expectRevert(TokenAmountMustRepresentNFT.selector);
         token.rerollSelectedNFTs(rerollAmount, exemptedIds);
     }
 
@@ -202,14 +208,14 @@ contract ERC404RerollTest is Test {
         uint256 rerollAmount = 2 * UNIT;
 
         // Before reroll
-        assertEq(token.getRerollEscrow(user1), 0);
+        // rerollEscrow removed — new reroll doesn't use escrow
 
         // During reroll (check in test by monitoring events and final state)
         vm.prank(user1);
         token.rerollSelectedNFTs(rerollAmount, new uint256[](0));
 
         // After reroll, escrow should be cleared
-        assertEq(token.getRerollEscrow(user1), 0);
+        // rerollEscrow removed — new reroll doesn't use escrow
     }
 
     function test_Escrow_MultipleUsers_Independent() public {
@@ -228,8 +234,8 @@ contract ERC404RerollTest is Test {
         token.rerollSelectedNFTs(rerollAmount2, new uint256[](0));
 
         // Both escrows cleared
-        assertEq(token.getRerollEscrow(user1), 0);
-        assertEq(token.getRerollEscrow(user2), 0);
+        // rerollEscrow removed — new reroll doesn't use escrow
+        // rerollEscrow removed — new reroll doesn't use escrow
 
         // Balances preserved
         assertEq(token.balanceOf(user1), 5 * UNIT);
@@ -259,22 +265,23 @@ contract ERC404RerollTest is Test {
         assertEq(token.balanceOf(user1), 5 * UNIT);
     }
 
-    function test_Reroll_AllNFTsExempted() public {
-        // Setup: Give user1 3 NFTs
-        _setupUserWithNFTs(user1, 3);
+    function test_Reroll_WithAllExempted_NeedsExtraForReroll() public {
+        // Setup: Give user1 4 NFTs — exempt 3, reroll 1
+        _setupUserWithNFTs(user1, 4);
 
         uint256[] memory exemptedIds = new uint256[](3);
         exemptedIds[0] = 1;
         exemptedIds[1] = 2;
         exemptedIds[2] = 3;
 
-        uint256 rerollAmount = UNIT; // Only reroll 1 NFT, exempt 3
+        // tokenAmount must cover exemptions (3*UNIT) + at least 1 NFT to reroll
+        uint256 rerollAmount = 4 * UNIT;
 
         vm.prank(user1);
         token.rerollSelectedNFTs(rerollAmount, exemptedIds);
 
         // Verify balance maintained
-        assertEq(token.balanceOf(user1), 3 * UNIT);
+        assertEq(token.balanceOf(user1), 4 * UNIT);
     }
 
     function test_Reroll_NoExemptions() public {
@@ -352,13 +359,13 @@ contract ERC404RerollTest is Test {
         // Setup: Give user1 100 NFTs
         _setupUserWithNFTs(user1, 100);
 
-        // Exempt 50 NFTs
+        // Exempt 50 NFTs — need tokenAmount = 50 exempted + at least 1 to reroll
         uint256[] memory exemptedIds = new uint256[](50);
         for (uint256 i = 0; i < 50; i++) {
             exemptedIds[i] = i + 1;
         }
 
-        uint256 rerollAmount = 50 * UNIT;
+        uint256 rerollAmount = 51 * UNIT; // 50 exempted + 1 to reroll
 
         vm.prank(user1);
         token.rerollSelectedNFTs(rerollAmount, exemptedIds);

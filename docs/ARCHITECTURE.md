@@ -1,6 +1,6 @@
 # ms2.fun Protocol Architecture
 
-**Last Updated:** 2026-02-16
+**Last Updated:** 2026-02-20
 
 ---
 
@@ -22,49 +22,61 @@ DAO (GrandCentral + Gnosis Safe)
 ├── Proposes operations ─────────────► Timelock (48h min delay)
 │                                       │ (anyone executes after delay)
 │                                       ▼
-├── Approves Alignment Targets ──────► MasterRegistry
+├── Approves Alignment Targets ──────► AlignmentRegistry
 │     (Remilia, Pudgy, etc.)            │
 │                                       ├── AlignmentTargets[]
-├── Approves Vault Factories            │     ├── title, description, metadataURI
-│     (UltraAlignmentVault, etc.)       │     ├── assets[] (tokens + metadata)
+├── Manages Ambassadors                 │     ├── title, description, metadataURI
+│                                       │     ├── assets[] (tokens + metadata)
 │                                       │     └── ambassadors[] (project wallets)
-├── Approves Project Factories          │
-│     (ERC404, ERC1155, ERC721)         ├── VaultInstances[]
-│                                       │     └── linked to targetId
-├── Manages Ambassadors                 │
+│                                       │
+├── Registers Factories ─────────────► MasterRegistry
+│     (ERC404, ERC1155, ERC721)         │
 │                                       ├── ProjectFactories[]
-└── Manages Protocol Parameters         │
-                                        └── ProjectInstances[]
-                                              └── linked to vault
+├── Deactivates Factories               │     └── active status, IFactory enforced
+│                                       │
+├── Registers Vaults (or factories do)  ├── VaultInstances[]
+│                                       │     └── linked to AlignmentRegistry targetId
+│                                       │
+└── Manages Protocol Parameters         └── ProjectInstances[]
+                                              └── linked to vault, name uniqueness
 
-Vault Factories                    Project Factories
-(code templates)                   (code templates)
-      │                                  │
-      ▼                                  ▼
-Vault Instances ◄──── fees ──── Project Instances
-(per target)          flow       (per artist)
-      │                                  │
-      ▼                                  ▼
-Alignment Token                    Users (buyers)
-LP Positions
+Project Factories                   Vault Instances
+(code templates)                    (per target)
+      │                                  ▲
+      ▼                                  │ fees
+Project Instances ──── fees ────────────►│
+(per artist)                             │
+      │                                  ▼
+      ▼                            Alignment Token
+Users (buyers)                     LP Positions
 ```
 
 ### Hierarchy
 
 - **DAO** governs the protocol through proposals and votes
 - **Timelock** enforces a 48-hour delay between proposal and execution — gives users an exit window before critical changes take effect
-- **MasterRegistry** enforces all rules (target approval, vault/factory registration, instance binding)
-- **Alignment Targets** are curated community profiles (Remilia, Pudgy, etc.)
-- **Vault Factories** are code templates for different vault strategies
+- **AlignmentRegistry** manages alignment targets (community profiles) and ambassadors — DAO curates which communities the protocol supports
+- **MasterRegistry** enforces factory/vault/instance registration rules (factory approval, vault binding, name uniqueness)
 - **Vault Instances** are deployed vaults, each bound to an approved alignment target
 - **Project Factories** are code templates for different project types (ERC404, ERC1155, ERC721)
 - **Project Instances** are deployed projects (artist collections), each bound to a vault
+
+### Separation of Concerns
+
+| Contract | Responsibility |
+|----------|---------------|
+| **AlignmentRegistry** | Curation — which communities the protocol supports (targets + ambassadors) |
+| **MasterRegistry** | Registration — phone book for factories, vaults, instances |
+| **GlobalMessageRegistry** | Activity feed — protocol-wide event stream |
+| **FeaturedQueueManager** | Promotion — competitive rental queue for homepage visibility |
+
+These are independent contracts wired at deployment. MasterRegistry holds a reference to AlignmentRegistry for vault registration validation. Factories receive GlobalMessageRegistry at construction and pass it to instances — no runtime lookups through MasterRegistry.
 
 ---
 
 ## 3. Alignment Targets & Curation
 
-Alignment Targets are the protocol's curation mechanism. Each target represents an established community whose token the protocol aligns with.
+Alignment Targets are the protocol's curation mechanism. Each target represents an established community whose token the protocol aligns with. Managed by **AlignmentRegistryV1** (UUPS upgradeable, owner is the DAO/Timelock).
 
 ### Data Structure
 
@@ -90,8 +102,8 @@ struct AlignmentAsset {
 
 1. **DAO shareholder proposes** a new alignment target (community + token)
 2. **DAO votes** on the proposal via GrandCentral
-3. **On approval**, target is registered in MasterRegistry — vault instances can now be deployed against it
-4. **Vault instances** deployed by anyone, but MasterRegistry enforces the vault's alignment token matches an approved target asset
+3. **On approval**, target is registered in AlignmentRegistry — vault instances can now be deployed against it
+4. **Vault instances** deployed by anyone (via registered factories) or by the DAO directly. MasterRegistry calls AlignmentRegistry to enforce the vault's alignment token matches an approved target asset
 5. **Project connects**: when the target project (e.g., Remilia) reaches out, DAO votes to add their multisig as an **ambassador**
 6. **Ambassador powers** are vault-type-dependent — UltraAlignmentVault has no management functions, but future vault types may grant ambassadors operational control
 
@@ -104,9 +116,9 @@ Ambassadors are wallets officially provided by the target project. All ambassado
 
 ### Enforcement
 
-MasterRegistry enforces at `registerVault()`:
-- Target must exist and be active
-- Vault's `alignmentToken()` must match a token in the target's asset list
+MasterRegistry calls AlignmentRegistry at `registerVault()`:
+- Target must exist and be active (`alignmentRegistry.isAlignmentTargetActive(targetId)`)
+- Vault's `alignmentToken()` must match a token in the target's asset list (`alignmentRegistry.isTokenInTarget(targetId, token)`)
 - Multiple vault instances per target are allowed (different strategies, different factories)
 
 ---
@@ -171,6 +183,14 @@ The vault implements `IUnlockCallback` for V4 LP operations:
 
 Factories create project instances. Each factory type serves a different use case.
 
+### Direct Wiring Pattern
+
+All factories receive infrastructure addresses at construction (immutable):
+- `masterRegistry` — for instance registration and name collision checks
+- `globalMessageRegistry` — passed through to instances for activity feed posting
+
+Instances receive `globalMessageRegistry` directly from their factory at construction. There is no runtime lookup through MasterRegistry — this eliminates the service locator anti-pattern and makes dependencies explicit.
+
 ### ERC404 Bonding Factory
 
 Creates hybrid ERC20/ERC721 tokens with bonding curves.
@@ -199,7 +219,9 @@ Creates hybrid ERC20/ERC721 tokens with bonding curves.
 
 **Factory family components:**
 - `ERC404StakingModule` — factory-scoped singleton accounting backend for vault yield delegation to token stakers. Holds no ETH or tokens — pure accounting keyed by instance address. Authorized via `MasterRegistry.isRegisteredInstance(msg.sender)`, same pattern as `GlobalMessageRegistry`. Deployed once alongside the factory; address passed immutably into every instance at construction. Enabling staking is irreversible — uses `rewardPerTokenStored` accounting (Synthetix model) to correctly handle stakers joining at different times.
-- `LiquidityDeployer` (library) — V4 liquidity graduation math extracted from the instance for testability and future reuse. Exposes `computeAmounts`, `computeSqrtPrice`, and `handleUnlockCallback`. Can be canonicalized into a protocol-level library in the future as other factory types add graduation.
+- `LiquidityDeployerModule` — V4 liquidity graduation logic. Handles the unlock callback, amount computation, and sqrtPrice calculation for deploying LP positions at graduation.
+- `LaunchManager` — Orchestrates instance creation lifecycle including tier perks (promotion badges, featured queue placement). Wired to PromotionBadges and FeaturedQueueManager.
+- `CurveParamsComputer` — Computes bonding curve parameters (coefficients, normalization) from graduation profile configuration.
 
 ### ERC1155 Edition Factory
 
@@ -276,7 +298,7 @@ User Activity
 |-------------|--------------|-----------|
 | **Protocol Treasury** | Bonding fees, graduation fees, LP yield cut | Direct transfers, accumulated fees |
 | **Vault Factory Creator** | LP yield sub-cut | `withdrawCreatorFees()` on vault |
-| **Project Factory Creator** | Graduation fee share | `creatorGraduationFeeBps` |
+| **Project Factory Creator** | Graduation fee share, creation fee share | `creatorGraduationFeeBps`, `creatorFeeBps` |
 | **Artist (instance creator)** | ERC1155: 80% of mint proceeds. ERC404: graduation fee share, vault fee claims via staking | Instance-level extraction |
 | **Alignment Target** | No direct fee. Vault buying pressure on their token IS the upside | Structural benefit |
 
@@ -323,9 +345,11 @@ Delegated permissions via bitmask: `admin(1) | manager(2) | governor(4)`
 
 Conductor roles can be individually locked (irreversible) by the DAO.
 
-### StipendConductor
+### Conductors
 
-Autonomous recurring payment system. DAO configures a beneficiary, amount, and interval. Anyone can trigger `execute()` after the interval passes — no governance proposal needed per payment.
+- **StipendConductor** — Autonomous recurring payment system. DAO configures a beneficiary, amount, and interval. Anyone can trigger `execute()` after the interval passes.
+- **ShareOffering** — Manages share issuance campaigns for the DAO.
+- **RevenueConductor** — Routes protocol revenue to appropriate destinations.
 
 ### Timelock
 
@@ -354,13 +378,13 @@ The timelock is deployed directly (not behind a proxy) — timelocks should be i
 
 All actions below are subject to the 48-hour timelock delay:
 
-- Alignment target approval, deactivation, and updates
-- Ambassador management for alignment targets
-- Vault factory and project factory registration
-- Vault deactivation
+- Alignment target approval, deactivation, and updates (via AlignmentRegistry)
+- Ambassador management for alignment targets (via AlignmentRegistry)
+- Factory registration and deactivation (via MasterRegistry)
+- Vault registration (via MasterRegistry, or delegated to active factories)
 - Protocol parameter changes
 - Treasury disbursements
-- UUPS contract upgrades
+- UUPS contract upgrades (MasterRegistry, AlignmentRegistry)
 
 Direct DAO actions (no timelock):
 - Share and loot distribution
@@ -373,39 +397,56 @@ Direct DAO actions (no timelock):
 
 ### MasterRegistry (UUPS Upgradeable)
 
-The enforcement layer for the entire protocol. Owner is the DAO (GrandCentral via Safe).
+The registration layer for the protocol. Owner is the DAO (via Timelock). Holds a reference to AlignmentRegistry for vault validation.
 
 **Manages:**
-- Alignment targets (targets, assets, ambassadors)
-- Vault instances (linked to targets, enforcement on registration)
-- Project factories (registration, active status)
+- Project factories (registration, active/inactive status, deactivation)
+- Vault instances (linked to alignment targets via AlignmentRegistry)
 - Project instances (linked to vaults, name collision prevention)
-- Featured queue manager reference
-- Global message registry reference
+
+**Does NOT manage (moved to separate contracts):**
+- Alignment targets and ambassadors → AlignmentRegistry
+- Global messaging → GlobalMessageRegistry (wired directly to factories/instances)
+- Featured queue → FeaturedQueueManager (standalone)
 
 **Enforcement at registration:**
 - Factories: must implement `IFactory` with `creator()` and `protocol()`
-- Instances: must have immutable vault matching declaration, must have protocol treasury
-- Vaults: must point to approved and active alignment target with matching token
+- Instances: must have immutable vault matching declaration, must have protocol treasury, factory must be active
+- Vaults: must point to approved and active alignment target (checked via AlignmentRegistry) with matching token
+
+**Factory lifecycle:**
+- `registerFactory()` — owner-only, requires IFactory compliance
+- `deactivateFactory()` — owner-only, prevents new instance/vault registration through that factory
+- Once deactivated, existing instances continue to function but no new ones can be created
+
+**Vault registration access control:**
+- Registered active factories can call `registerVault()` directly (factory path)
+- Owner (DAO/Timelock) can also call `registerVault()` for singleton vaults (owner path)
+
+### AlignmentRegistry (UUPS Upgradeable)
+
+Standalone contract for curation. Owner is the DAO (via Timelock).
+
+**Manages:**
+- Alignment targets (register, update, deactivate)
+- Alignment assets per target (tokens with metadata)
+- Ambassadors per target (add, remove, query)
+
+Queried by MasterRegistry during vault registration to validate target/token alignment.
 
 ### FeaturedQueueManager
 
-Competitive rental queue for homepage visibility. Instances rent featured positions by paying ETH. Positions shift as new renters enter. Auto-renewal with deposited funds. Cleanup rewards incentivize expiration processing.
+Competitive rental queue for homepage visibility. Instances rent featured positions by paying ETH with rank-based ordering. Higher ETH commitment = higher rank. Supports rank boosting and duration renewal.
 
 ### GlobalMessageRegistry
 
-Protocol-wide activity feed. Instances emit structured messages (buys, sells, mints, etc.) with bit-packed metadata. Enables trending detection and social discovery with single RPC calls.
+Protocol-wide activity feed. Instances post structured messages (buys, sells, mints, etc.) with encoded metadata. Enables trending detection and social discovery with single RPC calls.
 
-**Message format:** 176-bit packed data
-```
-[timestamp:32][factoryType:8][actionType:8][contextId:32][amount:96][reserved:80]
-```
-
-Auto-authorized: instances from registered factories are automatically authorized to post messages.
+Auto-authorized: instances from registered factories are automatically authorized to post messages (checked via `MasterRegistry.isRegisteredInstance()`).
 
 ### VaultRegistry
 
-Standalone registry for vault and hook metadata. Handles registration fees (0.05 ETH vaults, 0.02 ETH hooks) and basic metadata tracking. Separate from MasterRegistry's alignment target enforcement.
+Standalone registry for vault and hook metadata. Handles registration fees (0.05 ETH vaults, 0.02 ETH hooks) and basic metadata tracking. Separate from MasterRegistry's alignment enforcement.
 
 ---
 
@@ -414,29 +455,25 @@ Standalone registry for vault and hook metadata. Handles registration fees (0.05
 ### Deploy Order
 
 1. **MasterRegistryV1** — Deploy implementation, then proxy with `initialize(daoOwner)`
-2. **GrandCentral** — Deploy with Safe address, founder shares, governance params
-3. **ProtocolTreasuryV1** — Deploy protocol treasury
-4. **GlobalMessageRegistry** — Deploy, link to MasterRegistry
-5. **FeaturedQueueManager** — Deploy, link to MasterRegistry
-6. **VaultRegistry** — Deploy standalone
-7. **Alignment Targets** — Register via DAO (or owner during bootstrap)
-8. **Vault Factories** — Register approved vault code templates
-9. **Vault Instances** — Deploy for approved targets
-10. **Project Factories** — Register ERC404, ERC1155, ERC721 factories
+2. **AlignmentRegistryV1** — Deploy, initialize with daoOwner, wire to MasterRegistry via `setAlignmentRegistry()`
+3. **GrandCentral** — Deploy with Safe address, founder shares, governance params
+4. **ProtocolTreasuryV1** — Deploy protocol treasury
+5. **GlobalMessageRegistry** — Deploy with owner + masterRegistry reference
+6. **FeaturedQueueManager** — Deploy, initialize with masterRegistry + owner
+7. **VaultRegistry** — Deploy standalone
+8. **Alignment Targets** — Register via AlignmentRegistry (DAO or owner during bootstrap)
+9. **Project Factories** — Deploy with masterRegistry + globalMessageRegistry, register in MasterRegistry
+10. **Vault Instances** — Deploy for approved targets, register via MasterRegistry
 11. **Timelock** — Deploy and initialize with Safe as admin/proposer/canceller, open executor, 48h delay
-12. **Migrate ownership** — Transfer all protocol contracts to Timelock (`script/MigrateOwnership.s.sol`)
+12. **Migrate ownership** — Transfer MasterRegistry, AlignmentRegistry, and all protocol contracts to Timelock
 
 ### UUPS Upgrade Pattern
 
-MasterRegistryV1 uses UUPS (Universal Upgradeable Proxy Standard):
+MasterRegistryV1 and AlignmentRegistryV1 use UUPS (Universal Upgradeable Proxy Standard):
 - `_authorizeUpgrade()` restricted to owner (Timelock)
 - All upgrades go through the 48-hour timelock delay — publicly visible before execution
 - Storage layout must be preserved across upgrades — new state variables go at the end
 - Proxy delegates all calls to implementation
-
-### Storage Layout Safety
-
-MasterRegistryV1 has grown through multiple iterations. New state variables are always appended after existing ones. Removed features keep their storage slots for layout compatibility (e.g., `dictator`, `abdicationInitiatedAt` slots are preserved but unused).
 
 ---
 
@@ -451,18 +488,20 @@ All protocol contracts with `onlyOwner` functions are owned by a Solady Timelock
 | Contract | Owner/Admin | Controls |
 |----------|------------|----------|
 | **Timelock** | Safe (admin/proposer/canceller) | Schedules all owner-gated operations with enforced delay |
-| **MasterRegistryV1** | Timelock | All registrations, alignment targets, upgrades |
+| **AlignmentRegistryV1** | Timelock | Alignment targets, ambassadors, upgrades |
+| **MasterRegistryV1** | Timelock | Factory/vault/instance registration, factory deactivation, upgrades |
 | **ProtocolTreasuryV1** | Timelock | Fund disbursements |
 | **FeaturedQueueManager** | Timelock | Queue configuration |
 | **QueryAggregator** | Timelock | Aggregation configuration |
 | **UltraAlignmentVault** | Timelock (new instances) | Pool config, fee params, treasury address |
 | **GrandCentral** | Self-governing (daoOnly) | Shares, loot, governance params, conductors |
-| **Project Factories** | Protocol + Creator | Instance deployment |
+| **Project Factories** | Protocol + Creator | Instance deployment, fee withdrawal |
 | **Project Instances** | Instance creator (artist) | Withdrawals, configuration |
 
 ### Immutability Guarantees
 
 - Instance → Vault binding is **immutable** (set at construction)
+- Instance → GlobalMessageRegistry reference is **immutable** (set at construction via factory)
 - Factory creator address in instances is **immutable**
 - External protocol references in vaults (WETH, PoolManager, routers) are **immutable**
 - Vault factory creator address is **transferable** (two-step)
@@ -472,7 +511,7 @@ All protocol contracts with `onlyOwner` functions are owned by a Solady Timelock
 | Upgradeable | Permanent |
 |------------|-----------|
 | MasterRegistryV1 (UUPS) | UltraAlignmentVault (no proxy) |
-| | GrandCentral (no proxy) |
+| AlignmentRegistryV1 (UUPS) | GrandCentral (no proxy) |
 | | All factory/instance contracts |
 | | V4 hooks |
 
@@ -481,9 +520,10 @@ All protocol contracts with `onlyOwner` functions are owned by a Solady Timelock
 - **48-hour timelock** on all owner-gated operations — upgrades, registrations, parameter changes are publicly visible before execution
 - **Open executor role** — anyone can trigger execution after delay, preventing the Safe from griefing by refusing to execute
 - **Cancellation** — Safe can abort pending operations during the delay window
+- **Factory deactivation** — DAO can disable compromised or deprecated factories, preventing new instance/vault creation while existing instances continue functioning
 - Vault fee claims use delta-based accounting (prevents double-claims)
 - Conversion rewards capped with M-04 griefing protection (failed transfers don't block operations)
-- Name collision prevention via hash-based uniqueness
+- Name collision prevention via hash-based uniqueness (case-insensitive, cross-factory)
 - Reentrancy guards on all fee-handling functions
 - V4 integration uses transient storage pattern (unlock callback)
 
@@ -496,17 +536,21 @@ src/
 ├── dao/
 │   ├── GrandCentral.sol                    # Moloch-pattern DAO
 │   ├── conductors/
-│   │   └── StipendConductor.sol            # Recurring payment automation
+│   │   ├── StipendConductor.sol            # Recurring payment automation
+│   │   ├── ShareOffering.sol               # Share issuance campaigns
+│   │   └── RevenueConductor.sol            # Protocol revenue routing
 │   └── interfaces/
 │       ├── IGrandCentral.sol
 │       └── IAvatar.sol                     # Gnosis Safe interface
 │
 ├── master/
-│   ├── MasterRegistryV1.sol                # Central registry (UUPS)
+│   ├── MasterRegistryV1.sol                # Central registry (UUPS) — factories, vaults, instances
 │   ├── MasterRegistry.sol                  # Proxy wrapper
+│   ├── AlignmentRegistryV1.sol             # Alignment targets & ambassadors (UUPS)
 │   ├── FeaturedQueueManager.sol            # Competitive rental queue
 │   ├── interfaces/
 │   │   ├── IMasterRegistry.sol
+│   │   ├── IAlignmentRegistry.sol          # Alignment target/asset/ambassador interface
 │   │   └── IFeatureRegistry.sol
 │   └── libraries/
 │       ├── FeatureUtils.sol
@@ -517,12 +561,14 @@ src/
 │   │   ├── ERC404Factory.sol               # Bonding curve factory
 │   │   ├── ERC404BondingInstance.sol        # Bonding curve instance (thin coordinator)
 │   │   ├── ERC404StakingModule.sol          # Singleton yield delegation companion
+│   │   ├── LaunchManager.sol               # Instance creation lifecycle orchestrator
+│   │   ├── CurveParamsComputer.sol          # Bonding curve parameter computation
+│   │   ├── LiquidityDeployerModule.sol      # V4 graduation liquidity deployment
 │   │   ├── hooks/
 │   │   │   ├── UltraAlignmentV4Hook.sol
 │   │   │   └── UltraAlignmentHookFactory.sol
 │   │   └── libraries/
-│   │       ├── BondingCurveMath.sol
-│   │       └── LiquidityDeployer.sol        # V4 graduation math library
+│   │       └── BondingCurveMath.sol
 │   ├── erc1155/
 │   │   ├── ERC1155Factory.sol              # Edition factory
 │   │   ├── ERC1155Instance.sol             # Edition instance
@@ -537,12 +583,9 @@ src/
 │
 ├── registry/
 │   ├── VaultRegistry.sol                   # Vault/hook metadata
-│   └── GlobalMessageRegistry.sol           # Activity feed
-│
-├── governance/                             # Legacy (deprecated)
-│   ├── FactoryApprovalGovernance.sol
-│   ├── VaultApprovalGovernance.sol
-│   └── VotingPower.sol
+│   ├── GlobalMessageRegistry.sol           # Activity feed
+│   └── interfaces/
+│       └── IGlobalMessageRegistry.sol      # Message registry interface
 │
 ├── treasury/
 │   └── ProtocolTreasuryV1.sol              # Protocol funds
@@ -557,11 +600,11 @@ src/
 │   ├── IAlignmentVault.sol                 # Vault standard interface
 │   ├── IFactory.sol                        # Factory template interface
 │   ├── IFactoryInstance.sol                # Instance interface
-│   └── IInstance.sol
+│   ├── IInstance.sol
+│   └── IInstanceLifecycle.sol              # Instance lifecycle hooks
 │
 ├── libraries/
-│   ├── GlobalMessagePacking.sol            # Message bit-packing
-│   ├── GlobalMessageTypes.sol              # Message type constants
+│   ├── MessageTypes.sol                    # Message type constants
 │   └── v4/
 │       ├── CurrencySettler.sol             # V4 payment settlement
 │       └── LiquidityAmounts.sol            # LP math

@@ -71,7 +71,9 @@ contract ERC404FactoryTest is Test {
         launchMgr = new LaunchManager(protocolAdmin);
         curveComp = new CurveParamsComputer(protocolAdmin);
 
+        ERC404BondingInstance impl = new ERC404BondingInstance();
         factory = new ERC404Factory(
+            address(impl),
             address(mockRegistry),
             mockInstanceTemplate,
             mockV4PoolManager,
@@ -227,8 +229,9 @@ contract ERC404FactoryTest is Test {
 
     function test_createInstance_v4PoolManagerNotSet() public {
         vm.startPrank(protocolAdmin);
+        ERC404BondingInstance implBadPM = new ERC404BondingInstance();
         ERC404Factory factoryBadPoolManager = new ERC404Factory(
-            address(mockRegistry), mockInstanceTemplate, address(0), mockWETH,
+            address(implBadPM), address(mockRegistry), mockInstanceTemplate, address(0), mockWETH,
             protocolAdmin, address(0xC1EA), 2000, 40,
             address(stakingModule), address(0x600), mockGMR, address(launchMgr), address(curveComp)
         );
@@ -247,8 +250,9 @@ contract ERC404FactoryTest is Test {
 
     function test_createInstance_wethNotSet() public {
         vm.startPrank(protocolAdmin);
+        ERC404BondingInstance implBadWeth = new ERC404BondingInstance();
         ERC404Factory factoryBadWeth = new ERC404Factory(
-            address(mockRegistry), mockInstanceTemplate, mockV4PoolManager, address(0),
+            address(implBadWeth), address(mockRegistry), mockInstanceTemplate, mockV4PoolManager, address(0),
             protocolAdmin, address(0xC1EA), 2000, 40,
             address(stakingModule), address(0x600), mockGMR, address(launchMgr), address(curveComp)
         );
@@ -641,16 +645,16 @@ contract ERC404FactoryTest is Test {
     function test_setTierConfig() public {
         vm.startPrank(protocolAdmin);
         LaunchManager.TierConfig memory config = LaunchManager.TierConfig({
-            fee: 0.05 ether, featuredDuration: 7 days, featuredPosition: 10,
+            fee: 0.05 ether, featuredDuration: 7 days, featuredRankBoost: 10,
             badge: PromotionBadges.BadgeType.NONE, badgeDuration: 0
         });
         launchMgr.setTierConfig(LaunchManager.CreationTier.PREMIUM, config);
 
-        (uint256 fee, uint256 featuredDuration, uint256 featuredPosition, PromotionBadges.BadgeType badge, uint256 badgeDuration) =
+        (uint256 fee, uint256 featuredDuration, uint256 featuredRankBoost, PromotionBadges.BadgeType badge, uint256 badgeDuration) =
             launchMgr.tierConfigs(LaunchManager.CreationTier.PREMIUM);
         assertEq(fee, 0.05 ether);
         assertEq(featuredDuration, 7 days);
-        assertEq(featuredPosition, 10);
+        assertEq(featuredRankBoost, 10);
         assertEq(uint256(badge), uint256(PromotionBadges.BadgeType.NONE));
         assertEq(badgeDuration, 0);
         vm.stopPrank();
@@ -659,7 +663,7 @@ contract ERC404FactoryTest is Test {
     function test_setTierConfig_revertZeroFee() public {
         vm.startPrank(protocolAdmin);
         LaunchManager.TierConfig memory config = LaunchManager.TierConfig({
-            fee: 0, featuredDuration: 0, featuredPosition: 0,
+            fee: 0, featuredDuration: 0, featuredRankBoost: 0,
             badge: PromotionBadges.BadgeType.NONE, badgeDuration: 0
         });
         vm.expectRevert("Fee must be positive");
@@ -670,7 +674,7 @@ contract ERC404FactoryTest is Test {
     function test_setTierConfig_revertNonOwner() public {
         vm.startPrank(nonOwner);
         LaunchManager.TierConfig memory config = LaunchManager.TierConfig({
-            fee: 0.05 ether, featuredDuration: 0, featuredPosition: 0,
+            fee: 0.05 ether, featuredDuration: 0, featuredRankBoost: 0,
             badge: PromotionBadges.BadgeType.NONE, badgeDuration: 0
         });
         vm.expectRevert();
@@ -693,7 +697,7 @@ contract ERC404FactoryTest is Test {
     function test_createInstance_premiumTier() public {
         vm.startPrank(protocolAdmin);
         launchMgr.setTierConfig(LaunchManager.CreationTier.PREMIUM, LaunchManager.TierConfig({
-            fee: 0.05 ether, featuredDuration: 0, featuredPosition: 0,
+            fee: 0.05 ether, featuredDuration: 0, featuredRankBoost: 0,
             badge: PromotionBadges.BadgeType.NONE, badgeDuration: 0
         }));
         vm.stopPrank();
@@ -714,7 +718,7 @@ contract ERC404FactoryTest is Test {
     function test_createInstance_premiumTier_insufficientFee() public {
         vm.startPrank(protocolAdmin);
         launchMgr.setTierConfig(LaunchManager.CreationTier.PREMIUM, LaunchManager.TierConfig({
-            fee: 0.05 ether, featuredDuration: 0, featuredPosition: 0,
+            fee: 0.05 ether, featuredDuration: 0, featuredRankBoost: 0,
             badge: PromotionBadges.BadgeType.NONE, badgeDuration: 0
         }));
         vm.stopPrank();
@@ -747,7 +751,7 @@ contract ERC404FactoryTest is Test {
     function test_createInstance_premiumTier_refundsExcess() public {
         vm.startPrank(protocolAdmin);
         launchMgr.setTierConfig(LaunchManager.CreationTier.PREMIUM, LaunchManager.TierConfig({
-            fee: 0.05 ether, featuredDuration: 0, featuredPosition: 0,
+            fee: 0.05 ether, featuredDuration: 0, featuredRankBoost: 0,
             badge: PromotionBadges.BadgeType.NONE, badgeDuration: 0
         }));
         vm.stopPrank();
@@ -769,7 +773,7 @@ contract ERC404FactoryTest is Test {
     function test_createInstance_gracefulDegradation_noQueueOrBadges() public {
         vm.startPrank(protocolAdmin);
         launchMgr.setTierConfig(LaunchManager.CreationTier.LAUNCH, LaunchManager.TierConfig({
-            fee: 0.1 ether, featuredDuration: 14 days, featuredPosition: 5,
+            fee: 0.1 ether, featuredDuration: 14 days, featuredRankBoost: 5,
             badge: PromotionBadges.BadgeType.HIGHLIGHT, badgeDuration: 14 days
         }));
         vm.stopPrank();
@@ -792,7 +796,7 @@ contract ERC404FactoryTest is Test {
         badges.setAuthorizedFactory(address(launchMgr), true);
         launchMgr.setPromotionBadges(address(badges));
         launchMgr.setTierConfig(LaunchManager.CreationTier.LAUNCH, LaunchManager.TierConfig({
-            fee: 0.1 ether, featuredDuration: 0, featuredPosition: 0,
+            fee: 0.1 ether, featuredDuration: 0, featuredRankBoost: 0,
             badge: PromotionBadges.BadgeType.HIGHLIGHT, badgeDuration: 14 days
         }));
         vm.stopPrank();
@@ -911,43 +915,28 @@ contract ERC404FactoryTest is Test {
 
     function test_computeCurveParams_standardProfile() public view {
         uint256 nftCount = 100;
-        ERC404BondingInstance.BondingCurveParams memory params = curveComp.computeCurveParams(nftCount, 15 ether, 1e6, 2000);
+        BondingCurveMath.Params memory params = curveComp.computeCurveParams(nftCount, 15 ether, 1e6, 2000);
         uint256 totalSupply = nftCount * 1e6 * 1e18;
         uint256 maxBondingSupply = totalSupply - (totalSupply * 2000) / 10000;
-        BondingCurveMath.Params memory bcParams = BondingCurveMath.Params({
-            initialPrice: params.initialPrice, quarticCoeff: params.quarticCoeff,
-            cubicCoeff: params.cubicCoeff, quadraticCoeff: params.quadraticCoeff,
-            normalizationFactor: params.normalizationFactor
-        });
-        uint256 totalCost = BondingCurveMath.calculateCost(bcParams, 0, maxBondingSupply);
+        uint256 totalCost = BondingCurveMath.calculateCost(params, 0, maxBondingSupply);
         assertApproxEqRel(totalCost, 15 ether, 0.01e18);
     }
 
     function test_computeCurveParams_nicheProfile() public view {
         uint256 nftCount = 50;
-        ERC404BondingInstance.BondingCurveParams memory params = curveComp.computeCurveParams(nftCount, 5 ether, 1e9, 2000);
+        BondingCurveMath.Params memory params = curveComp.computeCurveParams(nftCount, 5 ether, 1e9, 2000);
         uint256 totalSupply = nftCount * 1e9 * 1e18;
         uint256 maxBondingSupply = totalSupply - (totalSupply * 2000) / 10000;
-        BondingCurveMath.Params memory bcParams = BondingCurveMath.Params({
-            initialPrice: params.initialPrice, quarticCoeff: params.quarticCoeff,
-            cubicCoeff: params.cubicCoeff, quadraticCoeff: params.quadraticCoeff,
-            normalizationFactor: params.normalizationFactor
-        });
-        uint256 totalCost = BondingCurveMath.calculateCost(bcParams, 0, maxBondingSupply);
+        uint256 totalCost = BondingCurveMath.calculateCost(params, 0, maxBondingSupply);
         assertApproxEqRel(totalCost, 5 ether, 0.01e18);
     }
 
     function test_computeCurveParams_ambitiousProfile() public view {
         uint256 nftCount = 500;
-        ERC404BondingInstance.BondingCurveParams memory params = curveComp.computeCurveParams(nftCount, 30 ether, 1e3, 2000);
+        BondingCurveMath.Params memory params = curveComp.computeCurveParams(nftCount, 30 ether, 1e3, 2000);
         uint256 totalSupply = nftCount * 1e3 * 1e18;
         uint256 maxBondingSupply = totalSupply - (totalSupply * 2000) / 10000;
-        BondingCurveMath.Params memory bcParams = BondingCurveMath.Params({
-            initialPrice: params.initialPrice, quarticCoeff: params.quarticCoeff,
-            cubicCoeff: params.cubicCoeff, quadraticCoeff: params.quadraticCoeff,
-            normalizationFactor: params.normalizationFactor
-        });
-        uint256 totalCost = BondingCurveMath.calculateCost(bcParams, 0, maxBondingSupply);
+        uint256 totalCost = BondingCurveMath.calculateCost(params, 0, maxBondingSupply);
         assertApproxEqRel(totalCost, 30 ether, 0.01e18);
     }
 

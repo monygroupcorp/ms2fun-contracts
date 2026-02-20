@@ -4,8 +4,7 @@ Curated launchpad for derivative art/tokens aligned to established crypto commun
 
 ## Key Concepts
 
-- **Alignment Targets**: DAO-approved community profiles (Remilia, Pudgy, etc.) with assets and ambassadors
-- **Vault Factories**: Code templates for vault strategies (e.g., UltraAlignmentVault)
+- **Alignment Targets**: DAO-approved community profiles (Remilia, Pudgy, etc.) with assets and ambassadors. Managed by AlignmentRegistryV1.
 - **Vault Instances**: Deployed vaults, each bound to an approved alignment target
 - **Project Factories**: Code templates for project types (ERC404 bonding, ERC1155 editions, ERC721 auctions)
 - **Project Instances**: Artist-created collections, each immutably bound to a vault
@@ -13,9 +12,19 @@ Curated launchpad for derivative art/tokens aligned to established crypto commun
 
 ## Architecture
 
-DAO (GrandCentral + Safe) → MasterRegistry → Alignment Targets → Vault Instances → Project Instances
+```
+DAO (GrandCentral + Safe) → Timelock
+  → AlignmentRegistry (curation: targets + ambassadors)
+  → MasterRegistry (registration: factories, vaults, instances)
+  → GlobalMessageRegistry (activity feed, wired directly to instances)
+  → FeaturedQueueManager (promotion queue)
+```
 
-MasterRegistry is UUPS upgradeable, owner is the DAO. It enforces all rules: target approval, vault/factory registration, instance-vault binding. New state variables always go at the end (storage layout safety).
+**AlignmentRegistryV1** manages alignment targets and ambassadors (curation). **MasterRegistryV1** manages factory/vault/instance registration (phone book). Both are UUPS upgradeable, owned by the DAO via Timelock.
+
+Factories receive `globalMessageRegistry` at construction and pass it to instances — no runtime lookups through MasterRegistry (direct wiring, not service locator).
+
+MasterRegistry holds a reference to AlignmentRegistry for vault registration validation. Factories can register vaults directly (if active), or the DAO can register singleton vaults.
 
 ## Revenue Flow
 
@@ -25,17 +34,17 @@ MasterRegistry is UUPS upgradeable, owner is the DAO. It enforces all rules: tar
 
 ## Governance
 
-GrandCentral is a Moloch-pattern DAO. Shares = voting power, loot = economic rights. Proposals execute via Gnosis Safe. Conductor system delegates admin/manager/governor permissions.
+GrandCentral is a Moloch-pattern DAO. Shares = voting power, loot = economic rights. Proposals execute via Gnosis Safe through a 48h Timelock. Conductor system delegates admin/manager/governor permissions.
 
 ## Tech Stack
 
-Solidity 0.8.20, Foundry/Forge, Solady (Ownable, UUPS), Uniswap V4 (hooks, LP), DN404 (ERC404). Run `forge test` for full suite (~820 tests).
+Solidity 0.8.20, Foundry/Forge, Solady (Ownable, UUPS), Uniswap V4 (hooks, LP), DN404 (ERC404). Run `forge test` for full suite (~1009 tests).
 
 ## File Layout
 
-- `src/dao/` — GrandCentral DAO, StipendConductor
-- `src/master/` — MasterRegistryV1 (UUPS), FeaturedQueueManager
-- `src/factories/` — ERC404, ERC1155, ERC721 factories and instances
+- `src/dao/` — GrandCentral DAO, conductors (StipendConductor, ShareOffering, RevenueConductor)
+- `src/master/` — MasterRegistryV1 (UUPS), AlignmentRegistryV1 (UUPS), FeaturedQueueManager
+- `src/factories/` — ERC404 (factory, instance, staking module, launch manager, curve computer, liquidity deployer), ERC1155, ERC721
 - `src/vaults/` — UltraAlignmentVault
 - `src/registry/` — VaultRegistry, GlobalMessageRegistry
 - `src/treasury/` — ProtocolTreasuryV1

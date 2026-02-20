@@ -7,7 +7,9 @@ import {ReentrancyGuard} from "solady/utils/ReentrancyGuard.sol";
 import {SafeTransferLib} from "solady/utils/SafeTransferLib.sol";
 import {IAlignmentVault} from "../../interfaces/IAlignmentVault.sol";
 import {IFactoryInstance} from "../../interfaces/IFactoryInstance.sol";
+import {IGlobalMessageRegistry} from "../../registry/interfaces/IGlobalMessageRegistry.sol";
 import {Currency} from "v4-core/types/Currency.sol";
+import {IInstanceLifecycle, TYPE_ERC721, STATE_ACTIVE} from "../../interfaces/IInstanceLifecycle.sol";
 
 /**
  * @title ERC721AuctionInstance
@@ -16,7 +18,7 @@ import {Currency} from "v4-core/types/Currency.sol";
  * @dev Implements parallel auction lines (1-3 concurrent slots) with round-robin token assignment.
  *      All auction parameters are immutable after creation for predictability.
  */
-contract ERC721AuctionInstance is ERC721, Ownable, ReentrancyGuard, IFactoryInstance {
+contract ERC721AuctionInstance is ERC721, Ownable, ReentrancyGuard, IFactoryInstance, IInstanceLifecycle {
     // ┌─────────────────────────┐
     // │         Types           │
     // └─────────────────────────┘
@@ -38,6 +40,7 @@ contract ERC721AuctionInstance is ERC721, Ownable, ReentrancyGuard, IFactoryInst
 
     IAlignmentVault public immutable _vault;
     address public immutable _protocolTreasury;
+    IGlobalMessageRegistry public immutable globalMessageRegistry;
     uint8 public immutable lines;
     uint40 public immutable baseDuration;
     uint40 public immutable timeBuffer;
@@ -62,6 +65,7 @@ contract ERC721AuctionInstance is ERC721, Ownable, ReentrancyGuard, IFactoryInst
     mapping(uint24 => Auction) public auctions;
     mapping(uint24 => string) private _tokenURIs;
 
+
     // ┌─────────────────────────┐
     // │         Events          │
     // └─────────────────────────┘
@@ -85,11 +89,13 @@ contract ERC721AuctionInstance is ERC721, Ownable, ReentrancyGuard, IFactoryInst
         uint8 lines_,
         uint40 baseDuration_,
         uint40 timeBuffer_,
-        uint256 bidIncrement_
+        uint256 bidIncrement_,
+        address globalMessageRegistry_
     ) {
         require(vault_ != address(0), "Invalid vault");
         require(protocolTreasury_ != address(0), "Invalid treasury");
         require(owner_ != address(0), "Invalid owner");
+        require(globalMessageRegistry_ != address(0), "Invalid global message registry");
         require(bytes(name_).length > 0, "Invalid name");
         require(bytes(symbol_).length > 0, "Invalid symbol");
         require(lines_ >= 1 && lines_ <= 3, "Lines must be 1-3");
@@ -106,6 +112,7 @@ contract ERC721AuctionInstance is ERC721, Ownable, ReentrancyGuard, IFactoryInst
         baseDuration = baseDuration_;
         timeBuffer = timeBuffer_;
         bidIncrement = bidIncrement_;
+        globalMessageRegistry = IGlobalMessageRegistry(globalMessageRegistry_);
         nextTokenId = 1;
     }
 
@@ -119,6 +126,16 @@ contract ERC721AuctionInstance is ERC721, Ownable, ReentrancyGuard, IFactoryInst
 
     function protocolTreasury() external view override returns (address) {
         return _protocolTreasury;
+    }
+
+    function getGlobalMessageRegistry() external view override returns (address) {
+        return address(globalMessageRegistry);
+    }
+
+    // ── IInstanceLifecycle ─────────────────────────────────────────────────────
+
+    function instanceType() external pure override returns (bytes32) {
+        return TYPE_ERC721;
     }
 
     // ┌─────────────────────────┐
@@ -153,6 +170,7 @@ contract ERC721AuctionInstance is ERC721, Ownable, ReentrancyGuard, IFactoryInst
         require(bytes(_tokenURI).length > 0, "URI required");
 
         uint24 tokenId = nextTokenId++;
+        if (tokenId == 1) emit StateChanged(STATE_ACTIVE);
         uint8 line = uint8((tokenId - 1) % lines);
 
         auctions[tokenId] = Auction({
@@ -188,7 +206,7 @@ contract ERC721AuctionInstance is ERC721, Ownable, ReentrancyGuard, IFactoryInst
      *      Previous bidder is refunded via forceSafeTransferETH. Late bids extend the auction.
      * @param tokenId The token ID to bid on
      */
-    function createBid(uint24 tokenId) external payable nonReentrant {
+    function createBid(uint24 tokenId, bytes calldata messageData) external payable nonReentrant {
         Auction storage auction = auctions[tokenId];
         require(auction.tokenId != 0, "Auction does not exist");
         require(auction.startTime != 0, "Auction not started");
@@ -217,6 +235,10 @@ contract ERC721AuctionInstance is ERC721, Ownable, ReentrancyGuard, IFactoryInst
         // Anti-snipe: extend if bid is within timeBuffer of end
         if (auction.endTime - block.timestamp < timeBuffer) {
             auction.endTime = uint40(block.timestamp) + timeBuffer;
+        }
+
+        if (messageData.length > 0) {
+            globalMessageRegistry.postForAction(msg.sender, address(this), messageData);
         }
 
         emit BidPlaced(tokenId, msg.sender, msg.value);

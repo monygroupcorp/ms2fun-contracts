@@ -62,6 +62,11 @@ contract ProtocolTreasuryV1 is UUPSUpgradeable, Ownable, IUnlockCallback {
     event POLPositionDeployed(address indexed instance, uint128 liquidity, bytes32 salt);
     event POLFeesCollected(address indexed instance, uint256 amount0, uint256 amount1);
 
+    // ============ Authorized Router ============
+
+    address public authorizedRouter;
+    event AuthorizedRouterSet(address indexed router);
+
     // ============ Initialization ============
 
     bool private _initialized;
@@ -317,7 +322,13 @@ contract ProtocolTreasuryV1 is UUPSUpgradeable, Ownable, IUnlockCallback {
 
     // ============ Withdrawals (Owner Only) ============
 
-    function withdrawETH(address to, uint256 amount) external onlyOwner {
+    function setAuthorizedRouter(address _router) external onlyOwner {
+        authorizedRouter = _router;
+        emit AuthorizedRouterSet(_router);
+    }
+
+    function withdrawETH(address to, uint256 amount) external {
+        require(msg.sender == owner() || msg.sender == authorizedRouter, "!authorized");
         require(to != address(0), "Invalid recipient");
         require(amount <= address(this).balance, "Insufficient balance");
         SafeTransferLib.safeTransferETH(to, amount);

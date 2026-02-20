@@ -47,6 +47,7 @@ contract CreatorFeesSplitTest is Test {
     MockMasterRegistry public mockRegistry;
     MockMasterRegistryForStakingC public stakingRegistry;
     ERC404StakingModule public stakingModule;
+    GlobalMessageRegistry public globalMsgRegistry;
 
     address public owner = address(this);
     address public factoryCreator = address(0xC1EA);
@@ -93,7 +94,7 @@ contract CreatorFeesSplitTest is Test {
         stakingModule = new ERC404StakingModule(address(stakingRegistry));
 
         // Deploy global message registry
-        GlobalMessageRegistry globalMsgRegistry = new GlobalMessageRegistry(owner, address(mockRegistry));
+        globalMsgRegistry = new GlobalMessageRegistry(owner, address(mockRegistry));
 
         // Deploy ERC1155Factory with creator fee
         erc1155Factory = new ERC1155Factory(
@@ -110,7 +111,9 @@ contract CreatorFeesSplitTest is Test {
         CurveParamsComputer curveComputer = new CurveParamsComputer(owner);
 
         // Deploy ERC404Factory with creator fee and graduation fee
+        ERC404BondingInstance erc404Impl = new ERC404BondingInstance();
         erc404Factory = new ERC404Factory(
+            address(erc404Impl),
             address(mockRegistry),
             mockInstanceTemplate,
             mockV4PoolManager,
@@ -311,7 +314,7 @@ contract CreatorFeesSplitTest is Test {
             mockInstanceTemplate,
             factoryCreator,
             0, // 0% creator fee
-            address(new GlobalMessageRegistry(owner, address(mockRegistry)))
+            address(globalMsgRegistry)
         );
         zeroFeeFactory.setProtocolTreasury(treasury);
 

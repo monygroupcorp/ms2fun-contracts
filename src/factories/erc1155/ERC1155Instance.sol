@@ -6,18 +6,16 @@ import { ReentrancyGuard } from "solady/utils/ReentrancyGuard.sol";
 import { SafeTransferLib } from "solady/utils/SafeTransferLib.sol";
 import { EditionPricing } from "./libraries/EditionPricing.sol";
 import { IAlignmentVault } from "../../interfaces/IAlignmentVault.sol";
-import { GlobalMessageRegistry } from "../../registry/GlobalMessageRegistry.sol";
-import { GlobalMessagePacking } from "../../libraries/GlobalMessagePacking.sol";
-import { GlobalMessageTypes } from "../../libraries/GlobalMessageTypes.sol";
-import { IMasterRegistry } from "../../master/interfaces/IMasterRegistry.sol";
+import { IGlobalMessageRegistry } from "../../registry/interfaces/IGlobalMessageRegistry.sol";
 import { Currency } from "v4-core/types/Currency.sol";
+import { IInstanceLifecycle, TYPE_ERC1155, STATE_MINTING } from "../../interfaces/IInstanceLifecycle.sol";
 
 /**
  * @title ERC1155Instance
  * @notice ERC1155 token instance for open edition artists
  * @dev Supports unlimited/limited editions with fixed or dynamic pricing, message system, and withdraw tax
  */
-contract ERC1155Instance is Ownable, ReentrancyGuard {
+contract ERC1155Instance is Ownable, ReentrancyGuard, IInstanceLifecycle {
     using EditionPricing for uint256;
 
     // ┌─────────────────────────┐
@@ -49,9 +47,8 @@ contract ERC1155Instance is Ownable, ReentrancyGuard {
     address public creator;
     address public factory;
     IAlignmentVault public vault;
-    IMasterRegistry public immutable masterRegistry;
+    IGlobalMessageRegistry public immutable globalMessageRegistry;
     address public immutable protocolTreasury;
-    GlobalMessageRegistry private cachedGlobalRegistry; // Lazy-loaded from masterRegistry
 
     // Customization
     string public styleUri;
@@ -121,24 +118,31 @@ contract ERC1155Instance is Ownable, ReentrancyGuard {
         address _factory,
         address _vault,
         string memory _styleUri,
-        address _masterRegistry,
+        address _globalMessageRegistry,
         address _protocolTreasury
     ) {
         require(bytes(_name).length > 0, "Invalid name");
         require(_creator != address(0), "Invalid creator");
         require(_factory != address(0), "Invalid factory");
         require(_vault != address(0), "Invalid vault");
-        require(_masterRegistry != address(0), "Invalid master registry");
+        require(_globalMessageRegistry != address(0), "Invalid global message registry");
 
         _initializeOwner(_creator);
         name = _name;
         creator = _creator;
         factory = _factory;
         vault = IAlignmentVault(payable(_vault));
-        masterRegistry = IMasterRegistry(_masterRegistry);
+        globalMessageRegistry = IGlobalMessageRegistry(_globalMessageRegistry);
         protocolTreasury = _protocolTreasury;
         styleUri = _styleUri;
         nextEditionId = 1;
+        emit StateChanged(STATE_MINTING);
+    }
+
+    // ── IInstanceLifecycle ─────────────────────────────────────────────────────
+
+    function instanceType() external pure override returns (bytes32) {
+        return TYPE_ERC1155;
     }
 
     // ┌─────────────────────────┐
@@ -176,8 +180,6 @@ contract ERC1155Instance is Ownable, ReentrancyGuard {
             require(priceIncreaseRate > 0, "Dynamic pricing requires increase rate");
         }
 
-        /// @dev Edition ID bounds check for GlobalMessagePacking compatibility
-        /// GlobalMessagePacking requires editionId to fit in uint32 for efficient packing
         require(nextEditionId <= type(uint32).max, "Edition limit reached (max 4.29 billion)");
 
         uint256 editionId = nextEditionId++;
@@ -208,30 +210,12 @@ contract ERC1155Instance is Ownable, ReentrancyGuard {
         emit EditionMetadataUpdated(editionId, metadataURI);
     }
 
-    // ┌─────────────────────────┐
-    // │  Global Message Helpers │
-    // └─────────────────────────┘
-
-    /**
-     * @notice Internal helper to lazy-load global message registry
-     * @dev Caches registry address to avoid repeated external calls
-     * @return GlobalMessageRegistry instance
-     */
-    function _getGlobalMessageRegistry() private returns (GlobalMessageRegistry) {
-        if (address(cachedGlobalRegistry) == address(0)) {
-            address registryAddr = masterRegistry.getGlobalMessageRegistry();
-            require(registryAddr != address(0), "Global registry not set");
-            cachedGlobalRegistry = GlobalMessageRegistry(registryAddr);
-        }
-        return cachedGlobalRegistry;
-    }
-
     /**
      * @notice Get global message registry address (public getter for frontend)
      * @return Address of the GlobalMessageRegistry contract
      */
     function getGlobalMessageRegistry() external view returns (address) {
-        return masterRegistry.getGlobalMessageRegistry();
+        return address(globalMessageRegistry);
     }
 
     // ┌─────────────────────────┐
@@ -291,13 +275,13 @@ contract ERC1155Instance is Ownable, ReentrancyGuard {
      * @notice Mint tokens with optional message
      * @param editionId Edition ID
      * @param amount Number of tokens to mint
-     * @param message Optional message to store (empty string skips registry call, saves gas)
+     * @param messageData Optional encoded message data (empty bytes skips registry call, saves gas)
      * @param maxCost Maximum acceptable total cost (0 = no limit, uses msg.value as implicit cap)
      */
     function mint(
         uint256 editionId,
         uint256 amount,
-        string calldata message,
+        bytes calldata messageData,
         uint256 maxCost
     ) external payable nonReentrant {
         Edition storage edition = editions[editionId];
@@ -319,22 +303,9 @@ contract ERC1155Instance is Ownable, ReentrancyGuard {
         balanceOf[msg.sender][editionId] += amount;
         totalProceeds += totalCost;
 
-        // Store message in global registry if provided
-        if (bytes(message).length > 0) {
-            GlobalMessageRegistry registry = _getGlobalMessageRegistry();
-
-            require(editionId <= type(uint32).max, "EditionId too large");
-            require(amount <= type(uint96).max, "Amount too large");
-
-            uint256 packedData = GlobalMessagePacking.pack(
-                uint32(block.timestamp),
-                GlobalMessageTypes.FACTORY_ERC1155,
-                GlobalMessageTypes.ACTION_MINT,
-                uint32(editionId), // contextId: edition being minted
-                uint96(amount)
-            );
-
-            registry.addMessage(address(this), msg.sender, packedData, message);
+        // Forward message to global registry
+        if (messageData.length > 0) {
+            globalMessageRegistry.postForAction(msg.sender, address(this), messageData);
         }
 
         // Refund excess

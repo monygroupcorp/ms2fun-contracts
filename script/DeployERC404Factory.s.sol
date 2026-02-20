@@ -3,6 +3,7 @@ pragma solidity ^0.8.20;
 
 import {Script, console} from "forge-std/Script.sol";
 import {ERC404Factory} from "../src/factories/erc404/ERC404Factory.sol";
+import {ERC404BondingInstance} from "../src/factories/erc404/ERC404BondingInstance.sol";
 import {ERC404StakingModule} from "../src/factories/erc404/ERC404StakingModule.sol";
 import {LiquidityDeployerModule} from "../src/factories/erc404/LiquidityDeployerModule.sol";
 import {LaunchManager} from "../src/factories/erc404/LaunchManager.sol";
@@ -23,6 +24,8 @@ contract DeployERC404Factory is Script {
         vm.startBroadcast(deployerPrivateKey);
 
         address protocol = vm.envAddress("PROTOCOL");
+        ERC404BondingInstance impl = new ERC404BondingInstance();
+        console.log("ERC404BondingInstance implementation deployed at:", address(impl));
         ERC404StakingModule stakingModule = new ERC404StakingModule(masterRegistry);
         console.log("ERC404StakingModule deployed at:", address(stakingModule));
         LiquidityDeployerModule liquidityDeployer = new LiquidityDeployerModule();
@@ -32,7 +35,7 @@ contract DeployERC404Factory is Script {
         CurveParamsComputer curveComputer = new CurveParamsComputer(protocol);
         console.log("CurveParamsComputer deployed at:", address(curveComputer));
         ERC404Factory factory = new ERC404Factory(
-            masterRegistry, instanceTemplate, v4PoolManager, weth,
+            address(impl), masterRegistry, instanceTemplate, v4PoolManager, weth,
             protocol, creator, creatorFeeBps, creatorGraduationFeeBps,
             address(stakingModule), address(liquidityDeployer),
             globalMessageRegistry, address(launchManager), address(curveComputer)

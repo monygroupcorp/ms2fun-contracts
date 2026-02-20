@@ -17,6 +17,7 @@ import {FeaturedQueueManager} from "../../master/FeaturedQueueManager.sol";
  */
 contract ERC721AuctionFactory is Ownable, ReentrancyGuard, IFactory {
     IMasterRegistry public masterRegistry;
+    address public immutable globalMessageRegistry;
     uint256 public instanceCreationFee;
 
     // Protocol revenue
@@ -34,7 +35,7 @@ contract ERC721AuctionFactory is Ownable, ReentrancyGuard, IFactory {
     struct TierConfig {
         uint256 fee;
         uint256 featuredDuration;
-        uint256 featuredPosition;
+        uint256 featuredRankBoost;   // ETH allocated to rank score (0 = duration only)
         PromotionBadges.BadgeType badge;
         uint256 badgeDuration;
     }
@@ -61,13 +62,16 @@ contract ERC721AuctionFactory is Ownable, ReentrancyGuard, IFactory {
     constructor(
         address _masterRegistry,
         address _creator,
-        uint256 _creatorFeeBps
+        uint256 _creatorFeeBps,
+        address _globalMessageRegistry
     ) {
         _initializeOwner(msg.sender);
         require(_creatorFeeBps <= 10000, "Invalid creator fee bps");
+        require(_globalMessageRegistry != address(0), "Invalid global message registry");
         creator = _creator;
         creatorFeeBps = _creatorFeeBps;
         masterRegistry = IMasterRegistry(_masterRegistry);
+        globalMessageRegistry = _globalMessageRegistry;
         instanceCreationFee = 0.01 ether;
     }
 
@@ -139,9 +143,15 @@ contract ERC721AuctionFactory is Ownable, ReentrancyGuard, IFactory {
 
         require(msg.value >= fee, "Insufficient fee");
 
-        // Split fee between protocol and creator
-        uint256 creatorCut = (fee * creatorFeeBps) / 10000;
-        uint256 protocolCut = fee - creatorCut;
+        // Compute featured cost upfront so it can be forwarded (not accumulated)
+        uint256 featuredCost = 0;
+        if (config.featuredDuration > 0 && address(featuredQueueManager) != address(0)) {
+            featuredCost = featuredQueueManager.quoteDurationCost(config.featuredDuration) + config.featuredRankBoost;
+        }
+
+        // Split the non-featured portion of the fee between protocol and creator
+        uint256 creatorCut = ((fee - featuredCost) * creatorFeeBps) / 10000;
+        uint256 protocolCut = fee - featuredCost - creatorCut;
         accumulatedCreatorFees += creatorCut;
         accumulatedProtocolFees += protocolCut;
 
@@ -172,7 +182,8 @@ contract ERC721AuctionFactory is Ownable, ReentrancyGuard, IFactory {
             _lines,
             _baseDuration,
             _timeBuffer,
-            _bidIncrement
+            _bidIncrement,
+            globalMessageRegistry
         ));
 
         // Register with master registry
@@ -186,9 +197,9 @@ contract ERC721AuctionFactory is Ownable, ReentrancyGuard, IFactory {
         );
 
         // Apply tier perks
-        if (config.featuredDuration > 0 && address(featuredQueueManager) != address(0)) {
-            featuredQueueManager.rentFeaturedPositionFor(
-                instance, config.featuredPosition, config.featuredDuration
+        if (config.featuredDuration > 0 && address(featuredQueueManager) != address(0) && featuredCost > 0) {
+            featuredQueueManager.rentFeaturedFor{value: featuredCost}(
+                instance, _creator, config.featuredDuration, config.featuredRankBoost
             );
         }
 

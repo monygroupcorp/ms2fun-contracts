@@ -2,9 +2,12 @@
 pragma solidity ^0.8.24;
 
 import {Test, console} from "forge-std/Test.sol";
-import {ERC404BondingInstance} from "../../../src/factories/erc404/ERC404BondingInstance.sol";
+import {ERC404BondingInstance, MaxCostExceeded, BondingNotConfigured, OnlyOwnerBeforeMaturity, HookNotSet, NoReserve} from "../../../src/factories/erc404/ERC404BondingInstance.sol";
 import {ERC404Factory} from "../../../src/factories/erc404/ERC404Factory.sol";
 import {ERC404StakingModule} from "../../../src/factories/erc404/ERC404StakingModule.sol";
+import {CurveParamsComputer} from "../../../src/factories/erc404/CurveParamsComputer.sol";
+import {BondingCurveMath} from "../../../src/factories/erc404/libraries/BondingCurveMath.sol";
+import {LibClone} from "solady/utils/LibClone.sol";
 
 contract MockMasterRegistryForStaking {
     mapping(address => bool) public instances;
@@ -29,7 +32,7 @@ contract ERC404BondingInstanceTest is Test {
     uint256 constant MAX_SUPPLY = 10_000_000 * 1e18;
     uint256 constant LIQUIDITY_RESERVE_PERCENT = 10;
     
-    ERC404BondingInstance.BondingCurveParams curveParams;
+    BondingCurveMath.Params curveParams;
     ERC404BondingInstance.TierConfig tierConfig;
     
     bytes32 public passwordHash1;
@@ -45,11 +48,13 @@ contract ERC404BondingInstanceTest is Test {
 
     MockMasterRegistryForStaking public stakingRegistry;
     ERC404StakingModule public stakingModule;
+    CurveParamsComputer public curveComputer;
 
     function setUp() public {
         // Deploy staking infrastructure before pranking as owner
         stakingRegistry = new MockMasterRegistryForStaking();
         stakingModule = new ERC404StakingModule(address(stakingRegistry));
+        curveComputer = new CurveParamsComputer(address(this));
 
         vm.startPrank(owner);
         
@@ -58,7 +63,7 @@ contract ERC404BondingInstanceTest is Test {
         passwordHash2 = keccak256("password2");
         
         // Set up bonding curve parameters (matching CULTEXEC404 defaults)
-        curveParams = ERC404BondingInstance.BondingCurveParams({
+        curveParams = BondingCurveMath.Params({
             initialPrice: 0.025 ether,
             quarticCoeff: 3 gwei,        // 12/4 * 1 gwei
             cubicCoeff: 1333333333,       // 4/3 * 1 gwei  
@@ -82,10 +87,12 @@ contract ERC404BondingInstanceTest is Test {
             tierUnlockTimes: new uint256[](0) // Not used in volume cap mode
         });
         
-        // Deploy instance
+        // Deploy instance via clone + initialize pattern
         // Note: Factory must match msg.sender for DN404Mirror linking to work
         // Since we're pranked as 'owner', factory must be 'owner'
-        instance = new ERC404BondingInstance(
+        ERC404BondingInstance impl = new ERC404BondingInstance();
+        instance = ERC404BondingInstance(payable(LibClone.clone(address(impl))));
+        instance.initialize(
             "Test Token",
             "TEST",
             MAX_SUPPLY,
@@ -110,7 +117,8 @@ contract ERC404BondingInstanceTest is Test {
             60, // tickSpacing
             1_000_000 ether, // unit
             address(stakingModule), // staking module
-            mockLiquidityDeployer // liquidity deployer module
+            mockLiquidityDeployer, // liquidity deployer module
+            address(curveComputer) // curve computer
         );
 
         vm.stopPrank();
@@ -166,7 +174,7 @@ contract ERC404BondingInstanceTest is Test {
 
         vm.startPrank(user1);
         uint256 buyAmount = 1000 * 1e18;
-        uint256 cost = instance.calculateCost(buyAmount);
+        uint256 cost = _getCost(instance, buyAmount);
         uint256 fee = (cost * instance.bondingFeeBps()) / 10000;
         uint256 totalWithFee = cost + fee;
         // Should succeed with valid password (inlined verification)
@@ -176,7 +184,7 @@ contract ERC404BondingInstanceTest is Test {
 
     function test_CalculateCost() public {
         uint256 amount = 1000 * 1e18;
-        uint256 cost = instance.calculateCost(amount);
+        uint256 cost = _getCost(instance, amount);
         assertGt(cost, 0);
     }
 
@@ -194,17 +202,47 @@ contract ERC404BondingInstanceTest is Test {
         
         vm.startPrank(user1);
         uint256 buyAmount = 1000 * 1e18;
-        uint256 cost = instance.calculateCost(buyAmount);
+        uint256 cost = _getCost(instance, buyAmount);
         uint256 fee = (cost * instance.bondingFeeBps()) / 10000;
         uint256 totalWithFee = cost + fee;
         instance.buyBonding{value: totalWithFee}(buyAmount, totalWithFee, false, bytes32(0), bytes(""), 0);
         vm.stopPrank();
 
         // Now calculate refund
-        uint256 refund = instance.calculateRefund(buyAmount);
+        uint256 refund = _getRefund(instance, buyAmount);
         assertGt(refund, 0);
         // Refund equals curve cost (not cost+fee) — curve symmetry preserved
         assertEq(refund, cost);
+    }
+
+    // ========================
+    // Helpers
+    // ========================
+
+    /// @dev Helper: fetch curve cost using curveComputer for a given instance
+    function _getCost(ERC404BondingInstance inst, uint256 amount) internal view returns (uint256) {
+        (uint256 ip, uint256 qc, uint256 cc, uint256 qdc, uint256 nf) = inst.curveParams();
+        BondingCurveMath.Params memory p = BondingCurveMath.Params({
+            initialPrice: ip,
+            quarticCoeff: qc,
+            cubicCoeff: cc,
+            quadraticCoeff: qdc,
+            normalizationFactor: nf
+        });
+        return curveComputer.calculateCost(p, inst.totalBondingSupply(), amount);
+    }
+
+    /// @dev Helper: fetch curve refund using curveComputer for a given instance
+    function _getRefund(ERC404BondingInstance inst, uint256 amount) internal view returns (uint256) {
+        (uint256 ip, uint256 qc, uint256 cc, uint256 qdc, uint256 nf) = inst.curveParams();
+        BondingCurveMath.Params memory p = BondingCurveMath.Params({
+            initialPrice: ip,
+            quarticCoeff: qc,
+            cubicCoeff: cc,
+            quadraticCoeff: qdc,
+            normalizationFactor: nf
+        });
+        return curveComputer.calculateRefund(p, inst.totalBondingSupply(), amount);
     }
 
     // ========================
@@ -230,7 +268,7 @@ contract ERC404BondingInstanceTest is Test {
         vm.deal(user1, 10 ether);
         vm.startPrank(user1);
         uint256 buyAmount = 1000 * 1e18;
-        uint256 cost = instance.calculateCost(buyAmount);
+        uint256 cost = _getCost(instance, buyAmount);
         uint256 fee = (cost * instance.bondingFeeBps()) / 10000;
         uint256 totalWithFee = cost + fee;
 
@@ -247,7 +285,7 @@ contract ERC404BondingInstanceTest is Test {
         vm.deal(user1, 10 ether);
         vm.startPrank(user1);
         uint256 buyAmount = 1000 * 1e18;
-        uint256 cost = instance.calculateCost(buyAmount);
+        uint256 cost = _getCost(instance, buyAmount);
         uint256 fee = (cost * instance.bondingFeeBps()) / 10000;
         uint256 totalWithFee = cost + fee;
 
@@ -263,7 +301,7 @@ contract ERC404BondingInstanceTest is Test {
         vm.deal(user1, 10 ether);
         vm.startPrank(user1);
         uint256 buyAmount = 1000 * 1e18;
-        uint256 cost = instance.calculateCost(buyAmount);
+        uint256 cost = _getCost(instance, buyAmount);
         uint256 fee = (cost * instance.bondingFeeBps()) / 10000;
         uint256 totalWithFee = cost + fee;
 
@@ -282,9 +320,9 @@ contract ERC404BondingInstanceTest is Test {
         vm.deal(user1, 10 ether);
         vm.startPrank(user1);
         uint256 buyAmount = 1000 * 1e18;
-        uint256 cost = instance.calculateCost(buyAmount);
+        uint256 cost = _getCost(instance, buyAmount);
         // Pass maxCost = cost (without fee) — should revert
-        vm.expectRevert("MaxCost exceeded");
+        vm.expectRevert(MaxCostExceeded.selector);
         instance.buyBonding{value: 10 ether}(buyAmount, cost, false, bytes32(0), bytes(""), 0);
         vm.stopPrank();
     }
@@ -292,7 +330,9 @@ contract ERC404BondingInstanceTest is Test {
     function test_BuyBondingWithFee_ZeroFee() public {
         // Deploy instance with 0% fee
         vm.startPrank(owner);
-        ERC404BondingInstance zeroFeeInstance = new ERC404BondingInstance(
+        ERC404BondingInstance zeroFeeImpl = new ERC404BondingInstance();
+        ERC404BondingInstance zeroFeeInstance = ERC404BondingInstance(payable(LibClone.clone(address(zeroFeeImpl))));
+        zeroFeeInstance.initialize(
             "Zero Fee Token",
             "ZFT",
             MAX_SUPPLY,
@@ -317,7 +357,8 @@ contract ERC404BondingInstanceTest is Test {
             60, // tickSpacing
             1_000_000 ether, // unit
             address(stakingModule), // staking module
-            mockLiquidityDeployer // liquidity deployer module
+            mockLiquidityDeployer, // liquidity deployer module
+            address(curveComputer) // curve computer
         );
         uint256 futureTime = block.timestamp + 1 days;
         zeroFeeInstance.setBondingOpenTime(futureTime);
@@ -332,7 +373,7 @@ contract ERC404BondingInstanceTest is Test {
         vm.deal(user1, 10 ether);
         vm.startPrank(user1);
         uint256 buyAmount = 1000 * 1e18;
-        uint256 cost = zeroFeeInstance.calculateCost(buyAmount);
+        uint256 cost = _getCost(zeroFeeInstance, buyAmount);
         zeroFeeInstance.buyBonding{value: cost}(buyAmount, cost, false, bytes32(0), bytes(""), 0);
         vm.stopPrank();
 
@@ -342,7 +383,9 @@ contract ERC404BondingInstanceTest is Test {
     function test_BuyBondingWithFee_NoTreasury() public {
         // Deploy instance with treasury = address(0)
         vm.startPrank(owner);
-        ERC404BondingInstance noTreasuryInstance = new ERC404BondingInstance(
+        ERC404BondingInstance noTreasuryImplInst = new ERC404BondingInstance();
+        ERC404BondingInstance noTreasuryInstance = ERC404BondingInstance(payable(LibClone.clone(address(noTreasuryImplInst))));
+        noTreasuryInstance.initialize(
             "No Treasury Token",
             "NTT",
             MAX_SUPPLY,
@@ -367,7 +410,8 @@ contract ERC404BondingInstanceTest is Test {
             60, // tickSpacing
             1_000_000 ether, // unit
             address(stakingModule), // staking module
-            mockLiquidityDeployer // liquidity deployer module
+            mockLiquidityDeployer, // liquidity deployer module
+            address(curveComputer) // curve computer
         );
         uint256 futureTime = block.timestamp + 1 days;
         noTreasuryInstance.setBondingOpenTime(futureTime);
@@ -379,7 +423,7 @@ contract ERC404BondingInstanceTest is Test {
         vm.deal(user1, 10 ether);
         vm.startPrank(user1);
         uint256 buyAmount = 1000 * 1e18;
-        uint256 cost = noTreasuryInstance.calculateCost(buyAmount);
+        uint256 cost = _getCost(noTreasuryInstance, buyAmount);
         uint256 fee = (cost * noTreasuryInstance.bondingFeeBps()) / 10000;
         uint256 totalWithFee = cost + fee;
         // Should succeed even without treasury — fee just stays in contract
@@ -393,14 +437,14 @@ contract ERC404BondingInstanceTest is Test {
         vm.deal(user1, 10 ether);
         vm.startPrank(user1);
         uint256 buyAmount = 1000 * 1e18;
-        uint256 cost = instance.calculateCost(buyAmount);
+        uint256 cost = _getCost(instance, buyAmount);
         uint256 fee = (cost * instance.bondingFeeBps()) / 10000;
         uint256 totalWithFee = cost + fee;
 
         instance.buyBonding{value: totalWithFee}(buyAmount, totalWithFee, false, bytes32(0), bytes(""), 0);
 
         // Refund should equal exact curve cost (not cost+fee)
-        uint256 refund = instance.calculateRefund(buyAmount);
+        uint256 refund = _getRefund(instance, buyAmount);
         assertEq(refund, cost, "Refund should equal curve cost, preserving solvency");
 
         // Reserve should be sufficient to cover the refund
@@ -414,7 +458,7 @@ contract ERC404BondingInstanceTest is Test {
         vm.deal(user1, 10 ether);
         vm.startPrank(user1);
         uint256 buyAmount = 1000 * 1e18;
-        uint256 cost = instance.calculateCost(buyAmount);
+        uint256 cost = _getCost(instance, buyAmount);
         uint256 fee = (cost * instance.bondingFeeBps()) / 10000;
         uint256 totalWithFee = cost + fee;
 
@@ -435,7 +479,9 @@ contract ERC404BondingInstanceTest is Test {
     function test_GraduationFeeBps_Immutable() public {
         // Deploy instance with specific graduation fee
         vm.startPrank(owner);
-        ERC404BondingInstance customInstance = new ERC404BondingInstance(
+        ERC404BondingInstance customGradImpl = new ERC404BondingInstance();
+        ERC404BondingInstance customInstance = ERC404BondingInstance(payable(LibClone.clone(address(customGradImpl))));
+        customInstance.initialize(
             "Custom Grad Fee",
             "CGF",
             MAX_SUPPLY,
@@ -460,7 +506,8 @@ contract ERC404BondingInstanceTest is Test {
             60, // tickSpacing
             1_000_000 ether, // unit
             address(stakingModule), // staking module
-            mockLiquidityDeployer // liquidity deployer module
+            mockLiquidityDeployer, // liquidity deployer module
+            address(curveComputer) // curve computer
         );
         vm.stopPrank();
 
@@ -469,7 +516,9 @@ contract ERC404BondingInstanceTest is Test {
 
     function test_GraduationFeeBps_ZeroAllowed() public {
         vm.startPrank(owner);
-        ERC404BondingInstance zeroGradInstance = new ERC404BondingInstance(
+        ERC404BondingInstance zeroGradImpl = new ERC404BondingInstance();
+        ERC404BondingInstance zeroGradInstance = ERC404BondingInstance(payable(LibClone.clone(address(zeroGradImpl))));
+        zeroGradInstance.initialize(
             "Zero Grad Fee",
             "ZGF",
             MAX_SUPPLY,
@@ -494,7 +543,8 @@ contract ERC404BondingInstanceTest is Test {
             60, // tickSpacing
             1_000_000 ether, // unit
             address(stakingModule), // staking module
-            mockLiquidityDeployer // liquidity deployer module
+            mockLiquidityDeployer, // liquidity deployer module
+            address(curveComputer) // curve computer
         );
         vm.stopPrank();
 
@@ -552,7 +602,9 @@ contract ERC404BondingInstanceTest is Test {
 
     function test_PolBps_Immutable() public {
         vm.startPrank(owner);
-        ERC404BondingInstance customInstance = new ERC404BondingInstance(
+        ERC404BondingInstance customPolImpl = new ERC404BondingInstance();
+        ERC404BondingInstance customInstance = ERC404BondingInstance(payable(LibClone.clone(address(customPolImpl))));
+        customInstance.initialize(
             "Custom POL",
             "CPOL",
             MAX_SUPPLY,
@@ -577,7 +629,8 @@ contract ERC404BondingInstanceTest is Test {
             60, // tickSpacing
             1_000_000 ether, // unit
             address(stakingModule), // staking module
-            mockLiquidityDeployer // liquidity deployer module
+            mockLiquidityDeployer, // liquidity deployer module
+            address(curveComputer) // curve computer
         );
         vm.stopPrank();
 
@@ -611,7 +664,9 @@ contract ERC404BondingInstanceTest is Test {
 
     function test_POL_ZeroBps() public {
         vm.startPrank(owner);
-        ERC404BondingInstance zeroPOL = new ERC404BondingInstance(
+        ERC404BondingInstance zeroPOLImpl = new ERC404BondingInstance();
+        ERC404BondingInstance zeroPOL = ERC404BondingInstance(payable(LibClone.clone(address(zeroPOLImpl))));
+        zeroPOL.initialize(
             "Zero POL",
             "ZPOL",
             MAX_SUPPLY,
@@ -636,7 +691,8 @@ contract ERC404BondingInstanceTest is Test {
             60, // tickSpacing
             1_000_000 ether, // unit
             address(stakingModule), // staking module
-            mockLiquidityDeployer // liquidity deployer module
+            mockLiquidityDeployer, // liquidity deployer module
+            address(curveComputer) // curve computer
         );
         vm.stopPrank();
 
@@ -650,7 +706,9 @@ contract ERC404BondingInstanceTest is Test {
 
     function test_POL_NoTreasury() public {
         vm.startPrank(owner);
-        ERC404BondingInstance noTreasuryPOL = new ERC404BondingInstance(
+        ERC404BondingInstance noTreasuryPOLImpl = new ERC404BondingInstance();
+        ERC404BondingInstance noTreasuryPOL = ERC404BondingInstance(payable(LibClone.clone(address(noTreasuryPOLImpl))));
+        noTreasuryPOL.initialize(
             "No Treasury POL",
             "NTPOL",
             MAX_SUPPLY,
@@ -675,7 +733,8 @@ contract ERC404BondingInstanceTest is Test {
             60, // tickSpacing
             1_000_000 ether, // unit
             address(stakingModule), // staking module
-            mockLiquidityDeployer // liquidity deployer module
+            mockLiquidityDeployer, // liquidity deployer module
+            address(curveComputer) // curve computer
         );
         vm.stopPrank();
 
@@ -691,7 +750,7 @@ contract ERC404BondingInstanceTest is Test {
     function test_deployLiquidity_noParams() public {
         // Verifies deployLiquidity() takes zero arguments and reverts properly
         // when bonding hasn't started
-        vm.expectRevert("Bonding not configured");
+        vm.expectRevert(BondingNotConfigured.selector);
         instance.deployLiquidity();
     }
 
@@ -702,12 +761,12 @@ contract ERC404BondingInstanceTest is Test {
         vm.deal(user1, 10 ether);
         vm.startPrank(user1);
         uint256 buyAmount = 1000 * 1e18;
-        uint256 cost = instance.calculateCost(buyAmount);
+        uint256 cost = _getCost(instance, buyAmount);
         uint256 fee = (cost * instance.bondingFeeBps()) / 10000;
         instance.buyBonding{value: cost + fee}(buyAmount, cost + fee, false, bytes32(0), bytes(""), 0);
 
         // Now try to deploy liquidity as non-owner
-        vm.expectRevert("Only owner can deploy before maturity/full");
+        vm.expectRevert(OnlyOwnerBeforeMaturity.selector);
         instance.deployLiquidity();
         vm.stopPrank();
     }
@@ -715,7 +774,9 @@ contract ERC404BondingInstanceTest is Test {
     function test_deployLiquidity_requiresHook() public {
         // Deploy instance with no hook
         vm.startPrank(owner);
-        ERC404BondingInstance noHookInstance = new ERC404BondingInstance(
+        ERC404BondingInstance noHookImpl = new ERC404BondingInstance();
+        ERC404BondingInstance noHookInstance = ERC404BondingInstance(payable(LibClone.clone(address(noHookImpl))));
+        noHookInstance.initialize(
             "No Hook",
             "NH",
             MAX_SUPPLY,
@@ -740,7 +801,8 @@ contract ERC404BondingInstanceTest is Test {
             60,
             1_000_000 ether, // unit
             address(stakingModule), // staking module
-            mockLiquidityDeployer // liquidity deployer module
+            mockLiquidityDeployer, // liquidity deployer module
+            address(curveComputer) // curve computer
         );
         uint256 futureTime = block.timestamp + 1 days;
         noHookInstance.setBondingOpenTime(futureTime);
@@ -751,7 +813,7 @@ contract ERC404BondingInstanceTest is Test {
         vm.warp(futureTime + 1);
 
         vm.prank(owner);
-        vm.expectRevert("Hook not set");
+        vm.expectRevert(HookNotSet.selector);
         noHookInstance.deployLiquidity();
     }
 
@@ -759,7 +821,7 @@ contract ERC404BondingInstanceTest is Test {
         _activateBonding();
         // Instance has no reserve (no buys happened), so reserve == 0
         vm.prank(owner);
-        vm.expectRevert("No reserve");
+        vm.expectRevert(NoReserve.selector);
         instance.deployLiquidity();
     }
 }

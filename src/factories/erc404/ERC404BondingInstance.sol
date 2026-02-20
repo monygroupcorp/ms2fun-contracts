@@ -6,18 +6,65 @@ import { DN404Mirror } from "dn404/src/DN404Mirror.sol";
 import { Ownable } from "solady/auth/Ownable.sol";
 import { ReentrancyGuard } from "solady/utils/ReentrancyGuard.sol";
 import { SafeTransferLib } from "solady/utils/SafeTransferLib.sol";
-import { FixedPointMathLib } from "solady/utils/FixedPointMathLib.sol";
 import { BondingCurveMath } from "./libraries/BondingCurveMath.sol";
+import { CurveParamsComputer } from "./CurveParamsComputer.sol";
 import { ERC404StakingModule } from "./ERC404StakingModule.sol";
 import { LiquidityDeployerModule } from "./LiquidityDeployerModule.sol";
 import { IPoolManager } from "v4-core/interfaces/IPoolManager.sol";
-import { PoolKey } from "v4-core/types/PoolKey.sol";
-import { Currency, CurrencyLibrary } from "v4-core/types/Currency.sol";
 import { IHooks } from "v4-core/interfaces/IHooks.sol";
 import { IAlignmentVault } from "../../interfaces/IAlignmentVault.sol";
 import { IGlobalMessageRegistry } from "../../registry/interfaces/IGlobalMessageRegistry.sol";
-import { IMasterRegistry } from "../../master/interfaces/IMasterRegistry.sol";
 import { IInstanceLifecycle, TYPE_ERC404, STATE_BONDING, STATE_PAUSED, STATE_GRADUATED } from "../../interfaces/IInstanceLifecycle.sol";
+
+// Custom errors (replaces string literals in require statements to reduce bytecode)
+error AlreadyInitialized();
+error AlreadyDeployed();
+error BondingEnded();
+error BondingNotActive();
+error BondingNotConfigured();
+error CannotActivateAfterLiquidityDeployed();
+error ExceedsBonding();
+error HookAlreadySet();
+error HookMustBeSetFirst();
+error HookNotConfigured();
+error HookNotSet();
+error InsufficientBalance();
+error InsufficientTokenBalance();
+error InvalidCurveComputer();
+error InvalidFactory();
+error InvalidGlobalMessageRegistry();
+error InvalidHook();
+error InvalidLiquidityDeployer();
+error InvalidMaxSupply();
+error InvalidOwner();
+error InvalidPasswordHash();
+error InvalidPassword();
+error InvalidPoolManager();
+error InvalidRefund();
+error InvalidReservePercent();
+error InvalidStakingModule();
+error InvalidVault();
+error InvalidWETH();
+error LowETHValue();
+error MaturityMustBeAfterOpenTime();
+error MaxCostExceeded();
+error NoReserve();
+error NoTiers();
+error OnlyOwnerBeforeMaturity();
+error OpenTimeMustBeSetFirst();
+error OpenTimeNotSet();
+error TierConfigMismatch();
+error TierNotAvailableYet();
+error TimeMustBeInFuture();
+error TokenAmountMustBePositive();
+error TokenAmountMustRepresentNFT();
+error TooEarly();
+error TransactionExpired();
+error VaultRequirementsNotMet();
+error VolumeCapExceeded();
+error BalanceMismatchAfterReroll();
+error AmountExceedsAvailableBalance();
+error AmountMustBePositive();
 
 /**
  * @title ERC404BondingInstance
@@ -25,8 +72,6 @@ import { IInstanceLifecycle, TYPE_ERC404, STATE_BONDING, STATE_PAUSED, STATE_GRA
  * @dev Extends DN404 with bonding curve mechanics, message system, and Uniswap V4 integration
  */
 contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IInstanceLifecycle {
-    using BondingCurveMath for BondingCurveMath.Params;
-    using CurrencyLibrary for Currency;
 
     // ┌─────────────────────────┐
     // │         Types           │
@@ -35,14 +80,6 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IInstanceLife
     enum TierType {
         VOLUME_CAP,    // Password unlocks higher purchase limits
         TIME_BASED     // Password allows early access
-    }
-
-    struct BondingCurveParams {
-        uint256 initialPrice;
-        uint256 quarticCoeff;
-        uint256 cubicCoeff;
-        uint256 quadraticCoeff;
-        uint256 normalizationFactor;
     }
 
     struct TierConfig {
@@ -56,37 +93,38 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IInstanceLife
     // │      State Variables    │
     // └─────────────────────────┘
 
+    bool private _initialized;
+
     string private _name;
     string private _symbol;
-    
-    uint256 public immutable MAX_SUPPLY;
-    uint256 public immutable LIQUIDITY_RESERVE;
-    BondingCurveMath.Params public curveParams; // Storage (set in constructor, never changed)
-    TierConfig public tierConfig; // Storage (set in constructor, never changed)
+
+    uint256 public MAX_SUPPLY;
+    uint256 public LIQUIDITY_RESERVE;
+    BondingCurveMath.Params public curveParams; // Storage (set in initialize, never changed)
+    TierConfig public tierConfig; // Storage (set in initialize, never changed)
     uint256 public tierCount;
 
     // Pool configuration (from graduation profile)
-    uint24 public immutable poolFee;
-    int24 public immutable tickSpacing;
-    uint256 public immutable UNIT;
+    uint24 public poolFee;
+    int24 public tickSpacing;
+    uint256 public UNIT;
 
-    IPoolManager public immutable v4PoolManager;
-    IHooks public v4Hook; // Can be set after deployment
-    address public immutable factory;
-    address public immutable weth;
-    IAlignmentVault public immutable vault;
-    IMasterRegistry public immutable masterRegistry;
-    IGlobalMessageRegistry private cachedGlobalRegistry; // Lazy-loaded from masterRegistry
+    address public v4PoolManager;
+    address public v4Hook; // Can be set after deployment
+    address public factory;
+    address public weth;
+    IAlignmentVault public vault;
+    IGlobalMessageRegistry public globalMessageRegistry;
 
     // Protocol revenue
-    address public immutable protocolTreasury;
-    uint256 public immutable bondingFeeBps;
-    uint256 public immutable graduationFeeBps;
-    uint256 public immutable polBps;
+    address public protocolTreasury;
+    uint256 public bondingFeeBps;
+    uint256 public graduationFeeBps;
+    uint256 public polBps;
 
     // Creator incentives (factory creator's share of graduation fee)
-    address public immutable factoryCreator;
-    uint256 public immutable creatorGraduationFeeBps;
+    address public factoryCreator;
+    uint256 public creatorGraduationFeeBps;
 
     // Customization
     string public styleUri;
@@ -103,18 +141,16 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IInstanceLife
     mapping(address => uint256) public userTierUnlocked;    // user => highest tier unlocked
     mapping(address => uint256) public userPurchaseVolume;   // For volume cap mode
 
-    // Free mint system (optional)
-    uint256 public freeSupply;
-    mapping(address => bool) public freeMint;
-
     // Reroll system
-    mapping(address => uint256) public rerollEscrow;  // user => tokens held for reroll
 
     // Staking delegation
-    ERC404StakingModule public immutable stakingModule;
+    ERC404StakingModule public stakingModule;
 
     // V4 liquidity deployment singleton
-    LiquidityDeployerModule public immutable liquidityDeployer;
+    LiquidityDeployerModule public liquidityDeployer;
+
+    // Curve math computer (external)
+    CurveParamsComputer public curveComputer;
 
     // Events
     event BondingSale(address indexed user, uint256 amount, uint256 cost, bool isBuy);
@@ -127,27 +163,39 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IInstanceLife
     event StakingEnabled();
     event StakerRewardsClaimed(address indexed user, uint256 rewardAmount);
     event BondingFeePaid(address indexed buyer, uint256 feeAmount);
-    event GraduationFeePaid(address indexed treasury, uint256 amount);
-    event CreatorGraduationFeePaid(address indexed factoryCreator, uint256 amount);
-    event ProtocolLiquidityDeployed(address indexed treasury, uint256 tokenAmount, uint256 ethAmount);
     event V4HookSet(address indexed hook);
 
     // ┌─────────────────────────┐
     // │      Constructor        │
     // └─────────────────────────┘
 
-    constructor(
+    /**
+     * @notice Locks the implementation contract so it cannot be initialized directly.
+     */
+    constructor() {
+        _initialized = true;
+    }
+
+    // ┌─────────────────────────┐
+    // │      Initialize         │
+    // └─────────────────────────┘
+
+    /**
+     * @notice Initialize a clone instance with all constructor params.
+     * @dev Called by the factory immediately after cloning. Can only be called once.
+     */
+    function initialize(
         string memory name_,
         string memory symbol_,
         uint256 _maxSupply,
         uint256 _liquidityReservePercent,
-        BondingCurveParams memory _curveParams,
+        BondingCurveMath.Params memory _curveParams,
         TierConfig memory _tierConfig,
         address _v4PoolManager,
         address _v4Hook,
         address _weth,
         address _factory,
-        address _masterRegistry,
+        address _globalMessageRegistry,
         address _vault,
         address _owner,
         string memory _styleUri,
@@ -159,25 +207,27 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IInstanceLife
         uint256 _creatorGraduationFeeBps,
         uint24 _poolFee,
         int24 _tickSpacing,
-        uint256 _unit,
+        uint256 _tokenUnit,
         address _stakingModule,
-        address _liquidityDeployer
-    ) {
-        require(_maxSupply > 0, "Invalid max supply");
-        require(_liquidityReservePercent < 100, "Invalid reserve percent");
-        require(_v4PoolManager != address(0), "Invalid pool manager");
-        require(_weth != address(0), "Invalid WETH");
+        address _liquidityDeployer,
+        address _curveComputer
+    ) external {
+        if (_initialized) revert AlreadyInitialized();
+        _initialized = true;
+
+        if (_maxSupply == 0) revert InvalidMaxSupply();
+        if (_liquidityReservePercent >= 100) revert InvalidReservePercent();
+        if (_v4PoolManager == address(0)) revert InvalidPoolManager();
+        if (_weth == address(0)) revert InvalidWETH();
         // Hook can be address(0) initially and set later
-        require(_factory != address(0), "Invalid factory");
-        require(_masterRegistry != address(0), "Invalid master registry");
-        require(_owner != address(0), "Invalid owner");
-        require(_tierConfig.passwordHashes.length > 0, "No tiers");
-        require(
-            _tierConfig.tierType == TierType.VOLUME_CAP
-                ? _tierConfig.volumeCaps.length == _tierConfig.passwordHashes.length
-                : _tierConfig.tierUnlockTimes.length == _tierConfig.passwordHashes.length,
-            "Tier config mismatch"
-        );
+        if (_factory == address(0)) revert InvalidFactory();
+        if (_globalMessageRegistry == address(0)) revert InvalidGlobalMessageRegistry();
+        if (_owner == address(0)) revert InvalidOwner();
+        if (_tierConfig.passwordHashes.length == 0) revert NoTiers();
+        if (_tierConfig.tierType == TierType.VOLUME_CAP
+                ? _tierConfig.volumeCaps.length != _tierConfig.passwordHashes.length
+                : _tierConfig.tierUnlockTimes.length != _tierConfig.passwordHashes.length
+        ) revert TierConfigMismatch();
 
         _initializeOwner(_owner);
 
@@ -185,22 +235,16 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IInstanceLife
         _symbol = symbol_;
         MAX_SUPPLY = _maxSupply;
         LIQUIDITY_RESERVE = (_maxSupply * _liquidityReservePercent) / 100;
-        curveParams = BondingCurveMath.Params({
-            initialPrice: _curveParams.initialPrice,
-            quarticCoeff: _curveParams.quarticCoeff,
-            cubicCoeff: _curveParams.cubicCoeff,
-            quadraticCoeff: _curveParams.quadraticCoeff,
-            normalizationFactor: _curveParams.normalizationFactor
-        });
+        curveParams = _curveParams;
         tierConfig = _tierConfig;
         tierCount = _tierConfig.passwordHashes.length;
 
-        v4PoolManager = IPoolManager(_v4PoolManager);
-        v4Hook = IHooks(_v4Hook); // Can be address(0)
+        v4PoolManager = _v4PoolManager;
+        v4Hook = _v4Hook; // Can be address(0)
         weth = _weth;
         factory = _factory;
-        masterRegistry = IMasterRegistry(_masterRegistry);
-        require(_vault != address(0), "Invalid vault");
+        globalMessageRegistry = IGlobalMessageRegistry(_globalMessageRegistry);
+        if (_vault == address(0)) revert InvalidVault();
         vault = IAlignmentVault(payable(_vault));
         styleUri = _styleUri;
         protocolTreasury = _protocolTreasury;
@@ -211,15 +255,17 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IInstanceLife
         creatorGraduationFeeBps = _creatorGraduationFeeBps;
         poolFee = _poolFee;
         tickSpacing = _tickSpacing;
-        UNIT = _unit;
-        require(_stakingModule != address(0), "Invalid staking module");
+        UNIT = _tokenUnit;
+        if (_stakingModule == address(0)) revert InvalidStakingModule();
         stakingModule = ERC404StakingModule(_stakingModule);
-        require(_liquidityDeployer != address(0), "Invalid liquidity deployer");
+        if (_liquidityDeployer == address(0)) revert InvalidLiquidityDeployer();
         liquidityDeployer = LiquidityDeployerModule(payable(_liquidityDeployer));
+        if (_curveComputer == address(0)) revert InvalidCurveComputer();
+        curveComputer = CurveParamsComputer(_curveComputer);
 
         // Initialize password hash mapping
         for (uint256 i = 0; i < _tierConfig.passwordHashes.length; i++) {
-            require(_tierConfig.passwordHashes[i] != bytes32(0), "Invalid password hash");
+            if (_tierConfig.passwordHashes[i] == bytes32(0)) revert InvalidPasswordHash();
             tierByPasswordHash[_tierConfig.passwordHashes[i]] = i + 1; // Tier 1-indexed
         }
 
@@ -240,7 +286,7 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IInstanceLife
      * @param timestamp Unix timestamp for when bonding curve should open
      */
     function setBondingOpenTime(uint256 timestamp) external onlyOwner {
-        require(timestamp > block.timestamp, "Time must be in future");
+        if (timestamp <= block.timestamp) revert TimeMustBeInFuture();
         bondingOpenTime = timestamp;
         emit BondingOpenTimeSet(timestamp);
     }
@@ -251,9 +297,9 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IInstanceLife
      * @param timestamp Unix timestamp for when bonding curve matures
      */
     function setBondingMaturityTime(uint256 timestamp) external onlyOwner {
-        require(timestamp > block.timestamp, "Time must be in future");
-        require(bondingOpenTime != 0, "Open time must be set first");
-        require(timestamp > bondingOpenTime, "Maturity must be after open time");
+        if (timestamp <= block.timestamp) revert TimeMustBeInFuture();
+        if (bondingOpenTime == 0) revert OpenTimeMustBeSetFirst();
+        if (timestamp <= bondingOpenTime) revert MaturityMustBeAfterOpenTime();
         bondingMaturityTime = timestamp;
         emit BondingMaturityTimeSet(timestamp);
     }
@@ -264,10 +310,10 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IInstanceLife
      * @param _active Whether bonding curve is active
      */
     function setBondingActive(bool _active) external onlyOwner {
-        require(bondingOpenTime != 0, "Open time not set");
+        if (bondingOpenTime == 0) revert OpenTimeNotSet();
         if (_active) {
-            require(address(v4Hook) != address(0), "Hook must be set before activating bonding");
-            require(liquidityPool == address(0), "Cannot activate bonding after liquidity deployed");
+            if (v4Hook == address(0)) revert HookMustBeSetFirst();
+            if (liquidityPool != address(0)) revert CannotActivateAfterLiquidityDeployed();
         }
         bondingActive = _active;
         emit BondingActiveChanged(_active);
@@ -280,28 +326,10 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IInstanceLife
      * @param _hook Hook address
      */
     function setV4Hook(address _hook) external onlyOwner {
-        require(_hook != address(0), "Invalid hook");
-        require(address(v4Hook) == address(0), "Hook already set");
-        v4Hook = IHooks(_hook);
+        if (_hook == address(0)) revert InvalidHook();
+        if (v4Hook != address(0)) revert HookAlreadySet();
+        v4Hook = _hook;
         emit V4HookSet(_hook);
-    }
-
-    // ┌─────────────────────────┐
-    // │  Global Message Helpers │
-    // └─────────────────────────┘
-
-    /**
-     * @notice Internal helper to lazy-load global message registry
-     * @dev Caches registry address to avoid repeated external calls
-     * @return GlobalMessageRegistry instance
-     */
-    function _getGlobalMessageRegistry() private returns (IGlobalMessageRegistry) {
-        if (address(cachedGlobalRegistry) == address(0)) {
-            address registryAddr = masterRegistry.getGlobalMessageRegistry();
-            require(registryAddr != address(0), "Global registry not set");
-            cachedGlobalRegistry = IGlobalMessageRegistry(registryAddr);
-        }
-        return cachedGlobalRegistry;
     }
 
     // ┌─────────────────────────┐
@@ -311,53 +339,6 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IInstanceLife
     // NOTE: Tier unlocking is now verified inline during buyBonding/sellBonding
     // to reduce gas costs and simplify the UX. Users provide password hash directly
     // at purchase time, eliminating the need for a separate unlock transaction.
-
-    /**
-     * @notice Check if user can access a tier (for querying purposes)
-     * @param user The user address
-     * @param passwordHash The password hash (can be bytes32(0) for public tier)
-     * @return canAccess Whether user can access the tier
-     */
-    function canAccessTier(address user, bytes32 passwordHash) external view returns (bool canAccess) {
-        if (liquidityPool != address(0)) return true; // Bonding ended, no restrictions
-
-        uint256 tier = passwordHash == bytes32(0) ? 0 : tierByPasswordHash[passwordHash];
-        if (tier == 0 && passwordHash != bytes32(0)) return false;
-
-        if (tierConfig.tierType == TierType.VOLUME_CAP) {
-            // For VOLUME_CAP mode, tier is accessed by providing password during purchase
-            // No pre-unlock tracking needed. Just verify tier exists.
-            return tier == 0 || tier <= tierCount;
-        } else {
-            // For TIME_BASED mode, check if unlock time has passed
-            if (bondingOpenTime == 0) return false;
-            if (tier == 0) return true; // Public tier always accessible
-            uint256 tierUnlockTime = bondingOpenTime + tierConfig.tierUnlockTimes[tier - 1];
-            return block.timestamp >= tierUnlockTime;
-        }
-    }
-
-    // ┌─────────────────────────┐
-    // │   Bonding Curve Math    │
-    // └─────────────────────────┘
-
-    /**
-     * @notice Calculate cost to buy tokens
-     * @param amount Amount of tokens to buy
-     * @return cost ETH cost
-     */
-    function calculateCost(uint256 amount) public view returns (uint256) {
-        return BondingCurveMath.calculateCost(curveParams, totalBondingSupply, amount);
-    }
-
-    /**
-     * @notice Calculate refund for selling tokens
-     * @param amount Amount of tokens to sell
-     * @return refund ETH refund
-     */
-    function calculateRefund(uint256 amount) public view returns (uint256) {
-        return BondingCurveMath.calculateRefund(curveParams, totalBondingSupply, amount);
-    }
 
     // ┌─────────────────────────┐
     // │    Buy/Sell Functions   │
@@ -380,34 +361,34 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IInstanceLife
         bytes calldata messageData,
         uint256 deadline
     ) external payable nonReentrant {
-        require(deadline == 0 || block.timestamp <= deadline, "Transaction expired");
-        require(bondingActive, "Bonding not active");
-        require(liquidityPool == address(0), "Bonding ended");
-        require(address(v4Hook) != address(0), "Hook not configured");
-        require(totalBondingSupply + amount <= MAX_SUPPLY - LIQUIDITY_RESERVE, "Exceeds bonding");
+        if (deadline != 0 && block.timestamp > deadline) revert TransactionExpired();
+        if (!bondingActive) revert BondingNotActive();
+        if (liquidityPool != address(0)) revert BondingEnded();
+        if (v4Hook == address(0)) revert HookNotConfigured();
+        if (totalBondingSupply + amount > MAX_SUPPLY - LIQUIDITY_RESERVE) revert ExceedsBonding();
 
         // Check tier access
         uint256 tier = passwordHash == bytes32(0) ? 0 : tierByPasswordHash[passwordHash];
-        require(tier != 0 || passwordHash == bytes32(0), "Invalid password");
+        if (tier == 0 && passwordHash != bytes32(0)) revert InvalidPassword();
 
         if (tierConfig.tierType == TierType.VOLUME_CAP) {
             // Verify user hasn't exceeded volume cap for this tier
             uint256 cap = tier == 0 ? type(uint256).max : tierConfig.volumeCaps[tier - 1];
-            require(userPurchaseVolume[msg.sender] + amount <= cap, "Volume cap exceeded");
+            if (userPurchaseVolume[msg.sender] + amount > cap) revert VolumeCapExceeded();
         } else {
             // For TIME_BASED: verify tier unlock time has passed
-            require(bondingOpenTime != 0, "Bonding not configured");
+            if (bondingOpenTime == 0) revert BondingNotConfigured();
             if (tier > 0) {
                 uint256 tierUnlockTime = bondingOpenTime + tierConfig.tierUnlockTimes[tier - 1];
-                require(block.timestamp >= tierUnlockTime, "Tier not available yet");
+                if (block.timestamp < tierUnlockTime) revert TierNotAvailableYet();
             }
         }
 
-        uint256 totalCost = calculateCost(amount);
+        uint256 totalCost = curveComputer.calculateCost(curveParams, totalBondingSupply, amount);
         uint256 bondingFee = (totalCost * bondingFeeBps) / 10000;
         uint256 totalWithFee = totalCost + bondingFee;
-        require(maxCost >= totalWithFee, "MaxCost exceeded");
-        require(msg.value >= totalWithFee, "Low ETH value");
+        if (maxCost < totalWithFee) revert MaxCostExceeded();
+        if (msg.value < totalWithFee) revert LowETHValue();
 
         // Handle skipNFT
         bool originalSkipNFT = mintNFT ? getSkipNFT(msg.sender) : false;
@@ -415,15 +396,7 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IInstanceLife
             _setSkipNFT(msg.sender, false);
         }
 
-        // Handle free mints if applicable
-        if (freeSupply > UNIT && !freeMint[msg.sender]) {
-            totalBondingSupply += amount;
-            amount += UNIT;
-            freeSupply -= UNIT;
-            freeMint[msg.sender] = true;
-        } else {
-            totalBondingSupply += amount;
-        }
+        totalBondingSupply += amount;
 
         // Transfer tokens
         _transfer(address(this), msg.sender, amount);
@@ -442,7 +415,7 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IInstanceLife
 
         // Forward message to global registry
         if (messageData.length > 0) {
-            _getGlobalMessageRegistry().postForAction(msg.sender, address(this), messageData);
+            globalMessageRegistry.postForAction(msg.sender, address(this), messageData);
         }
 
         // Reset skipNFT
@@ -473,10 +446,10 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IInstanceLife
         bytes calldata messageData,
         uint256 deadline
     ) external nonReentrant {
-        require(deadline == 0 || block.timestamp <= deadline, "Transaction expired");
-        require(bondingActive, "Bonding not active");
-        require(liquidityPool == address(0), "Bonding ended");
-        require(address(v4Hook) != address(0), "Hook not configured");
+        if (deadline != 0 && block.timestamp > deadline) revert TransactionExpired();
+        if (!bondingActive) revert BondingNotActive();
+        if (liquidityPool != address(0)) revert BondingEnded();
+        if (v4Hook == address(0)) revert HookNotConfigured();
 
         // Lock sells when bonding curve is full to preserve best case scenario for liquidity deployment
         /// @dev Sells are intentionally blocked when bonding curve is full. This ensures
@@ -484,30 +457,26 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IInstanceLife
         /// supply from decreasing after curve completion, maintaining the bonding curve's
         /// terminal state until migration to Uniswap V4 liquidity.
         uint256 maxBondingSupply = MAX_SUPPLY - LIQUIDITY_RESERVE;
-        require(totalBondingSupply < maxBondingSupply, "Bonding curve full - sells locked");
+        if (totalBondingSupply >= maxBondingSupply) revert ExceedsBonding();
 
         // Check tier access (for sellBonding, mainly TIME_BASED tiers)
         uint256 tier = passwordHash == bytes32(0) ? 0 : tierByPasswordHash[passwordHash];
-        require(tier != 0 || passwordHash == bytes32(0), "Invalid password");
+        if (tier == 0 && passwordHash != bytes32(0)) revert InvalidPassword();
 
         if (tierConfig.tierType == TierType.TIME_BASED) {
-            require(bondingOpenTime != 0, "Bonding not configured");
+            if (bondingOpenTime == 0) revert BondingNotConfigured();
             if (tier > 0) {
                 uint256 tierUnlockTime = bondingOpenTime + tierConfig.tierUnlockTimes[tier - 1];
-                require(block.timestamp >= tierUnlockTime, "Tier not available yet");
+                if (block.timestamp < tierUnlockTime) revert TierNotAvailableYet();
             }
         }
         // For VOLUME_CAP, no special restrictions on selling
 
         uint256 balance = balanceOf(msg.sender);
-        require(balance >= amount, "Insufficient balance");
-        
-        if (freeMint[msg.sender] && (balance - amount < UNIT)) {
-            revert("Cannot sell free mint tokens");
-        }
+        if (balance < amount) revert InsufficientBalance();
 
-        uint256 refund = calculateRefund(amount);
-        require(refund >= minRefund && reserve >= refund, "Invalid refund");
+        uint256 refund = curveComputer.calculateRefund(curveParams, totalBondingSupply, amount);
+        if (refund < minRefund || reserve < refund) revert InvalidRefund();
 
         // Transfer tokens
         _transfer(msg.sender, address(this), amount);
@@ -516,7 +485,7 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IInstanceLife
 
         // Forward message to global registry
         if (messageData.length > 0) {
-            _getGlobalMessageRegistry().postForAction(msg.sender, address(this), messageData);
+            globalMessageRegistry.postForAction(msg.sender, address(this), messageData);
         }
 
         // Refund ETH (no tax - handled by hook)
@@ -549,86 +518,6 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IInstanceLife
         return _symbol;
     }
 
-    /**
-     * @notice Check if liquidity deployment is permissionless (anyone can call)
-     * @dev Deployment becomes permissionless when:
-     *      - Bonding curve is full (totalBondingSupply >= MAX_SUPPLY - LIQUIDITY_RESERVE), OR
-     *      - Maturity time is reached (block.timestamp >= bondingMaturityTime)
-     * @return isPermissionless Whether anyone can deploy liquidity
-     * @return reason Human-readable reason ("full", "matured", "owner_only", or "already_deployed")
-     */
-    function canDeployPermissionless() external view returns (
-        bool isPermissionless,
-        string memory reason
-    ) {
-        if (liquidityPool != address(0)) {
-            return (false, "already_deployed");
-        }
-
-        uint256 maxBondingSupply = MAX_SUPPLY - LIQUIDITY_RESERVE;
-        bool isFull = totalBondingSupply >= maxBondingSupply;
-        bool isMatured = bondingMaturityTime != 0 && block.timestamp >= bondingMaturityTime;
-
-        if (isFull) {
-            return (true, "full");
-        } else if (isMatured) {
-            return (true, "matured");
-        } else {
-            return (false, "owner_only");
-        }
-    }
-
-    /// @notice Returns data needed for project card display
-    /// @dev Implements IInstance interface for QueryAggregator compatibility
-    /// @return currentPrice Current bonding curve price
-    /// @return totalSupply Current bonding supply
-    /// @return maxSupply Maximum supply (MAX_SUPPLY constant)
-    /// @return isActive Whether bonding is active and open
-    /// @return extraData Reserved for future use (empty for now)
-    function getCardData() external view returns (
-        uint256 currentPrice,
-        uint256 totalSupply,
-        uint256 maxSupply,
-        bool isActive,
-        bytes memory extraData
-    ) {
-        currentPrice = calculateCost(1 ether); // Price for 1 token
-        totalSupply = totalBondingSupply;
-        maxSupply = MAX_SUPPLY;
-        isActive = bondingActive && bondingOpenTime != 0 && block.timestamp >= bondingOpenTime && liquidityPool == address(0);
-        extraData = "";
-    }
-
-    /**
-     * @notice Get total supply information
-     * @return maxSupply Maximum total supply
-     * @return liquidityReserve Liquidity reserve amount
-     * @return maxBondingSupply Maximum bonding supply
-     * @return currentBondingSupply Current bonding supply
-     * @return availableBondingSupply Available bonding supply
-     * @return totalERC20Supply Current total ERC20 supply
-     */
-    function getSupplyInfo() external view returns (
-        uint256 maxSupply,
-        uint256 liquidityReserve,
-        uint256 maxBondingSupply,
-        uint256 currentBondingSupply,
-        uint256 availableBondingSupply,
-        uint256 totalERC20Supply
-    ) {
-        uint256 maxBonding = MAX_SUPPLY - LIQUIDITY_RESERVE;
-        uint256 available = maxBonding > totalBondingSupply ? maxBonding - totalBondingSupply : 0;
-        DN404Storage storage $ = _getDN404Storage();
-        return (
-            MAX_SUPPLY,
-            LIQUIDITY_RESERVE,
-            maxBonding,
-            totalBondingSupply,
-            available,
-            $.totalSupply
-        );
-    }
-
     // ┌─────────────────────────┐
     // │   Style Management      │
     // └─────────────────────────┘
@@ -646,75 +535,56 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IInstanceLife
     // └─────────────────────────┘
 
     /**
-     * @notice Reroll selected NFTs with protection for exempted IDs
-     * @dev User provides tokens for reroll, exempted NFTs are protected from changes,
-     *      unused tokens are returned after reroll completes
-     * @param tokenAmount Amount of tokens to use for reroll (must match current balance for reroll)
-     * @param exemptedNFTIds Array of NFT IDs to protect from reroll
+     * @notice Convenience function to reroll NFTs with optional shielding of specific IDs
+     * @dev Users can also reroll manually by calling
+     *      setSkipNFT(false), transferring balance to self, then setSkipNFT(true).
+     *      Manual reroll cannot shield specific NFTs - only this function provides that feature.
+     * @param tokenAmount Amount of tokens to reroll (must match current balance)
+     * @param exemptedNFTIds Array of NFT IDs to protect from reroll (unique feature)
      */
     function rerollSelectedNFTs(
         uint256 tokenAmount,
         uint256[] calldata exemptedNFTIds
     ) external nonReentrant {
-        require(tokenAmount > 0, "Token amount must be > 0");
-        require(balanceOf(msg.sender) >= tokenAmount, "Insufficient token balance");
+        if (tokenAmount == 0) revert TokenAmountMustBePositive();
+        if (balanceOf(msg.sender) < tokenAmount) revert InsufficientTokenBalance();
 
         DN404Storage storage $ = _getDN404Storage();
         AddressData storage addressData = $.addressData[msg.sender];
 
-        // Calculate how many NFTs the token amount represents
         uint256 unit = _unit();
-        uint256 nftsRepresented = tokenAmount / unit;
-        require(nftsRepresented > 0, "Token amount must represent at least 1 NFT");
+        uint256 exemptCount = exemptedNFTIds.length;
+        if (tokenAmount < exemptCount * unit) revert TokenAmountMustRepresentNFT();
 
-        // Verify exempted NFT IDs exist and are owned by user
-        for (uint256 i = 0; i < exemptedNFTIds.length; i++) {
-            uint256 nftId = exemptedNFTIds[i];
-            // NFT ownership is verified implicitly - user can only exempt their own NFTs
-            // (The DN404 mirror contract enforces ownership)
-        }
+        uint256 rerollAmount = tokenAmount - (exemptCount * unit);
+        if (rerollAmount / unit == 0) revert TokenAmountMustRepresentNFT();
 
-        // Hold tokens in escrow temporarily
         uint256 balanceBefore = addressData.balance;
 
-        // Emit reroll initiation
         emit RerollInitiated(msg.sender, tokenAmount, exemptedNFTIds);
 
-        // Transfer tokens to contract for escrow
-        _transfer(msg.sender, address(this), tokenAmount);
+        // Phase 1 - Shield: Move exempted NFTs to contract for safekeeping
+        for (uint256 i = 0; i < exemptCount; i++) {
+            _initiateTransferFromNFT(msg.sender, address(this), exemptedNFTIds[i], msg.sender);
+        }
 
-        // Record escrow
-        rerollEscrow[msg.sender] = tokenAmount;
+        // Phase 2 - Reroll: Transfer rerollAmount to contract (burns non-exempted NFTs),
+        // then transfer back with skipNFT=false (mints new random NFTs)
+        _transfer(msg.sender, address(this), rerollAmount);
 
-        // Perform reroll: set skipNFT to false, transfer to self (triggers remix), then restore state
         bool originalSkipNFT = getSkipNFT(msg.sender);
-
-        // Disable skip for reroll to happen
         _setSkipNFT(msg.sender, false);
-
-        // Self-transfer to trigger DN404 remix/reroll
-        _transfer(address(this), msg.sender, tokenAmount);
-
-        // Restore original skip state
+        _transfer(address(this), msg.sender, rerollAmount);
         _setSkipNFT(msg.sender, originalSkipNFT);
 
-        // Clear escrow
-        rerollEscrow[msg.sender] = 0;
+        // Phase 3 - Unshield: Return exempted NFTs (with their original IDs) to user
+        for (uint256 i = 0; i < exemptCount; i++) {
+            _initiateTransferFromNFT(address(this), msg.sender, exemptedNFTIds[i], address(this));
+        }
 
-        // Verify balance is maintained
-        require(addressData.balance == balanceBefore, "Balance mismatch after reroll");
+        if (addressData.balance != balanceBefore) revert BalanceMismatchAfterReroll();
 
-        // Emit completion
         emit RerollCompleted(msg.sender, tokenAmount);
-    }
-
-    /**
-     * @notice Query current reroll escrow for a user
-     * @param user User address
-     * @return escrowAmount Amount of tokens currently in escrow for user
-     */
-    function getRerollEscrow(address user) external view returns (uint256 escrowAmount) {
-        return rerollEscrow[user];
     }
 
     // ┌─────────────────────────┐
@@ -729,15 +599,15 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IInstanceLife
 
     /// @notice Stake tokens to receive proportional vault fee yield
     function stake(uint256 amount) external nonReentrant {
-        require(amount > 0, "Amount must be positive");
-        require(balanceOf(msg.sender) >= amount, "Insufficient balance");
+        if (amount == 0) revert AmountMustBePositive();
+        if (balanceOf(msg.sender) < amount) revert InsufficientBalance();
         _transfer(msg.sender, address(this), amount);
         stakingModule.recordStake(msg.sender, amount);
     }
 
     /// @notice Unstake tokens. Auto-claims pending rewards.
     function unstake(uint256 amount) external nonReentrant {
-        require(amount > 0, "Amount must be positive");
+        if (amount == 0) revert AmountMustBePositive();
         uint256 delta = vault.claimFees();
         if (delta > 0) stakingModule.recordFeesReceived(delta);
         uint256 rewardAmount = stakingModule.recordUnstake(msg.sender, amount);
@@ -747,7 +617,7 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IInstanceLife
 
     /// @notice Claim proportional vault fee yield for staked tokens
     function claimStakerRewards() external nonReentrant returns (uint256 rewardAmount) {
-        require(vault.validateCompliance(address(this)), "Vault requirements not met");
+        if (!vault.validateCompliance(address(this))) revert VaultRequirementsNotMet();
         uint256 delta = vault.claimFees();
         if (delta > 0) stakingModule.recordFeesReceived(delta);
         rewardAmount = stakingModule.computeClaim(msg.sender);
@@ -758,53 +628,12 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IInstanceLife
     /// @notice Owner withdrawal of ETH dust (contract balance not owed to stakers)
     function withdrawDust(uint256 amount) external onlyOwner nonReentrant {
         uint256 dustAvailable = address(this).balance;
-        require(amount <= dustAvailable, "Amount exceeds available balance");
+        if (amount > dustAvailable) revert AmountExceedsAvailableBalance();
         SafeTransferLib.safeTransferETH(owner(), amount);
     }
 
     /// @notice Accept ETH — required for vault.claimFees() to send fees back to this contract
     receive() external payable override {}
-
-    // ┌─────────────────────────┐
-    // │   Balance Mint Function │
-    // └─────────────────────────┘
-
-    /**
-     * @notice Mint NFTs based on token balance
-     * @param amount Number of NFTs to mint
-     */
-    function balanceMint(uint256 amount) external {
-        DN404Storage storage $ = _getDN404Storage();
-        AddressData storage addressData = $.addressData[msg.sender];
-        
-        uint256 balance = addressData.balance;
-        uint256 currentOwnedLength = addressData.ownedLength;
-        uint256 maxMintPossible = balance / _unit() - currentOwnedLength;
-        require(amount <= maxMintPossible, "NFTs over balance");
-
-        uint256 amountToMint = amount * _unit();
-        uint256 amountToHold = balance - (currentOwnedLength + amount) * _unit();
-        
-        // Transfer excess to contract
-        _transfer(msg.sender, address(this), amountToHold);
-        
-        // Set skipNFT false for minting
-        bool originalSkipNFT = getSkipNFT(msg.sender);
-        _setSkipNFT(msg.sender, false);
-        
-        // Self-transfer to trigger mint
-        _transfer(msg.sender, msg.sender, amountToMint);
-        
-        // Reset skipNFT
-        _setSkipNFT(msg.sender, originalSkipNFT);
-        
-        // Return held tokens
-        _transfer(address(this), msg.sender, amountToHold);
-        
-        // Verify final state
-        require(addressData.balance == balance);
-        require(addressData.ownedLength == currentOwnedLength + amount);
-    }
 
     // ┌─────────────────────────┐
     // │  V4 Liquidity Deploy   │
@@ -815,7 +644,7 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IInstanceLife
      * @dev Fully deterministic — no caller-supplied parameters.
      *      Computes sqrtPriceX96 from post-fee token/ETH ratio.
      *      Uses reserve for ETH, LIQUIDITY_RESERVE for tokens.
-     *      Pool config (fee, tickSpacing) from immutables set at construction.
+     *      Pool config (fee, tickSpacing) from storage set at initialization.
      *
      *      Permissionless when:
      *      - Bonding curve is full, OR
@@ -825,17 +654,17 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IInstanceLife
      * @return liquidity Amount of liquidity added
      */
     function deployLiquidity() external nonReentrant returns (uint128 liquidity) {
-        require(bondingOpenTime != 0, "Bonding not configured");
-        require(block.timestamp >= bondingOpenTime, "Too early");
-        require(liquidityPool == address(0), "Already deployed");
-        require(address(v4Hook) != address(0), "Hook not set");
-        require(reserve > 0, "No reserve");
+        if (bondingOpenTime == 0) revert BondingNotConfigured();
+        if (block.timestamp < bondingOpenTime) revert TooEarly();
+        if (liquidityPool != address(0)) revert AlreadyDeployed();
+        if (v4Hook == address(0)) revert HookNotSet();
+        if (reserve == 0) revert NoReserve();
 
         uint256 maxBondingSupply = MAX_SUPPLY - LIQUIDITY_RESERVE;
         bool isFull = totalBondingSupply >= maxBondingSupply;
         bool isMatured = bondingMaturityTime != 0 && block.timestamp >= bondingMaturityTime;
         if (!isFull && !isMatured) {
-            require(msg.sender == owner(), "Only owner can deploy before maturity/full");
+            if (msg.sender != owner()) revert OnlyOwnerBeforeMaturity();
         }
 
         // CEI: capture and zero reserve before external calls
@@ -858,13 +687,13 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IInstanceLife
             instance: address(this),
             poolFee: poolFee,
             tickSpacing: tickSpacing,
-            v4Hook: v4Hook,
-            v4PoolManager: v4PoolManager
+            v4Hook: IHooks(v4Hook),
+            v4PoolManager: IPoolManager(v4PoolManager)
         });
 
         liquidity = liquidityDeployer.deployLiquidity{value: ethToSend}(p);
 
-        liquidityPool = address(v4PoolManager);
+        liquidityPool = v4PoolManager;
         emit LiquidityDeployed(liquidityPool, LIQUIDITY_RESERVE, ethToSend);
         emit StateChanged(STATE_GRADUATED);
     }
@@ -897,7 +726,6 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IInstanceLife
      * @return true to skip NFT by default
      */
     function _skipNFTDefault(address) internal pure override returns (bool) {
-        return true;
+        return false;
     }
 }
-

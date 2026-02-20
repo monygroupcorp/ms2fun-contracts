@@ -11,7 +11,6 @@ import {Currency} from "v4-core/types/Currency.sol";
 import {PoolKey} from "v4-core/types/PoolKey.sol";
 import {IHooks} from "v4-core/interfaces/IHooks.sol";
 import {GlobalMessagingTestBase} from "../../base/GlobalMessagingTestBase.sol";
-import {GlobalMessageTypes} from "../../../src/libraries/GlobalMessageTypes.sol";
 import {GlobalMessageRegistry} from "../../../src/registry/GlobalMessageRegistry.sol";
 import {PromotionBadges} from "../../../src/promotion/PromotionBadges.sol";
 
@@ -69,7 +68,7 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
         _setUpGlobalMessaging(mockRegistry);
 
         // Deploy factory
-        factory = new ERC1155Factory(mockRegistry, mockInstanceTemplate, address(0xC1EA), 2000);
+        factory = new ERC1155Factory(mockRegistry, mockInstanceTemplate, address(0xC1EA), 2000, address(globalRegistry));
 
         // Authorize creator as an agent for addEdition calls
         factory.setAgent(creator, true);
@@ -251,7 +250,7 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
         ERC1155Instance instanceContract = ERC1155Instance(instance);
         
         // Mint 5 tokens
-        instanceContract.mint{value: 0.5 ether}(1, 5, "", 0);
+        instanceContract.mint{value: 0.5 ether}(1, 5, bytes(""), 0);
 
         assertEq(instanceContract.balanceOf(minter1, 1), 5);
         ERC1155Instance.Edition memory edition = instanceContract.getEdition(1);
@@ -288,17 +287,17 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
         ERC1155Instance instanceContract = ERC1155Instance(instance);
         
         // Mint 5 tokens
-        instanceContract.mint{value: 1 ether}(1, 5, "", 0);
+        instanceContract.mint{value: 1 ether}(1, 5, bytes(""), 0);
         assertEq(instanceContract.balanceOf(minter1, 1), 5);
         ERC1155Instance.Edition memory edition1 = instanceContract.getEdition(1);
         assertEq(edition1.minted, 5);
 
         // Try to mint 6 more (would exceed supply)
         vm.expectRevert("Exceeds supply");
-        instanceContract.mint{value: 1.2 ether}(1, 6, "", 0);
+        instanceContract.mint{value: 1.2 ether}(1, 6, bytes(""), 0);
 
         // Mint remaining 5
-        instanceContract.mint{value: 1 ether}(1, 5, "", 0);
+        instanceContract.mint{value: 1 ether}(1, 5, bytes(""), 0);
         ERC1155Instance.Edition memory edition2 = instanceContract.getEdition(1);
         assertEq(edition2.minted, 10);
         
@@ -337,7 +336,7 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
         assertEq(price1, 0.1 ether);
         
         // Mint 1 token
-        instanceContract.mint{value: 0.2 ether}(1, 1, "", 0);
+        instanceContract.mint{value: 0.2 ether}(1, 1, bytes(""), 0);
         
         // Price should increase for next mint
         uint256 price2 = instanceContract.getCurrentPrice(1);
@@ -376,7 +375,7 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
         instanceContract.mint{value: 0.1 ether}(
             1,
             1,
-            "Hello from minter!",
+            _buildPostMessage("Hello from minter!"),
             0
         );
 
@@ -412,7 +411,7 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
         
         vm.startPrank(minter1);
         ERC1155Instance instanceContract = ERC1155Instance(instance);
-        instanceContract.mint{value: 1 ether}(1, 1, "", 0);
+        instanceContract.mint{value: 1 ether}(1, 1, bytes(""), 0);
         vm.stopPrank();
 
         uint256 balanceBefore = address(vault).balance;
@@ -460,11 +459,11 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
         
         vm.startPrank(minter1);
         ERC1155Instance instanceContract = ERC1155Instance(instance);
-        instanceContract.mint{value: 0.1 ether}(1, 1, "Message 1", 0);
+        instanceContract.mint{value: 0.1 ether}(1, 1, _buildPostMessage("Message 1"), 0);
         vm.stopPrank();
 
         vm.startPrank(minter2);
-        instanceContract.mint{value: 0.1 ether}(1, 1, "Message 2", 0);
+        instanceContract.mint{value: 0.1 ether}(1, 1, _buildPostMessage("Message 2"), 0);
         vm.stopPrank();
         
         // Verify message count (messages are now event-only)
@@ -754,7 +753,7 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
         
         vm.startPrank(minter1);
         ERC1155Instance instanceContract = ERC1155Instance(instance);
-        instanceContract.mint{value: 0.5 ether}(1, 5, "", 0);
+        instanceContract.mint{value: 0.5 ether}(1, 5, bytes(""), 0);
         vm.stopPrank();
 
         (
@@ -901,19 +900,19 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
         ERC1155Factory.TierConfig memory config = ERC1155Factory.TierConfig({
             fee: 0.05 ether,
             featuredDuration: 7 days,
-            featuredPosition: 10,
+            featuredRankBoost: 10,
             badge: PromotionBadges.BadgeType.NONE,
             badgeDuration: 0
         });
 
         factory.setTierConfig(ERC1155Factory.CreationTier.PREMIUM, config);
 
-        (uint256 fee, uint256 featuredDuration, uint256 featuredPosition, PromotionBadges.BadgeType badge, uint256 badgeDuration) =
+        (uint256 fee, uint256 featuredDuration, uint256 featuredRankBoost, PromotionBadges.BadgeType badge, uint256 badgeDuration) =
             factory.tierConfigs(ERC1155Factory.CreationTier.PREMIUM);
 
         assertEq(fee, 0.05 ether);
         assertEq(featuredDuration, 7 days);
-        assertEq(featuredPosition, 10);
+        assertEq(featuredRankBoost, 10);
         assertEq(uint256(badge), uint256(PromotionBadges.BadgeType.NONE));
         assertEq(badgeDuration, 0);
 
@@ -926,7 +925,7 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
         ERC1155Factory.TierConfig memory config = ERC1155Factory.TierConfig({
             fee: 0,
             featuredDuration: 0,
-            featuredPosition: 0,
+            featuredRankBoost: 0,
             badge: PromotionBadges.BadgeType.NONE,
             badgeDuration: 0
         });
@@ -943,7 +942,7 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
         ERC1155Factory.TierConfig memory config = ERC1155Factory.TierConfig({
             fee: 0.05 ether,
             featuredDuration: 0,
-            featuredPosition: 0,
+            featuredRankBoost: 0,
             badge: PromotionBadges.BadgeType.NONE,
             badgeDuration: 0
         });
@@ -979,7 +978,7 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
             ERC1155Factory.TierConfig({
                 fee: 0.05 ether,
                 featuredDuration: 0,
-                featuredPosition: 0,
+                featuredRankBoost: 0,
                 badge: PromotionBadges.BadgeType.NONE,
                 badgeDuration: 0
             })
@@ -1011,7 +1010,7 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
             ERC1155Factory.TierConfig({
                 fee: 0.05 ether,
                 featuredDuration: 0,
-                featuredPosition: 0,
+                featuredRankBoost: 0,
                 badge: PromotionBadges.BadgeType.NONE,
                 badgeDuration: 0
             })
@@ -1058,7 +1057,7 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
             ERC1155Factory.TierConfig({
                 fee: 0.05 ether,
                 featuredDuration: 0,
-                featuredPosition: 0,
+                featuredRankBoost: 0,
                 badge: PromotionBadges.BadgeType.NONE,
                 badgeDuration: 0
             })
@@ -1090,7 +1089,7 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
             ERC1155Factory.TierConfig({
                 fee: 0.1 ether,
                 featuredDuration: 14 days,
-                featuredPosition: 5,
+                featuredRankBoost: 5,
                 badge: PromotionBadges.BadgeType.HIGHLIGHT,
                 badgeDuration: 14 days
             })
@@ -1126,7 +1125,7 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
             ERC1155Factory.TierConfig({
                 fee: 0.1 ether,
                 featuredDuration: 0,
-                featuredPosition: 0,
+                featuredRankBoost: 0,
                 badge: PromotionBadges.BadgeType.HIGHLIGHT,
                 badgeDuration: 14 days
             })

@@ -4,8 +4,11 @@ pragma solidity ^0.8.24;
 import {Test, console} from "forge-std/Test.sol";
 import {ERC404BondingInstance} from "../../../src/factories/erc404/ERC404BondingInstance.sol";
 import {ERC404StakingModule} from "../../../src/factories/erc404/ERC404StakingModule.sol";
+import {CurveParamsComputer} from "../../../src/factories/erc404/CurveParamsComputer.sol";
+import {BondingCurveMath} from "../../../src/factories/erc404/libraries/BondingCurveMath.sol";
 import {Currency} from "v4-core/types/Currency.sol";
 import {IAlignmentVault} from "../../../src/interfaces/IAlignmentVault.sol";
+import {LibClone} from "solady/utils/LibClone.sol";
 
 // ── Mock: MasterRegistry ──────────────────────────────────────────────────────
 
@@ -119,6 +122,7 @@ contract ERC404StakingIntegrationTest is Test {
     ERC404StakingModule public stakingModule;
     MockMasterRegistryIntegration public mockRegistry;
     MockAlignmentVault public mockVault;
+    CurveParamsComputer public curveComputer;
 
     address public owner = address(0x1);
     address public user1 = address(0x2);
@@ -135,6 +139,7 @@ contract ERC404StakingIntegrationTest is Test {
         mockRegistry = new MockMasterRegistryIntegration();
         stakingModule = new ERC404StakingModule(address(mockRegistry));
         mockVault = new MockAlignmentVault();
+        curveComputer = new CurveParamsComputer(address(this));
 
         // Fund the vault so it can pay out fees
         vm.deal(address(mockVault), 100 ether);
@@ -142,7 +147,7 @@ contract ERC404StakingIntegrationTest is Test {
         vm.startPrank(owner);
 
         // 2. Build curve / tier config
-        ERC404BondingInstance.BondingCurveParams memory curveParams = ERC404BondingInstance.BondingCurveParams({
+        BondingCurveMath.Params memory curveParams = BondingCurveMath.Params({
             initialPrice: 0.025 ether,
             quarticCoeff: 3 gwei,
             cubicCoeff: 1333333333,
@@ -166,7 +171,9 @@ contract ERC404StakingIntegrationTest is Test {
         });
 
         // 3. Deploy instance — factory address must equal msg.sender (owner) for DN404 mirror
-        instance = new ERC404BondingInstance(
+        ERC404BondingInstance implIntg = new ERC404BondingInstance();
+        instance = ERC404BondingInstance(payable(LibClone.clone(address(implIntg))));
+        instance.initialize(
             "Integration Token",
             "INTG",
             MAX_SUPPLY,
@@ -191,7 +198,8 @@ contract ERC404StakingIntegrationTest is Test {
             60,             // tickSpacing
             TOKEN_UNIT,     // unit (1 NFT = TOKEN_UNIT tokens)
             address(stakingModule),
-            address(0x600)  // mockLiquidityDeployer
+            address(0x600), // mockLiquidityDeployer
+            address(curveComputer) // curve computer
         );
 
         vm.stopPrank();
@@ -226,13 +234,13 @@ contract ERC404StakingIntegrationTest is Test {
 
         // Buy exactly TOKEN_UNIT (1 NFT unit worth) for each user
         uint256 buyAmount = TOKEN_UNIT;
-        uint256 cost1 = instance.calculateCost(buyAmount);
+        uint256 cost1 = _getCost(instance, buyAmount);
         uint256 fee1 = (cost1 * instance.bondingFeeBps()) / 10000;
 
         vm.prank(user1);
         instance.buyBonding{value: cost1 + fee1}(buyAmount, cost1 + fee1, false, bytes32(0), bytes(""), 0);
 
-        uint256 cost2 = instance.calculateCost(buyAmount);
+        uint256 cost2 = _getCost(instance, buyAmount);
         uint256 fee2 = (cost2 * instance.bondingFeeBps()) / 10000;
 
         vm.prank(user2);
@@ -240,6 +248,18 @@ contract ERC404StakingIntegrationTest is Test {
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
+
+    function _getCost(ERC404BondingInstance inst, uint256 amount) internal view returns (uint256) {
+        (uint256 ip, uint256 qc, uint256 cc, uint256 qdc, uint256 nf) = inst.curveParams();
+        BondingCurveMath.Params memory p = BondingCurveMath.Params({
+            initialPrice: ip,
+            quarticCoeff: qc,
+            cubicCoeff: cc,
+            quadraticCoeff: qdc,
+            normalizationFactor: nf
+        });
+        return curveComputer.calculateCost(p, inst.totalBondingSupply(), amount);
+    }
 
     function _enableStaking() internal {
         vm.prank(owner);

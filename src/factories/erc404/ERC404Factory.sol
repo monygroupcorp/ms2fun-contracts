@@ -4,6 +4,7 @@ pragma solidity ^0.8.20;
 import {OwnableRoles} from "solady/auth/OwnableRoles.sol";
 import {ReentrancyGuard} from "solady/utils/ReentrancyGuard.sol";
 import {SafeTransferLib} from "solady/utils/SafeTransferLib.sol";
+import {LibClone} from "solady/utils/LibClone.sol";
 import {IMasterRegistry} from "../../master/interfaces/IMasterRegistry.sol";
 import {FeatureUtils} from "../../master/libraries/FeatureUtils.sol";
 import {IAlignmentVault} from "../../interfaces/IAlignmentVault.sol";
@@ -13,6 +14,7 @@ import {ERC404StakingModule} from "./ERC404StakingModule.sol";
 import {LiquidityDeployerModule} from "./LiquidityDeployerModule.sol";
 import {LaunchManager} from "./LaunchManager.sol";
 import {CurveParamsComputer} from "./CurveParamsComputer.sol";
+import {BondingCurveMath} from "./libraries/BondingCurveMath.sol";
 import {LPFeeLibrary} from "v4-core/libraries/LPFeeLibrary.sol";
 
 /**
@@ -27,6 +29,7 @@ contract ERC404Factory is OwnableRoles, ReentrancyGuard, IFactory {
     IMasterRegistry public masterRegistry;
     address public immutable globalMessageRegistry;
     address public instanceTemplate;
+    address public implementation;
     uint256 public instanceCreationFee;
     address public v4PoolManager;
     address public weth;
@@ -58,7 +61,6 @@ contract ERC404Factory is OwnableRoles, ReentrancyGuard, IFactory {
         FeatureUtils.BONDING_CURVE,
         FeatureUtils.LIQUIDITY_POOL,
         FeatureUtils.CHAT,
-        FeatureUtils.BALANCE_MINT,
         FeatureUtils.PORTFOLIO
     ];
 
@@ -94,6 +96,7 @@ contract ERC404Factory is OwnableRoles, ReentrancyGuard, IFactory {
     event InstanceCreatedWithTier(address indexed instance, CreationTier tier, uint256 fee);
 
     constructor(
+        address _implementation,
         address _masterRegistry,
         address _instanceTemplate,
         address _v4PoolManager,
@@ -108,6 +111,7 @@ contract ERC404Factory is OwnableRoles, ReentrancyGuard, IFactory {
         address _launchManager,
         address _curveComputer
     ) {
+        require(_implementation != address(0), "Invalid implementation");
         require(_protocol != address(0), "Invalid protocol");
         require(_stakingModule != address(0), "Invalid staking module");
         require(_liquidityDeployer != address(0), "Invalid liquidity deployer");
@@ -119,6 +123,7 @@ contract ERC404Factory is OwnableRoles, ReentrancyGuard, IFactory {
         _grantRoles(_creator, CREATOR_ROLE);
         require(_creatorFeeBps <= 10000, "Invalid creator fee bps");
         require(_creatorGraduationFeeBps <= graduationFeeBps, "Creator grad fee exceeds graduation fee");
+        implementation = _implementation;
         creator = _creator;
         creatorFeeBps = _creatorFeeBps;
         creatorGraduationFeeBps = _creatorGraduationFeeBps;
@@ -232,7 +237,7 @@ contract ERC404Factory is OwnableRoles, ReentrancyGuard, IFactory {
         uint256 maxSupply = nftCount * unit;
         uint256 liquidityReservePercent = profile.liquidityReserveBps / 100; // Convert bps to percent
 
-        ERC404BondingInstance.BondingCurveParams memory curveParams = curveComputer.computeCurveParams(
+        BondingCurveMath.Params memory curveParams = curveComputer.computeCurveParams(
             nftCount,
             profile.targetETH,
             profile.unitPerNFT,
@@ -248,8 +253,9 @@ contract ERC404Factory is OwnableRoles, ReentrancyGuard, IFactory {
             emit VaultCapabilityWarning(vault, keccak256("YIELD_GENERATION"));
         }
 
-        // Deploy new bonding instance WITH hook address (enforced alignment)
-        instance = address(new ERC404BondingInstance(
+        // Deploy clone and initialize with all params
+        instance = LibClone.clone(implementation);
+        ERC404BondingInstance(payable(instance)).initialize(
             name,
             symbol,
             maxSupply,
@@ -274,8 +280,9 @@ contract ERC404Factory is OwnableRoles, ReentrancyGuard, IFactory {
             profile.tickSpacing,
             unit,
             address(stakingModule),
-            address(liquidityDeployer)
-        ));
+            address(liquidityDeployer),
+            address(curveComputer)
+        );
 
         // Register with master registry
         masterRegistry.registerInstance(
@@ -288,7 +295,7 @@ contract ERC404Factory is OwnableRoles, ReentrancyGuard, IFactory {
         );
 
         // Apply tier perks AFTER successful deployment and registration
-        launchManager.applyTierPerks(instance, LaunchManager.CreationTier(uint8(creationTier)));
+        launchManager.applyTierPerks(instance, LaunchManager.CreationTier(uint8(creationTier)), instanceCreator);
 
         // Refund excess
         if (msg.value > fee) {

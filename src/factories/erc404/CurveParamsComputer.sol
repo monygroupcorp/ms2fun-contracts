@@ -4,7 +4,6 @@ pragma solidity ^0.8.20;
 import {Ownable} from "solady/auth/Ownable.sol";
 import {FixedPointMathLib} from "solady/utils/FixedPointMathLib.sol";
 import {BondingCurveMath} from "./libraries/BondingCurveMath.sol";
-import {ERC404BondingInstance} from "./ERC404BondingInstance.sol";
 
 /**
  * @title CurveParamsComputer
@@ -45,6 +44,28 @@ contract CurveParamsComputer is Ownable {
     }
 
     /**
+     * @notice Calculate cost to buy `amount` tokens given current supply
+     */
+    function calculateCost(
+        BondingCurveMath.Params calldata params,
+        uint256 currentSupply,
+        uint256 amount
+    ) external pure returns (uint256) {
+        return BondingCurveMath.calculateCost(params, currentSupply, amount);
+    }
+
+    /**
+     * @notice Calculate refund for selling `amount` tokens given current supply
+     */
+    function calculateRefund(
+        BondingCurveMath.Params calldata params,
+        uint256 currentSupply,
+        uint256 amount
+    ) external pure returns (uint256) {
+        return BondingCurveMath.calculateRefund(params, currentSupply, amount);
+    }
+
+    /**
      * @notice Compute bonding curve parameters from profile data and NFT count
      * @dev Fixed shape, scaled amplitude. Computes normalizationFactor dynamically
      *      to keep math in safe uint256 range, then scales coefficients to hit targetETH.
@@ -52,14 +73,14 @@ contract CurveParamsComputer is Ownable {
      * @param targetETH Target ETH to raise through the bonding curve
      * @param unitPerNFT Token units per NFT (e.g. 1e6 means 1M tokens/NFT)
      * @param liquidityReserveBps Bps of total supply reserved for liquidity (e.g. 2000 = 20%)
-     * @return params Computed BondingCurveParams
+     * @return params Computed BondingCurveMath.Params
      */
     function computeCurveParams(
         uint256 nftCount,
         uint256 targetETH,
         uint256 unitPerNFT,
         uint256 liquidityReserveBps
-    ) public view returns (ERC404BondingInstance.BondingCurveParams memory params) {
+    ) public view returns (BondingCurveMath.Params memory params) {
         uint256 totalSupply = nftCount * unitPerNFT * 1e18;
         uint256 liquidityReserve = (totalSupply * liquidityReserveBps) / 10000;
         uint256 maxBondingSupply = totalSupply - liquidityReserve;
@@ -84,7 +105,7 @@ contract CurveParamsComputer is Ownable {
         uint256 scaleFactor = targetETH.divWad(referenceArea);
 
         // Apply scale to each coefficient
-        params = ERC404BondingInstance.BondingCurveParams({
+        params = BondingCurveMath.Params({
             initialPrice: baseWeight.mulWad(scaleFactor),
             quarticCoeff: quarticWeight.mulWad(scaleFactor),
             cubicCoeff: cubicWeight.mulWad(scaleFactor),

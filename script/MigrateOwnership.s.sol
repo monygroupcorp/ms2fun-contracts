@@ -13,8 +13,6 @@ contract MigrateOwnership is Script {
         address masterRegistry = vm.envAddress("MASTER_REGISTRY");
         address protocolTreasury = vm.envAddress("PROTOCOL_TREASURY");
         address featuredQueueManager = vm.envAddress("FEATURED_QUEUE_MANAGER");
-        address factoryApprovalGovernance = vm.envAddress("FACTORY_APPROVAL_GOVERNANCE");
-        address vaultApprovalGovernance = vm.envAddress("VAULT_APPROVAL_GOVERNANCE");
         address queryAggregator = vm.envAddress("QUERY_AGGREGATOR");
 
         vm.startBroadcast(deployerPrivateKey);
@@ -27,12 +25,6 @@ contract MigrateOwnership is Script {
 
         Ownable(featuredQueueManager).transferOwnership(timelock);
         console.log("FeaturedQueueManager ownership transferred to timelock");
-
-        Ownable(factoryApprovalGovernance).transferOwnership(timelock);
-        console.log("FactoryApprovalGovernance ownership transferred to timelock");
-
-        Ownable(vaultApprovalGovernance).transferOwnership(timelock);
-        console.log("VaultApprovalGovernance ownership transferred to timelock");
 
         Ownable(queryAggregator).transferOwnership(timelock);
         console.log("QueryAggregator ownership transferred to timelock");

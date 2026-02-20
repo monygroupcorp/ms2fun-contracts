@@ -465,7 +465,7 @@ contract GrandCentral is IGrandCentral, ReentrancyGuard {
         return bal > reserved ? bal - reserved : 0;
     }
 
-    function fundRagequitPool(uint256 amount) external daoOnly {
+    function fundRagequitPool(uint256 amount) external daoOrManager {
         require(
             safe.balance >= ragequitPool + claimsPoolBalance + amount,
             "insufficient general funds"
@@ -474,7 +474,7 @@ contract GrandCentral is IGrandCentral, ReentrancyGuard {
         emit RagequitPoolFunded(amount, ragequitPool);
     }
 
-    function fundClaimsPool(uint256 amount) external daoOrGovernor {
+    function fundClaimsPool(uint256 amount) external daoOrManager {
         uint256 totalWeight = totalShares + totalLoot;
         require(totalWeight > 0, "no members");
         require(

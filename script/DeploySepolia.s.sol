@@ -15,6 +15,7 @@ import {ShareOffering} from "../src/dao/conductors/ShareOffering.sol";
 import {StipendConductor} from "../src/dao/conductors/StipendConductor.sol";
 import {UltraAlignmentVault} from "../src/vaults/UltraAlignmentVault.sol";
 import {ERC404Factory} from "../src/factories/erc404/ERC404Factory.sol";
+import {ERC404BondingInstance} from "../src/factories/erc404/ERC404BondingInstance.sol";
 import {ERC404StakingModule} from "../src/factories/erc404/ERC404StakingModule.sol";
 import {LiquidityDeployerModule} from "../src/factories/erc404/LiquidityDeployerModule.sol";
 import {LaunchManager} from "../src/factories/erc404/LaunchManager.sol";
@@ -185,11 +186,13 @@ contract DeploySepolia is Script {
         // ============ Phase 5: Factories ============
 
         // 14. ERC404StakingModule + LiquidityDeployerModule + LaunchManager + CurveParamsComputer + ERC404Factory
+        ERC404BondingInstance erc404Impl = new ERC404BondingInstance();
         ERC404StakingModule erc404StakingModule = new ERC404StakingModule(masterRegistry);
         LiquidityDeployerModule erc404LiquidityDeployer = new LiquidityDeployerModule();
         launchManager = new LaunchManager(deployer);
         curveParamsComputer = new CurveParamsComputer(deployer);
         erc404Factory = new ERC404Factory(
+            address(erc404Impl),
             masterRegistry,
             address(0),     // instanceTemplate (not used for direct deploy)
             poolManager,

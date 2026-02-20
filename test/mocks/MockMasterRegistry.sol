@@ -11,8 +11,6 @@ import {IMasterRegistry} from "../../src/master/interfaces/IMasterRegistry.sol";
 contract MockMasterRegistry is IMasterRegistry {
     // Simple no-op implementations for testing
 
-    // applyForFactory removed in owner-only rework
-
     function registerInstance(
         address,
         address,
@@ -21,8 +19,6 @@ contract MockMasterRegistry is IMasterRegistry {
         string memory,
         address
     ) external override {}
-
-    // getFactoryApplication removed in owner-only rework
 
     function getFactoryInfo(uint256)
         external
@@ -83,6 +79,7 @@ contract MockMasterRegistry is IMasterRegistry {
 
     function registerVault(
         address,
+        address,
         string memory,
         string memory,
         uint256
@@ -111,73 +108,13 @@ contract MockMasterRegistry is IMasterRegistry {
 
     function deactivateVault(address) external override {}
 
-    // Alignment Target stubs
-    function registerAlignmentTarget(
-        string memory,
-        string memory,
-        string memory,
-        AlignmentAsset[] memory
-    ) external override returns (uint256) {
-        return 0;
-    }
-
-    function getAlignmentTarget(uint256) external view override returns (AlignmentTarget memory) {
-        return AlignmentTarget({
-            id: 0,
-            title: "",
-            description: "",
-            metadataURI: "",
-            approvedAt: 0,
-            active: false
-        });
-    }
-
-    function getAlignmentTargetAssets(uint256) external view override returns (AlignmentAsset[] memory) {
-        return new AlignmentAsset[](0);
-    }
-
-    function isAlignmentTargetActive(uint256) external view override returns (bool) {
-        return false;
-    }
-
-    function isApprovedAlignmentToken(uint256, address) external view override returns (bool) {
-        return false;
-    }
-
-    function deactivateAlignmentTarget(uint256) external override {}
-
-    function updateAlignmentTarget(
-        uint256,
-        string memory,
-        string memory
-    ) external override {}
-
-    function addAmbassador(uint256, address) external override {}
-    function removeAmbassador(uint256, address) external override {}
-
-    function getAmbassadors(uint256) external view override returns (address[] memory) {
-        return new address[](0);
-    }
-
-    function isAmbassador(uint256, address) external view override returns (bool) {
-        return false;
-    }
-
-    function vaultRegistrationFee() external view override returns (uint256) {
-        return 0;
-    }
-
-    address private _globalMessageRegistry;
-
-    function getGlobalMessageRegistry() external view override returns (address) {
-        return _globalMessageRegistry;
-    }
-
-    function setGlobalMessageRegistry(address registry) external {
-        _globalMessageRegistry = registry;
-    }
+    function deactivateFactory(address) external override {}
 
     function isInstanceFromApprovedFactory(address) external view override returns (bool) {
+        return true; // Always return true in mock for testing
+    }
+
+    function isRegisteredInstance(address) external view override returns (bool) {
         return true; // Always return true in mock for testing
     }
 

@@ -6,6 +6,7 @@ import {Ownable} from "solady/auth/Ownable.sol";
 import {IMasterRegistry} from "../master/interfaces/IMasterRegistry.sol";
 import {IAlignmentVault} from "../interfaces/IAlignmentVault.sol";
 import {IInstance} from "../interfaces/IInstance.sol";
+import {IInstanceLifecycle, TYPE_ERC404, TYPE_ERC1155} from "../interfaces/IInstanceLifecycle.sol";
 
 /// @notice Interface for FeaturedQueueManager
 interface IFeaturedQueueManager {
@@ -13,18 +14,16 @@ interface IFeaturedQueueManager {
         external view returns (address[] memory instances, uint256 total);
 
     function getRentalInfo(address instance) external view returns (
-        IMasterRegistry.RentalSlot memory rental,
-        uint256 position,
-        uint256 renewalDeposit,
-        bool isExpired
+        address renter,
+        uint256 effectiveRank,
+        uint256 expiresAt,
+        bool isActive
     );
-
-    function queueLength() external view returns (uint256);
 }
 
 /// @notice Interface for GlobalMessageRegistry
 interface IGlobalMessageRegistry {
-    function getMessageCount() external view returns (uint256);
+    function messageCount() external view returns (uint256);
 }
 
 /// @notice Interface for ERC404 balance queries
@@ -81,7 +80,7 @@ contract QueryAggregator is UUPSUpgradeable, Ownable {
         bool isActive;
         bytes extraData;
         // From FeaturedQueueManager
-        uint256 featuredPosition;
+        uint256 featuredRank;
         uint256 featuredExpires;
     }
 
@@ -180,27 +179,14 @@ contract QueryAggregator is UUPSUpgradeable, Ownable {
     {
         require(limit <= MAX_QUERY_LIMIT, "Limit too high");
 
-        // 1. Get queue length for bounds checking
-        uint256 queueLen = featuredQueueManager.queueLength();
-        totalFeatured = queueLen;
+        // Get active featured instances — getFeaturedInstances handles filtering,
+        // pagination clamping, and returns the true active total in one call
+        (address[] memory featuredAddresses, uint256 total) =
+            featuredQueueManager.getFeaturedInstances(offset, offset + limit);
 
-        // 2. Handle bounds clamping for featured projects
-        if (offset >= queueLen) {
-            projects = new ProjectCard[](0);
-            return (projects, totalFeatured);
-        }
+        totalFeatured = total;
 
-        // Clamp endIndex to queue bounds
-        uint256 endIndex = offset + limit;
-        if (endIndex > queueLen) {
-            endIndex = queueLen;
-        }
-
-        // 3. Get featured instances from queue
-        (address[] memory featuredAddresses, ) =
-            featuredQueueManager.getFeaturedInstances(offset, endIndex);
-
-        // 4. Hydrate each into ProjectCard
+        // Hydrate each into ProjectCard
         projects = new ProjectCard[](featuredAddresses.length);
         for (uint256 i = 0; i < featuredAddresses.length; i++) {
             projects[i] = _hydrateProject(featuredAddresses[i]);
@@ -250,19 +236,16 @@ contract QueryAggregator is UUPSUpgradeable, Ownable {
         for (uint256 i = 0; i < instances.length; i++) {
             address instance = instances[i];
 
-            // Get instance info to determine type
-            try masterRegistry.getInstanceInfo(instance) returns (IMasterRegistry.InstanceInfo memory info) {
-                // Get factory info to determine contract type
-                try masterRegistry.getFactoryInfoByAddress(info.factory) returns (IMasterRegistry.FactoryInfo memory factoryInfo) {
-                    bytes32 typeHash = keccak256(bytes(factoryInfo.contractType));
-
-                    if (typeHash == keccak256("ERC404")) {
+            // Get instance type and name directly from the instance
+            try IInstanceLifecycle(instance).instanceType() returns (bytes32 typeHash) {
+                try masterRegistry.getInstanceInfo(instance) returns (IMasterRegistry.InstanceInfo memory info) {
+                    if (typeHash == TYPE_ERC404) {
                         ERC404Holding memory holding = _getERC404Holding(instance, user, info.name);
                         if (holding.tokenBalance > 0 || holding.stakedBalance > 0) {
                             tempERC404[erc404Count++] = holding;
                             totalClaimable += holding.pendingRewards;
                         }
-                    } else if (typeHash == keccak256("ERC1155")) {
+                    } else if (typeHash == TYPE_ERC1155) {
                         ERC1155Holding memory holding = _getERC1155Holding(instance, user, info.name);
                         if (holding.editionIds.length > 0) {
                             tempERC1155[erc1155Count++] = holding;
@@ -340,14 +323,14 @@ contract QueryAggregator is UUPSUpgradeable, Ownable {
 
             // 5. Get featured status
             try featuredQueueManager.getRentalInfo(instance) returns (
-                IMasterRegistry.RentalSlot memory rental,
-                uint256 position,
-                uint256,
-                bool isExpired
+                address,
+                uint256 rank,
+                uint256 expires,
+                bool isActive
             ) {
-                if (position > 0 && !isExpired) {
-                    card.featuredPosition = position;
-                    card.featuredExpires = rental.expiresAt;
+                if (isActive) {
+                    card.featuredRank    = rank;
+                    card.featuredExpires = expires;
                 }
             } catch {}
         } catch {}

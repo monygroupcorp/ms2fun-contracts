@@ -4,7 +4,7 @@ out = "out"
 libs = ["lib"]
 solc = "0.8.24"
 optimizer = true
-optimizer_runs = 200
+optimizer_runs = 100
 via_ir = true
 evm_version = "cancun"
 gas_reports = ["*"]
@@ -34,7 +34,7 @@ test = "test"
 script = "script"
 solc = "0.8.24"
 optimizer = true
-optimizer_runs = 200
+optimizer_runs = 100
 via_ir = true
 evm_version = "cancun"
 
