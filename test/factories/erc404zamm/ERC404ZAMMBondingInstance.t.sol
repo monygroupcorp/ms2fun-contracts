@@ -161,4 +161,119 @@ contract ERC404ZAMMBondingInstanceTest is Test {
         vm.expectRevert();
         instance.deployLiquidity(zammAddr, 30, 200);
     }
+
+    // ── Tax + sweep tests ─────────────────────────────────────────────────────
+
+    function _graduate() internal {
+        zammAddr = address(zamm);
+        vm.prank(owner);
+        instance.setBondingOpenTime(block.timestamp + 1);
+        vm.warp(block.timestamp + 2);
+        vm.prank(owner);
+        instance.setBondingActive(true);
+
+        // Set maturity time and warp past it so anyone can graduate
+        vm.prank(owner);
+        instance.setBondingMaturityTime(block.timestamp + 10);
+        vm.warp(block.timestamp + 11);
+
+        // Buy a small amount so reserve > 0
+        vm.deal(buyer, 1 ether);
+        vm.prank(buyer);
+        instance.buyBonding{value: 1 ether}(1 ether, 1 ether, false, bytes32(0), "", 0);
+
+        // Graduate (permissionless since maturity has passed)
+        instance.deployLiquidity(zammAddr, 30, 100); // 1% tax
+    }
+
+    function test_transferToZAMM_accumulatesTax() public {
+        _graduate();
+
+        uint256 buyerBalance = instance.balanceOf(buyer);
+        assertGt(buyerBalance, 0, "buyer should have tokens after buy");
+        uint256 sellAmount = buyerBalance / 2; // sell half
+
+        uint256 taxBefore = instance.accumulatedTax();
+        uint256 zammBalanceBefore = instance.balanceOf(zammAddr);
+        vm.prank(buyer);
+        instance.transfer(zammAddr, sellAmount); // triggers tax hook
+
+        uint256 expectedTax = (sellAmount * 100) / 10000; // 1%
+        assertEq(instance.accumulatedTax(), taxBefore + expectedTax);
+        // ZAMM receives sellAmount - tax (check delta)
+        assertEq(instance.balanceOf(zammAddr), zammBalanceBefore + sellAmount - expectedTax);
+    }
+
+    function test_transferFromZAMM_accumulatesTax() public {
+        _graduate();
+
+        uint256 amount = 10 ether;
+        // Give ZAMM some tokens (exempt transfer from instance)
+        vm.prank(address(instance));
+        instance.transfer(zammAddr, amount); // exempt (instance is in transferExempt), no tax
+
+        // Simulate a "buy": transfer from zamm to buyer
+        uint256 taxBefore = instance.accumulatedTax();
+        vm.prank(zammAddr);
+        instance.transfer(buyer, amount);
+
+        uint256 expectedTax = (amount * 100) / 10000;
+        assertEq(instance.accumulatedTax(), taxBefore + expectedTax);
+    }
+
+    function test_transferExempt_noTax() public {
+        _graduate();
+
+        uint256 amount = 10 ether;
+        // Instance -> ZAMM: exempt (instance is in transferExempt)
+        uint256 taxBefore = instance.accumulatedTax();
+        vm.prank(address(instance));
+        instance.transfer(zammAddr, amount);
+        assertEq(instance.accumulatedTax(), taxBefore); // no tax
+    }
+
+    function test_walletToWallet_noTax() public {
+        _graduate();
+
+        address other = makeAddr("other");
+        uint256 buyerBalance = instance.balanceOf(buyer);
+        vm.prank(buyer);
+        instance.transfer(other, buyerBalance / 2);
+
+        assertEq(instance.accumulatedTax(), 0); // no tax
+    }
+
+    function test_sweepTax_swapsToEthAndSendsToVault() public {
+        _graduate();
+
+        // Accumulate some tax by selling tokens to ZAMM
+        uint256 buyerBalance = instance.balanceOf(buyer);
+        vm.prank(buyer);
+        instance.transfer(zammAddr, buyerBalance);
+        uint256 accumulated = instance.accumulatedTax();
+        assertGt(accumulated, 0);
+
+        // Fund MockZAMM with ETH to return on swap
+        vm.deal(zammAddr, 10 ether);
+        zamm.setEthPerToken(1e15); // 0.001 ETH per token
+
+        // vault is just an address in tests — it needs to accept ETH
+        // MockVault: vault = makeAddr("vault") is an EOA, can receive ETH but has no receiveInstance()
+        // We need to make vault accept the call — use a mock vault
+        vm.mockCall(
+            vault,
+            abi.encodeWithSignature("receiveInstance(address,uint256,address)"),
+            abi.encode()
+        );
+
+        instance.sweepTax();
+        assertEq(instance.accumulatedTax(), 0);
+    }
+
+    function test_sweepTax_noopOnZeroBalance() public {
+        _graduate();
+        // No accumulated tax — should be a no-op
+        instance.sweepTax();
+        assertEq(instance.accumulatedTax(), 0);
+    }
 }

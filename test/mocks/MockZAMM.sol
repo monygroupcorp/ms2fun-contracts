@@ -47,9 +47,34 @@ contract MockZAMM {
         pools[poolId].supply = supply;
     }
 
+    // Configurable swap output for swapExactIn
+    uint256 public ethPerToken = 1e15; // 0.001 ETH per token
+
     function setLpToMint(uint256 amount) external { lpToMint = amount; }
     function setEthPerLp(uint256 amount) external { ethPerLp = amount; }
     function setTokenPerLp(uint256 amount) external { tokenPerLp = amount; }
+    function setEthPerToken(uint256 amount) external { ethPerToken = amount; }
+
+    /// @notice Simulates swapExactIn: pulls tokens from caller, sends ETH to `to`
+    function swapExactIn(
+        PoolKey calldata poolKey,
+        uint256 amountIn,
+        uint256 /*amountOutMin*/,
+        bool /*zeroForOne*/,
+        address to,
+        uint256 /*deadline*/
+    ) external returns (uint256 amountOut) {
+        // Pull the non-ETH token from caller
+        address token = poolKey.token0 != address(0) ? poolKey.token0 : poolKey.token1;
+        if (token != address(0)) {
+            IERC20(token).transferFrom(msg.sender, address(this), amountIn);
+        }
+        amountOut = amountIn * ethPerToken / 1 ether;
+        if (amountOut > 0 && address(this).balance >= amountOut) {
+            (bool ok,) = payable(to).call{value: amountOut}("");
+            require(ok, "MockZAMM: ETH transfer failed");
+        }
+    }
 
     /// @notice Simulates addLiquidity: accepts ETH + token, mints LP to `to`
     function addLiquidity(
