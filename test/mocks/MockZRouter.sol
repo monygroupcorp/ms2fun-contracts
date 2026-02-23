@@ -17,6 +17,33 @@ contract MockZRouter {
     // Keep old name as alias for backwards compat with tests that call setEthOutRatio
     function setEthOutRatio(uint256 ratio) external { outRatio = ratio; }
 
+    /// @notice Simulates swapV4: same bidirectional logic as swapVZ
+    function swapV4(
+        address to,
+        bool /*exactOut*/,
+        uint24 /*swapFee*/,
+        int24 /*tickSpace*/,
+        address tokenIn,
+        address tokenOut,
+        uint256 swapAmount,
+        uint256 /*amountLimit*/,
+        uint256 /*deadline*/
+    ) external payable returns (uint256 amountIn, uint256 amountOut) {
+        amountIn = swapAmount;
+        amountOut = swapAmount * outRatio / 1e18;
+
+        if (tokenIn == address(0)) {
+            // ETH → token
+            require(tokenOut != address(0), "MockZRouter: tokenOut must be token");
+            IERC20(tokenOut).transfer(to, amountOut);
+        } else {
+            // token → ETH
+            IERC20(tokenIn).transferFrom(msg.sender, address(this), swapAmount);
+            require(address(this).balance >= amountOut, "MockZRouter: insufficient ETH");
+            payable(to).transfer(amountOut);
+        }
+    }
+
     function swapVZ(
         address to,
         bool /*exactOut*/,
