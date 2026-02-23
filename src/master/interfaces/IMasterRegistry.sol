@@ -33,7 +33,7 @@ interface IMasterRegistry {
         address instance;
         address factory;
         address creator;
-        address vault;
+        address[] vaults;      // Append-only. Index 0 = genesis vault. Last = active vault.
         string name;
         string metadataURI;
         bytes32 nameHash;
@@ -64,6 +64,8 @@ interface IMasterRegistry {
     );
 
     event VaultDeactivated(address indexed vault);
+
+    event InstanceVaultMigrated(address indexed instance, address indexed newVault, uint256 vaultIndex);
 
     // Functions
     function registerInstance(
@@ -113,4 +115,9 @@ interface IMasterRegistry {
 
     // Namespace Protection
     function isNameTaken(string memory name) external view returns (bool);
+
+    // Instance Vault Migration
+    function migrateVault(address instance, address newVault) external;
+    function getInstanceVaults(address instance) external view returns (address[] memory);
+    function getActiveVault(address instance) external view returns (address);
 }
