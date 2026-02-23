@@ -16,8 +16,21 @@ import {LiquidityAmounts} from "../libraries/v4/LiquidityAmounts.sol";
 import {TickMath} from "v4-core/libraries/TickMath.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IAlignmentVault} from "../interfaces/IAlignmentVault.sol";
-import {IVaultSwapRouter} from "../interfaces/IVaultSwapRouter.sol";
 import {IVaultPriceValidator} from "../interfaces/IVaultPriceValidator.sol";
+
+interface IzRouterV4 {
+    function swapV4(
+        address to,
+        bool exactOut,
+        uint24 swapFee,
+        int24 tickSpace,
+        address tokenIn,
+        address tokenOut,
+        uint256 swapAmount,
+        uint256 amountLimit,
+        uint256 deadline
+    ) external payable returns (uint256 amountIn, uint256 amountOut);
+}
 
 /// @notice ERC20 interface with decimals (used only for token setup)
 interface IERC20Metadata {
@@ -96,16 +109,16 @@ contract UltraAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback, IAlig
     // External contracts (storage, not immutable — required for clone pattern)
     address public weth;
     address public poolManager;
-    address public v3Router;
-    address public v2Router;
-    address public v2Factory;
-    address public v3Factory;
     address public alignmentToken;
     uint8 public alignmentTokenDecimals;
     PoolKey public v4PoolKey;
 
+    // zRouter swap config (set once at initialize)
+    address public zRouter;
+    uint24  public zRouterFee;
+    int24   public zRouterTickSpacing;
+
     // Peripherals (set once at initialize, owner can update)
-    IVaultSwapRouter    public swapRouter;
     IVaultPriceValidator public priceValidator;
 
     // Clone guard
@@ -161,14 +174,12 @@ contract UltraAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback, IAlig
     function initialize(
         address _weth,
         address _poolManager,
-        address _v3Router,
-        address _v2Router,
-        address _v2Factory,
-        address _v3Factory,
         address _alignmentToken,
         address _factoryCreator,
         uint256 _creatorYieldCutBps,
-        IVaultSwapRouter _swapRouter,
+        address _zRouter,
+        uint24  _zRouterFee,
+        int24   _zRouterTickSpacing,
         IVaultPriceValidator _priceValidator
     ) external {
         if (_initialized) revert("Already initialized");
@@ -183,14 +194,12 @@ contract UltraAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback, IAlig
 
         weth = _weth;
         poolManager = _poolManager;
-        v3Router = _v3Router;
-        v2Router = _v2Router;
-        v2Factory = _v2Factory;
-        v3Factory = _v3Factory;
         alignmentToken = _alignmentToken;
         factoryCreator = _factoryCreator;
         creatorYieldCutBps = _creatorYieldCutBps;
-        swapRouter = _swapRouter;
+        zRouter = _zRouter;
+        zRouterFee = _zRouterFee;
+        zRouterTickSpacing = _zRouterTickSpacing;
         priceValidator = _priceValidator;
 
         // Initialize defaults that can't use declaration initializers with clones
@@ -279,11 +288,17 @@ contract UltraAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback, IAlig
         );
         uint256 ethToSwap = (ethToAdd * proportionToSwap) / 1e18;
 
-        // Swap ETH for alignment token via router
-        uint256 targetTokenReceived = swapRouter.swapETHForToken{value: ethToSwap}(
+        // Swap ETH for alignment token via zRouter
+        (, uint256 targetTokenReceived) = IzRouterV4(zRouter).swapV4{value: ethToSwap}(
+            address(this),
+            false,
+            zRouterFee,
+            zRouterTickSpacing,
+            address(0),
             alignmentToken,
+            ethToSwap,
             minOutTarget,
-            address(this)
+            type(uint256).max
         );
 
         // Add to LP position
@@ -417,8 +432,18 @@ contract UltraAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback, IAlig
 
     function _convertVaultFeesToEth(uint256 tokenAmount) internal returns (uint256 ethReceived) {
         if (tokenAmount == 0) return 0;
-        IERC20(alignmentToken).approve(address(swapRouter), tokenAmount);
-        return swapRouter.swapTokenForETH(alignmentToken, tokenAmount, 0, address(this));
+        IERC20(alignmentToken).approve(zRouter, tokenAmount);
+        (, ethReceived) = IzRouterV4(zRouter).swapV4(
+            address(this),
+            false,
+            zRouterFee,
+            zRouterTickSpacing,
+            alignmentToken,
+            address(0),
+            tokenAmount,
+            0,
+            type(uint256).max
+        );
     }
 
     function _collectAndAccumulateVaultFees() internal {
