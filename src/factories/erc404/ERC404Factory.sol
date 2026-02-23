@@ -281,7 +281,8 @@ contract ERC404Factory is OwnableRoles, ReentrancyGuard, IFactory {
             unit,
             address(stakingModule),
             address(liquidityDeployer),
-            address(curveComputer)
+            address(curveComputer),
+            address(masterRegistry)
         );
 
         // Register with master registry
