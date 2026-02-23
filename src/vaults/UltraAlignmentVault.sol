@@ -229,7 +229,7 @@ contract UltraAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback, IAlig
         emit ContributionReceived(msg.sender, msg.value);
     }
 
-    function receiveInstance(
+    function receiveContribution(
         Currency currency,
         uint256 amount,
         address benefactor

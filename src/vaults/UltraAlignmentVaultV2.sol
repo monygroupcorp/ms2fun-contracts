@@ -173,7 +173,7 @@ contract UltraAlignmentVaultV2 is IAlignmentVault, Ownable, ReentrancyGuard {
         assembly { locked := eq(sload(slot), address()) }
     }
 
-    function receiveInstance(Currency currency, uint256 /*amount*/, address benefactor)
+    function receiveContribution(Currency currency, uint256 /*amount*/, address benefactor)
         external
         payable
         override
