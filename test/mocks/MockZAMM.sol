@@ -101,9 +101,10 @@ contract MockZAMM {
 
         pools[poolId].supply -= liquidity;
 
-        // Send ETH
+        // Send ETH via call (transfer only forwards 2300 gas, not enough for vault receive())
         if (amount0 > 0 && address(this).balance >= amount0) {
-            payable(to).transfer(amount0);
+            (bool ok,) = payable(to).call{value: amount0}("");
+            require(ok, "MockZAMM: ETH transfer failed");
         }
         // Send token
         if (amount1 > 0 && poolKey.token1 != address(0)) {

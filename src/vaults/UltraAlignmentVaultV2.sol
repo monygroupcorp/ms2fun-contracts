@@ -160,8 +160,17 @@ contract UltraAlignmentVaultV2 is IAlignmentVault, Ownable, ReentrancyGuard {
 
     // ── Receive ───────────────────────────────────────────────────────────
 
+    /// @dev Silently accept ETH when inside a nonReentrant call (e.g. ZAMM removeLiquidity
+    ///      returning ETH, zRouter returning swap proceeds). Only track contributions when
+    ///      ETH arrives outside of an active vault operation.
     receive() external payable {
-        _trackPending(msg.sender, msg.value);
+        if (!_isLocked()) _trackPending(msg.sender, msg.value);
+    }
+
+    function _isLocked() internal view returns (bool locked) {
+        // Solady ReentrancyGuard sets slot 0x929eee149b4bd21268 to address() while locked.
+        uint256 slot = 0x929eee149b4bd21268;
+        assembly { locked := eq(sload(slot), address()) }
     }
 
     function receiveInstance(Currency currency, uint256 amount, address benefactor)
@@ -297,7 +306,6 @@ contract UltraAlignmentVaultV2 is IAlignmentVault, Ownable, ReentrancyGuard {
         if (totalSupply == 0) return 0;
 
         uint256 currentETH = uint256(pool.reserve0) * lpHeld / totalSupply;
-        uint256 currentToken = uint256(pool.reserve1) * lpHeld / totalSupply;
 
         // ── Compute fee growth above principal ──
         uint256 ethFees = currentETH > principalETH ? currentETH - principalETH : 0;
