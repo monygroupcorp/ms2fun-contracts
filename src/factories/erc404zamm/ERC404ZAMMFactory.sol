@@ -177,7 +177,8 @@ contract ERC404ZAMMFactory is OwnableRoles, ReentrancyGuard, IFactory {
             creator,
             unit,
             address(liquidityDeployer),
-            address(curveComputer)
+            address(curveComputer),
+            address(masterRegistry)
         );
 
         masterRegistry.registerInstance(instance, address(this), instanceCreator, name, metadataURI, vault);
