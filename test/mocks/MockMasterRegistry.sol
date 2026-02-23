@@ -69,7 +69,7 @@ contract MockMasterRegistry is IMasterRegistry {
             instance: address(0),
             factory: address(0),
             creator: address(0),
-            vault: address(0),
+            vaults: new address[](0),
             name: "",
             metadataURI: "",
             nameHash: bytes32(0),
@@ -116,6 +116,16 @@ contract MockMasterRegistry is IMasterRegistry {
 
     function isRegisteredInstance(address) external view override returns (bool) {
         return true; // Always return true in mock for testing
+    }
+
+    function migrateVault(address, address) external override {}
+
+    function getInstanceVaults(address) external view override returns (address[] memory) {
+        return new address[](0);
+    }
+
+    function getActiveVault(address) external view override returns (address) {
+        return address(0);
     }
 
     // Namespace tracking for name collision tests

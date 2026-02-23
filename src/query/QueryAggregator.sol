@@ -291,7 +291,8 @@ contract QueryAggregator is UUPSUpgradeable, Ownable {
             card.creator = info.creator;
             card.registeredAt = info.registeredAt;
             card.factory = info.factory;
-            card.vault = info.vault;
+            address activeVault = info.vaults.length > 0 ? info.vaults[info.vaults.length - 1] : address(0);
+            card.vault = activeVault;
 
             // 2. Get factory info
             try masterRegistry.getFactoryInfoByAddress(info.factory) returns (IMasterRegistry.FactoryInfo memory factoryInfo) {
@@ -300,8 +301,8 @@ contract QueryAggregator is UUPSUpgradeable, Ownable {
             } catch {}
 
             // 3. Get vault info
-            if (info.vault != address(0)) {
-                try masterRegistry.getVaultInfo(info.vault) returns (IMasterRegistry.VaultInfo memory vaultInfo) {
+            if (activeVault != address(0)) {
+                try masterRegistry.getVaultInfo(activeVault) returns (IMasterRegistry.VaultInfo memory vaultInfo) {
                     card.vaultName = vaultInfo.name;
                 } catch {}
             }

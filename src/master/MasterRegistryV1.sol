@@ -157,11 +157,14 @@ contract MasterRegistryV1 is UUPSUpgradeable, Ownable, IMasterRegistry {
 
         nameHashes[nameHash] = true;
 
+        address[] memory initialVaults = new address[](1);
+        initialVaults[0] = vault;
+
         instanceInfo[instance] = IMasterRegistry.InstanceInfo({
             instance: instance,
             factory: factory,
             creator: creator,
-            vault: vault,
+            vaults: initialVaults,
             name: name,
             metadataURI: metadataURI,
             nameHash: nameHash,
@@ -272,6 +275,35 @@ contract MasterRegistryV1 is UUPSUpgradeable, Ownable, IMasterRegistry {
         require(registeredVaults[vault], "Vault not registered");
         vaultInfo[vault].active = false;
         emit VaultDeactivated(vault);
+    }
+
+    // ============ Instance Vault Migration ============
+
+    function migrateVault(address instance, address newVault) external override {
+        require(msg.sender == instance, "Only instance can migrate");
+        require(instanceInfo[instance].instance != address(0), "Instance not registered");
+        require(registeredVaults[newVault] && vaultInfo[newVault].active, "New vault not active");
+
+        address[] storage vaults = instanceInfo[instance].vaults;
+        uint256 genesisTargetId = vaultInfo[vaults[0]].targetId;
+        require(vaultInfo[newVault].targetId == genesisTargetId, "Vault target mismatch");
+
+        for (uint256 i = 0; i < vaults.length; i++) {
+            require(vaults[i] != newVault, "Vault already in array");
+        }
+
+        vaults.push(newVault);
+        emit InstanceVaultMigrated(instance, newVault, vaults.length - 1);
+    }
+
+    function getInstanceVaults(address instance) external view override returns (address[] memory) {
+        return instanceInfo[instance].vaults;
+    }
+
+    function getActiveVault(address instance) external view override returns (address) {
+        address[] storage vaults = instanceInfo[instance].vaults;
+        require(vaults.length > 0, "No vaults");
+        return vaults[vaults.length - 1];
     }
 
     // ============ Internal Helpers ============
