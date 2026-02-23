@@ -8,6 +8,7 @@ import {ZAMMLiquidityDeployerModule} from "../../../src/factories/erc404zamm/ZAM
 import {BondingCurveMath} from "../../../src/factories/erc404/libraries/BondingCurveMath.sol";
 import {CurveParamsComputer} from "../../../src/factories/erc404/CurveParamsComputer.sol";
 import {MockZAMM} from "../../mocks/MockZAMM.sol";
+import {MockMasterRegistry} from "../../mocks/MockMasterRegistry.sol";
 
 contract ERC404ZAMMBondingInstanceTest is Test {
     ERC404ZAMMBondingInstance instance;
@@ -23,11 +24,13 @@ contract ERC404ZAMMBondingInstanceTest is Test {
     address globalMsgRegistry = makeAddr("globalMsgRegistry");
     address factoryCreator = makeAddr("factoryCreator");
     address zammAddr;
+    MockMasterRegistry masterRegistry;
 
     function setUp() public {
         zamm = new MockZAMM();
         realDeployer = new ZAMMLiquidityDeployerModule();
         realCurveComputer = new CurveParamsComputer(address(this));
+        masterRegistry = new MockMasterRegistry();
 
         // Deploy implementation and clone it (constructor guards implementation from direct init)
         ERC404ZAMMBondingInstance impl = new ERC404ZAMMBondingInstance();
@@ -75,7 +78,8 @@ contract ERC404ZAMMBondingInstanceTest is Test {
             factoryCreator,
             1e18,                // tokenUnit
             address(realDeployer),
-            address(realCurveComputer)
+            address(realCurveComputer),
+            address(masterRegistry)
         );
     }
 
@@ -275,5 +279,45 @@ contract ERC404ZAMMBondingInstanceTest is Test {
         // No accumulated tax — should be a no-op
         instance.sweepTax();
         assertEq(instance.accumulatedTax(), 0);
+    }
+
+    // ── Vault migration tests ─────────────────────────────────────────────────
+
+    function test_MigrateVault_UpdatesActiveVault() public {
+        address newVault = makeAddr("newVault");
+        vm.prank(owner);
+        instance.migrateVault(newVault);
+        assertEq(address(instance.vault()), newVault);
+    }
+
+    function test_ClaimAllFees_IteratesAllVaults() public {
+        address vault1 = vault;
+        address vault2 = makeAddr("vault2");
+
+        // Mock registry to return two vaults
+        vm.mockCall(
+            address(masterRegistry),
+            abi.encodeWithSignature("getInstanceVaults(address)", address(instance)),
+            abi.encode(_twoVaults(vault1, vault2))
+        );
+        // Mock claimFees on both vaults (returns 0)
+        vm.mockCall(vault1, abi.encodeWithSignature("claimFees()"), abi.encode(uint256(0)));
+        vm.mockCall(vault2, abi.encodeWithSignature("claimFees()"), abi.encode(uint256(0)));
+
+        vm.prank(owner);
+        instance.claimAllFees(); // must not revert
+    }
+
+    function test_MigrateVault_RevertIfNotOwner() public {
+        address stranger = makeAddr("stranger");
+        vm.prank(stranger);
+        vm.expectRevert();
+        instance.migrateVault(makeAddr("newVault"));
+    }
+
+    function _twoVaults(address a, address b) internal pure returns (address[] memory arr) {
+        arr = new address[](2);
+        arr[0] = a;
+        arr[1] = b;
     }
 }
