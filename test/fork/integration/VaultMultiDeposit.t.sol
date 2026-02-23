@@ -3,6 +3,11 @@ pragma solidity ^0.8.20;
 
 import { ForkTestBase } from "../helpers/ForkTestBase.sol";
 import { UltraAlignmentVault } from "src/vaults/UltraAlignmentVault.sol";
+import { UniswapVaultSwapRouter } from "src/peripherals/UniswapVaultSwapRouter.sol";
+import { UniswapVaultPriceValidator } from "src/peripherals/UniswapVaultPriceValidator.sol";
+import { IVaultSwapRouter } from "src/interfaces/IVaultSwapRouter.sol";
+import { IVaultPriceValidator } from "src/interfaces/IVaultPriceValidator.sol";
+import { LibClone } from "solady/utils/LibClone.sol";
 import { Currency } from "v4-core/types/Currency.sol";
 import { PoolKey } from "v4-core/types/PoolKey.sol";
 import { IHooks } from "v4-core/interfaces/IHooks.sol";
@@ -33,10 +38,19 @@ contract VaultMultiDepositTest is ForkTestBase {
         bob = makeAddr("bob");
         charlie = makeAddr("charlie");
 
-        // Deploy vault with router and factory addresses
+        // Deploy peripherals and vault (clone pattern)
         address alignmentToken = USDC; // Use real USDC for fork tests (has V3 pool with WETH)
+        UniswapVaultPriceValidator priceValidator = new UniswapVaultPriceValidator(
+            WETH, UNISWAP_V2_FACTORY, UNISWAP_V3_FACTORY, UNISWAP_V4_POOL_MANAGER, 1000
+        );
+        UniswapVaultSwapRouter swapRouter = new UniswapVaultSwapRouter(
+            WETH, UNISWAP_V4_POOL_MANAGER, UNISWAP_V3_ROUTER, UNISWAP_V2_ROUTER,
+            UNISWAP_V2_FACTORY, UNISWAP_V3_FACTORY, 3000
+        );
+        UltraAlignmentVault vaultImpl = new UltraAlignmentVault();
+        vault = UltraAlignmentVault(payable(LibClone.clone(address(vaultImpl))));
         vm.prank(owner);
-        vault = new UltraAlignmentVault(
+        vault.initialize(
             WETH,
             UNISWAP_V4_POOL_MANAGER,
             UNISWAP_V3_ROUTER,
@@ -45,7 +59,9 @@ contract VaultMultiDepositTest is ForkTestBase {
             UNISWAP_V3_FACTORY,
             alignmentToken,
             address(0xC1EA),
-            100
+            100,
+            IVaultSwapRouter(address(swapRouter)),
+            IVaultPriceValidator(address(priceValidator))
         );
 
         // Set V4 pool key - H-02: Hook requires native ETH (address(0)), not WETH

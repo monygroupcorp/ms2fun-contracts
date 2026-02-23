@@ -12,6 +12,11 @@ import {CurveParamsComputer} from "../../src/factories/erc404/CurveParamsCompute
 import {UltraAlignmentVault} from "../../src/vaults/UltraAlignmentVault.sol";
 import {MockEXECToken} from "../mocks/MockEXECToken.sol";
 import {MockMasterRegistry} from "../mocks/MockMasterRegistry.sol";
+import {MockVaultSwapRouter} from "../mocks/MockVaultSwapRouter.sol";
+import {MockVaultPriceValidator} from "../mocks/MockVaultPriceValidator.sol";
+import {IVaultSwapRouter} from "../../src/interfaces/IVaultSwapRouter.sol";
+import {IVaultPriceValidator} from "../../src/interfaces/IVaultPriceValidator.sol";
+import {LibClone} from "solady/utils/LibClone.sol";
 import {GlobalMessageRegistry} from "../../src/registry/GlobalMessageRegistry.sol";
 import {MockFactory} from "../mocks/MockFactory.sol";
 import {IFactory} from "../../src/interfaces/IFactory.sol";
@@ -67,18 +72,24 @@ contract CreatorFeesSplitTest is Test {
     function setUp() public {
         token = new MockEXECToken(1000000e18);
 
-        // Deploy vault with creator
-        vault = new UltraAlignmentVault(
-            mockWETH,
-            mockV4PoolManager,
-            address(0x5555555555555555555555555555555555555555),
-            address(0x6666666666666666666666666666666666666666),
-            address(0x7777777777777777777777777777777777777777),
-            address(0x8888888888888888888888888888888888888888),
-            address(token),
-            vaultFactoryCreator,
-            CREATOR_YIELD_CUT_BPS
-        );
+        // Deploy vault with creator (clone pattern)
+        {
+            UltraAlignmentVault _impl = new UltraAlignmentVault();
+            vault = UltraAlignmentVault(payable(LibClone.clone(address(_impl))));
+            vault.initialize(
+                mockWETH,
+                mockV4PoolManager,
+                address(0x5555555555555555555555555555555555555555),
+                address(0x6666666666666666666666666666666666666666),
+                address(0x7777777777777777777777777777777777777777),
+                address(0x8888888888888888888888888888888888888888),
+                address(token),
+                vaultFactoryCreator,
+                CREATOR_YIELD_CUT_BPS,
+                IVaultSwapRouter(address(new MockVaultSwapRouter())),
+                IVaultPriceValidator(address(new MockVaultPriceValidator()))
+            );
+        }
 
         PoolKey memory mockPoolKey = PoolKey({
             currency0: Currency.wrap(address(0)),
@@ -94,7 +105,8 @@ contract CreatorFeesSplitTest is Test {
         stakingModule = new ERC404StakingModule(address(stakingRegistry));
 
         // Deploy global message registry
-        globalMsgRegistry = new GlobalMessageRegistry(owner, address(mockRegistry));
+        globalMsgRegistry = new GlobalMessageRegistry();
+        globalMsgRegistry.initialize(owner, address(mockRegistry));
 
         // Deploy ERC1155Factory with creator fee
         erc1155Factory = new ERC1155Factory(
@@ -375,8 +387,10 @@ contract CreatorFeesSplitTest is Test {
 
     function test_FactoryCreator_YieldCutBounds() public {
         // Creator yield cut cannot exceed protocol yield cut (500 bps = 5%)
+        UltraAlignmentVault _impl = new UltraAlignmentVault();
+        UltraAlignmentVault badClone = UltraAlignmentVault(payable(LibClone.clone(address(_impl))));
         vm.expectRevert("Creator cut exceeds protocol yield cut");
-        new UltraAlignmentVault(
+        badClone.initialize(
             mockWETH,
             mockV4PoolManager,
             address(0x5555555555555555555555555555555555555555),
@@ -385,7 +399,9 @@ contract CreatorFeesSplitTest is Test {
             address(0x8888888888888888888888888888888888888888),
             address(token),
             vaultFactoryCreator,
-            600 // 6% > 5% protocol cut, should revert
+            600, // 6% > 5% protocol cut, should revert
+            IVaultSwapRouter(address(0)),
+            IVaultPriceValidator(address(0))
         );
     }
 

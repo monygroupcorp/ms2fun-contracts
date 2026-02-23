@@ -7,6 +7,11 @@ import {HookAddressMiner} from "../helpers/HookAddressMiner.sol";
 import {UltraAlignmentHookFactory} from "../../../src/factories/erc404/hooks/UltraAlignmentHookFactory.sol";
 import {UltraAlignmentV4Hook} from "../../../src/factories/erc404/hooks/UltraAlignmentV4Hook.sol";
 import {UltraAlignmentVault} from "../../../src/vaults/UltraAlignmentVault.sol";
+import {MockVaultSwapRouter} from "../../mocks/MockVaultSwapRouter.sol";
+import {MockVaultPriceValidator} from "../../mocks/MockVaultPriceValidator.sol";
+import {IVaultSwapRouter} from "../../../src/interfaces/IVaultSwapRouter.sol";
+import {IVaultPriceValidator} from "../../../src/interfaces/IVaultPriceValidator.sol";
+import {LibClone} from "solady/utils/LibClone.sol";
 import {IPoolManager} from "v4-core/interfaces/IPoolManager.sol";
 import {IHooks} from "v4-core/interfaces/IHooks.sol";
 import {Hooks} from "v4-core/libraries/Hooks.sol";
@@ -102,18 +107,24 @@ contract V4HookDeploymentTest is ForkTestBase {
 
         poolManager = IPoolManager(UNISWAP_V4_POOL_MANAGER);
 
-        // Deploy real vault
-        vault = new UltraAlignmentVault(
-            WETH,
-            UNISWAP_V4_POOL_MANAGER,
-            UNISWAP_V3_ROUTER,
-            UNISWAP_V2_ROUTER,
-            UNISWAP_V2_FACTORY,
-            UNISWAP_V3_FACTORY,
-            USDC,  // Using USDC as alignment token for test
-            address(0xC1EA),
-            100
-        );
+        // Deploy real vault (clone pattern)
+        {
+            UltraAlignmentVault _impl = new UltraAlignmentVault();
+            vault = UltraAlignmentVault(payable(LibClone.clone(address(_impl))));
+            vault.initialize(
+                WETH,
+                UNISWAP_V4_POOL_MANAGER,
+                UNISWAP_V3_ROUTER,
+                UNISWAP_V2_ROUTER,
+                UNISWAP_V2_FACTORY,
+                UNISWAP_V3_FACTORY,
+                USDC,  // Using USDC as alignment token for test
+                address(0xC1EA),
+                100,
+                IVaultSwapRouter(address(new MockVaultSwapRouter())),
+                IVaultPriceValidator(address(new MockVaultPriceValidator()))
+            );
+        }
 
         // Deploy real hook factory
         hookFactory = new UltraAlignmentHookFactory(address(0)); // hookTemplate

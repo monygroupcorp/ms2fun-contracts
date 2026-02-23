@@ -6,6 +6,11 @@ import {UltraAlignmentHookFactory} from "../../../../src/factories/erc404/hooks/
 import {UltraAlignmentVault} from "../../../../src/vaults/UltraAlignmentVault.sol";
 import {MockEXECToken} from "../../../mocks/MockEXECToken.sol";
 import {MockPoolManager} from "../../../mocks/MockPoolManager.sol";
+import {MockVaultSwapRouter} from "../../../mocks/MockVaultSwapRouter.sol";
+import {MockVaultPriceValidator} from "../../../mocks/MockVaultPriceValidator.sol";
+import {IVaultSwapRouter} from "../../../../src/interfaces/IVaultSwapRouter.sol";
+import {IVaultPriceValidator} from "../../../../src/interfaces/IVaultPriceValidator.sol";
+import {LibClone} from "solady/utils/LibClone.sol";
 import {Currency} from "v4-core/types/Currency.sol";
 import {PoolKey} from "v4-core/types/PoolKey.sol";
 import {IHooks} from "v4-core/interfaces/IHooks.sol";
@@ -51,17 +56,23 @@ contract UltraAlignmentHookFactoryTest is Test {
         token = new MockEXECToken(1000000e18);
 
         // Deploy vault (WETH, PoolManager, V3Router, V2Router, V2Factory, V3Factory, AlignmentToken)
-        vault = new UltraAlignmentVault(
-            wethAddr,
-            address(poolManager),
-            address(0x5555555555555555555555555555555555555555),  // V3 router
-            address(0x6666666666666666666666666666666666666666),  // V2 router
-            address(0x7777777777777777777777777777777777777777),  // V2 factory
-            address(0x8888888888888888888888888888888888888888),  // V3 factory
-            address(token),
-            address(0xC1EA),
-            100
-        );
+        {
+            UltraAlignmentVault _impl = new UltraAlignmentVault();
+            vault = UltraAlignmentVault(payable(LibClone.clone(address(_impl))));
+            vault.initialize(
+                wethAddr,
+                address(poolManager),
+                address(0x5555555555555555555555555555555555555555),  // V3 router
+                address(0x6666666666666666666666666666666666666666),  // V2 router
+                address(0x7777777777777777777777777777777777777777),  // V2 factory
+                address(0x8888888888888888888888888888888888888888),  // V3 factory
+                address(token),
+                address(0xC1EA),
+                100,
+                IVaultSwapRouter(address(new MockVaultSwapRouter())),
+                IVaultPriceValidator(address(new MockVaultPriceValidator()))
+            );
+        }
 
         // Set V4 pool key
         // H-02: Hook requires native ETH (address(0)), not WETH

@@ -2,6 +2,7 @@
 pragma solidity ^0.8.20;
 
 import {Script, console} from "forge-std/Script.sol";
+import {LibClone} from "solady/utils/LibClone.sol";
 import {MasterRegistryV1} from "../src/master/MasterRegistryV1.sol";
 import {MasterRegistry} from "../src/master/MasterRegistry.sol";
 import {IMasterRegistry} from "../src/master/interfaces/IMasterRegistry.sol";
@@ -14,6 +15,10 @@ import {GrandCentral} from "../src/dao/GrandCentral.sol";
 import {ShareOffering} from "../src/dao/conductors/ShareOffering.sol";
 import {StipendConductor} from "../src/dao/conductors/StipendConductor.sol";
 import {UltraAlignmentVault} from "../src/vaults/UltraAlignmentVault.sol";
+import {UniswapVaultSwapRouter} from "../src/peripherals/UniswapVaultSwapRouter.sol";
+import {UniswapVaultPriceValidator} from "../src/peripherals/UniswapVaultPriceValidator.sol";
+import {IVaultSwapRouter} from "../src/interfaces/IVaultSwapRouter.sol";
+import {IVaultPriceValidator} from "../src/interfaces/IVaultPriceValidator.sol";
 import {ERC404Factory} from "../src/factories/erc404/ERC404Factory.sol";
 import {ERC404BondingInstance} from "../src/factories/erc404/ERC404BondingInstance.sol";
 import {ERC404StakingModule} from "../src/factories/erc404/ERC404StakingModule.sol";
@@ -39,16 +44,20 @@ contract DeploySepolia is Script {
     MasterRegistryV1 public masterRegistryImpl;
     MasterRegistry public masterRegistryProxy;
     address public masterRegistry; // proxy address cast for calls
-    ProtocolTreasuryV1 public treasury;
-    FeaturedQueueManager public queueManager;
-    GlobalMessageRegistry public globalMessageRegistry;
+    ProtocolTreasuryV1 public treasuryImpl;
+    ProtocolTreasuryV1 public treasury; // proxy
+    FeaturedQueueManager public queueManagerImpl;
+    FeaturedQueueManager public queueManager; // proxy
+    GlobalMessageRegistry public globalMessageRegistryImpl;
+    GlobalMessageRegistry public globalMessageRegistry; // proxy
 
     address public safe;
     GrandCentral public dao;
     ShareOffering public shareOffering;
     StipendConductor public stipendConductor;
 
-    AlignmentRegistryV1 public alignmentRegistry;
+    AlignmentRegistryV1 public alignmentRegistryImpl;
+    AlignmentRegistryV1 public alignmentRegistry; // proxy
     MockERC20 public testToken;
     uint256 public alignmentTargetId;
 
@@ -91,20 +100,25 @@ contract DeploySepolia is Script {
         masterRegistry = masterRegistryProxy.getProxyAddress();
 
         // 3. ProtocolTreasuryV1
-        treasury = new ProtocolTreasuryV1();
+        treasuryImpl = new ProtocolTreasuryV1();
+        treasury = ProtocolTreasuryV1(payable(LibClone.deployERC1967(address(treasuryImpl))));
         treasury.initialize(deployer);
         treasury.setV4PoolManager(poolManager);
         treasury.setWETH(weth);
 
         // 4. FeaturedQueueManager
-        queueManager = new FeaturedQueueManager();
+        queueManagerImpl = new FeaturedQueueManager();
+        queueManager = FeaturedQueueManager(payable(LibClone.deployERC1967(address(queueManagerImpl))));
         queueManager.initialize(masterRegistry, deployer);
 
         // 5. GlobalMessageRegistry
-        globalMessageRegistry = new GlobalMessageRegistry(deployer, masterRegistry);
+        globalMessageRegistryImpl = new GlobalMessageRegistry();
+        globalMessageRegistry = GlobalMessageRegistry(LibClone.deployERC1967(address(globalMessageRegistryImpl)));
+        globalMessageRegistry.initialize(deployer, masterRegistry);
 
         // 6. AlignmentRegistryV1
-        alignmentRegistry = new AlignmentRegistryV1();
+        alignmentRegistryImpl = new AlignmentRegistryV1();
+        alignmentRegistry = AlignmentRegistryV1(LibClone.deployERC1967(address(alignmentRegistryImpl)));
         alignmentRegistry.initialize(deployer);
         MasterRegistryV1(masterRegistry).setAlignmentRegistry(address(alignmentRegistry));
 
@@ -161,8 +175,16 @@ contract DeploySepolia is Script {
 
         // ============ Phase 4: Vault ============
 
-        // 12. UltraAlignmentVault
-        vault = new UltraAlignmentVault(
+        // 12. UltraAlignmentVault (peripherals + clone pattern)
+        UniswapVaultPriceValidator priceValidator = new UniswapVaultPriceValidator(
+            weth, v2Factory, v3Factory, poolManager, 1000
+        );
+        UniswapVaultSwapRouter swapRouter = new UniswapVaultSwapRouter(
+            weth, poolManager, v3Router, v2Router, v2Factory, v3Factory, 3000
+        );
+        UltraAlignmentVault vaultImpl = new UltraAlignmentVault();
+        vault = UltraAlignmentVault(payable(LibClone.clone(address(vaultImpl))));
+        vault.initialize(
             weth,
             poolManager,
             v3Router,
@@ -171,7 +193,9 @@ contract DeploySepolia is Script {
             v3Factory,
             address(testToken),
             deployer,       // factoryCreator
-            100             // creatorYieldCutBps (1%)
+            100,            // creatorYieldCutBps (1%)
+            IVaultSwapRouter(address(swapRouter)),
+            IVaultPriceValidator(address(priceValidator))
         );
 
         // 13. Register vault
@@ -276,9 +300,14 @@ contract DeploySepolia is Script {
         console.log("=== DEPLOYED ADDRESSES ===");
         console.log("MasterRegistry (proxy):", masterRegistry);
         console.log("MasterRegistry (impl):", address(masterRegistryImpl));
-        console.log("ProtocolTreasury:", address(treasury));
-        console.log("FeaturedQueueManager:", address(queueManager));
-        console.log("GlobalMessageRegistry:", address(globalMessageRegistry));
+        console.log("ProtocolTreasury (proxy):", address(treasury));
+        console.log("ProtocolTreasury (impl):", address(treasuryImpl));
+        console.log("FeaturedQueueManager (proxy):", address(queueManager));
+        console.log("FeaturedQueueManager (impl):", address(queueManagerImpl));
+        console.log("GlobalMessageRegistry (proxy):", address(globalMessageRegistry));
+        console.log("GlobalMessageRegistry (impl):", address(globalMessageRegistryImpl));
+        console.log("AlignmentRegistry (proxy):", address(alignmentRegistry));
+        console.log("AlignmentRegistry (impl):", address(alignmentRegistryImpl));
         console.log("GrandCentral (DAO):", address(dao));
         console.log("ShareOffering:", address(shareOffering));
         console.log("StipendConductor:", address(stipendConductor));

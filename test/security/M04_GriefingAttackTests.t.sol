@@ -5,6 +5,11 @@ import "forge-std/Test.sol";
 import "../../src/vaults/UltraAlignmentVault.sol";
 import {TestableUltraAlignmentVault} from "../helpers/TestableUltraAlignmentVault.sol";
 import "../../src/master/MasterRegistryV1.sol";
+import {MockVaultSwapRouter} from "../mocks/MockVaultSwapRouter.sol";
+import {MockVaultPriceValidator} from "../mocks/MockVaultPriceValidator.sol";
+import {IVaultSwapRouter} from "../../src/interfaces/IVaultSwapRouter.sol";
+import {IVaultPriceValidator} from "../../src/interfaces/IVaultPriceValidator.sol";
+import {LibClone} from "solady/utils/LibClone.sol";
 import {PoolKey} from "v4-core/types/PoolKey.sol";
 import {Currency} from "v4-core/types/Currency.sol";
 import {IHooks} from "v4-core/interfaces/IHooks.sol";
@@ -112,6 +117,10 @@ contract M04_GriefingAttackTests is Test {
     UltraAlignmentVault public vault;
     MockEXECToken public alignmentToken;
 
+    TestableUltraAlignmentVault public vaultImpl;
+    MockVaultSwapRouter public mockRouter;
+    MockVaultPriceValidator public mockValidator;
+
     address public owner;
     address public alice;
     address public mockPoolManager;
@@ -142,7 +151,13 @@ contract M04_GriefingAttackTests is Test {
         alignmentToken = new MockEXECToken(1000000e18);
 
         // Deploy vault (using testable version with mock swap/LP overrides)
-        vault = new TestableUltraAlignmentVault(
+        mockRouter = new MockVaultSwapRouter();
+        mockValidator = new MockVaultPriceValidator();
+        alignmentToken.transfer(address(mockRouter), 100000e18);
+
+        vaultImpl = new TestableUltraAlignmentVault();
+        vault = TestableUltraAlignmentVault(payable(LibClone.clone(address(vaultImpl))));
+        vault.initialize(
             mockWeth,
             mockPoolManager,
             mockV3Router,
@@ -151,7 +166,9 @@ contract M04_GriefingAttackTests is Test {
             mockV3Factory,
             address(alignmentToken),
             address(0xC1EA),
-            100
+            100,
+            IVaultSwapRouter(address(mockRouter)),
+            IVaultPriceValidator(address(mockValidator))
         );
 
         // Set V4 pool key for conversion tests
@@ -290,7 +307,12 @@ contract M04_GriefingAttackTests is Test {
 
     function test_InsufficientBalance_OperationStillSucceeds() public {
         // Setup vault with NO ETH for rewards
-        UltraAlignmentVault poorVault = new TestableUltraAlignmentVault(
+        MockVaultSwapRouter poorRouter = new MockVaultSwapRouter();
+        MockVaultPriceValidator poorValidator = new MockVaultPriceValidator();
+        alignmentToken.transfer(address(poorRouter), 100000e18);
+
+        UltraAlignmentVault poorVault = TestableUltraAlignmentVault(payable(LibClone.clone(address(vaultImpl))));
+        poorVault.initialize(
             mockWeth,
             mockPoolManager,
             mockV3Router,
@@ -299,7 +321,9 @@ contract M04_GriefingAttackTests is Test {
             mockV3Factory,
             address(alignmentToken),
             address(0xC1EA),
-            100
+            100,
+            IVaultSwapRouter(address(poorRouter)),
+            IVaultPriceValidator(address(poorValidator))
         );
 
         // Set V4 pool key
@@ -318,10 +342,11 @@ contract M04_GriefingAttackTests is Test {
         (bool s1, ) = address(poorVault).call{value: 5 ether}("");
         assertTrue(s1);
 
-        // Drain vault balance to simulate insufficient reward funds
-        // Note: TestableUltraAlignmentVault mock overrides don't consume ETH during swap/LP
-        // So we manually drain the vault to test insufficient balance scenario
-        vm.deal(address(poorVault), 0);
+        // The swap router will receive ~2.5 ETH (50% of 5 ETH pending, from mock validator).
+        // Drain vault to exactly the swap amount so that after the swap, vault.balance = 0
+        // and the reward (0.0012 ETH) cannot be paid.
+        // mockValidator returns 50% proportion, so ethToSwap = 5 ether * 50% = 2.5 ether.
+        vm.deal(address(poorVault), 2.5 ether);
 
         address caller = makeAddr("poorCaller");
 

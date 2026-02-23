@@ -7,7 +7,12 @@ import {ERC721AuctionInstance} from "../../../src/factories/erc721/ERC721Auction
 import {UltraAlignmentVault} from "../../../src/vaults/UltraAlignmentVault.sol";
 import {MockEXECToken} from "../../mocks/MockEXECToken.sol";
 import {MockMasterRegistry} from "../../mocks/MockMasterRegistry.sol";
+import {MockVaultSwapRouter} from "../../mocks/MockVaultSwapRouter.sol";
+import {MockVaultPriceValidator} from "../../mocks/MockVaultPriceValidator.sol";
+import {IVaultSwapRouter} from "../../../src/interfaces/IVaultSwapRouter.sol";
+import {IVaultPriceValidator} from "../../../src/interfaces/IVaultPriceValidator.sol";
 import {GlobalMessageRegistry} from "../../../src/registry/GlobalMessageRegistry.sol";
+import {LibClone} from "solady/utils/LibClone.sol";
 import {Currency} from "v4-core/types/Currency.sol";
 import {PoolKey} from "v4-core/types/PoolKey.sol";
 import {IHooks} from "v4-core/interfaces/IHooks.sol";
@@ -33,17 +38,23 @@ contract ERC721AuctionFactoryTest is Test {
 
         token = new MockEXECToken(1000000e18);
 
-        vault = new UltraAlignmentVault(
-            address(0x2222222222222222222222222222222222222222),
-            address(0x4444444444444444444444444444444444444444),
-            address(0x5555555555555555555555555555555555555555),
-            address(0x6666666666666666666666666666666666666666),
-            address(0x7777777777777777777777777777777777777777),
-            address(0x8888888888888888888888888888888888888888),
-            address(token),
-            address(0xC1EA),
-            100
-        );
+        {
+            UltraAlignmentVault _impl = new UltraAlignmentVault();
+            vault = UltraAlignmentVault(payable(LibClone.clone(address(_impl))));
+            vault.initialize(
+                address(0x2222222222222222222222222222222222222222),
+                address(0x4444444444444444444444444444444444444444),
+                address(0x5555555555555555555555555555555555555555),
+                address(0x6666666666666666666666666666666666666666),
+                address(0x7777777777777777777777777777777777777777),
+                address(0x8888888888888888888888888888888888888888),
+                address(token),
+                address(0xC1EA),
+                100,
+                IVaultSwapRouter(address(new MockVaultSwapRouter())),
+                IVaultPriceValidator(address(new MockVaultPriceValidator()))
+            );
+        }
 
         PoolKey memory mockPoolKey = PoolKey({
             currency0: Currency.wrap(address(0)),
@@ -56,7 +67,8 @@ contract ERC721AuctionFactoryTest is Test {
 
         mockRegistry = new MockMasterRegistry();
 
-        GlobalMessageRegistry msgRegistry = new GlobalMessageRegistry(owner, address(mockRegistry));
+        GlobalMessageRegistry msgRegistry = new GlobalMessageRegistry();
+        msgRegistry.initialize(owner, address(mockRegistry));
         factory = new ERC721AuctionFactory(address(mockRegistry), address(0xC1EA), 2000, address(msgRegistry));
         factory.setProtocolTreasury(treasury);
 

@@ -193,6 +193,14 @@ contract UltraAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback, IAlig
         swapRouter = _swapRouter;
         priceValidator = _priceValidator;
 
+        // Initialize defaults that can't use declaration initializers with clones
+        protocolYieldCutBps = 500;
+        standardConversionReward = 0.0012 ether;
+        v3PreferredFee = 3000;
+        maxPriceDeviationBps = 500;
+        vaultFeeCollectionInterval = 1 days;
+        dustDistributionThreshold = 1e18;
+
         try IERC20Metadata(_alignmentToken).decimals() returns (uint8 decimals) {
             alignmentTokenDecimals = decimals;
         } catch {
@@ -272,7 +280,6 @@ contract UltraAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback, IAlig
         uint256 ethToSwap = (ethToAdd * proportionToSwap) / 1e18;
 
         // Swap ETH for alignment token via router
-        IERC20(alignmentToken).approve(address(swapRouter), 0); // reset
         uint256 targetTokenReceived = swapRouter.swapETHForToken{value: ethToSwap}(
             alignmentToken,
             minOutTarget,

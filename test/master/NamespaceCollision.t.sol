@@ -13,6 +13,11 @@ import {GlobalMessageRegistry} from "../../src/registry/GlobalMessageRegistry.so
 import {ERC404BondingInstance} from "../../src/factories/erc404/ERC404BondingInstance.sol";
 import {UltraAlignmentVault} from "../../src/vaults/UltraAlignmentVault.sol";
 import {MockEXECToken} from "../mocks/MockEXECToken.sol";
+import {MockVaultSwapRouter} from "../mocks/MockVaultSwapRouter.sol";
+import {MockVaultPriceValidator} from "../mocks/MockVaultPriceValidator.sol";
+import {IVaultSwapRouter} from "../../src/interfaces/IVaultSwapRouter.sol";
+import {IVaultPriceValidator} from "../../src/interfaces/IVaultPriceValidator.sol";
+import {LibClone} from "solady/utils/LibClone.sol";
 import {Currency} from "v4-core/types/Currency.sol";
 import {PoolKey} from "v4-core/types/PoolKey.sol";
 import {IHooks} from "v4-core/interfaces/IHooks.sol";
@@ -82,18 +87,24 @@ contract NamespaceCollisionTest is Test {
         address innerProxy = proxy.getProxyAddress();
         registry = MasterRegistryV1(innerProxy);
 
-        // Deploy vault
-        vault = new UltraAlignmentVault(
-            mockWETH,
-            mockV4PoolManager,
-            address(0x5555555555555555555555555555555555555555), // V3 router
-            address(0x6666666666666666666666666666666666666666), // V2 router
-            address(0x7777777777777777777777777777777777777777), // V2 factory
-            address(0x8888888888888888888888888888888888888888), // V3 factory
-            address(execToken),
-            address(0xC1EA),  // vault creator
-            100               // creator yield cut (1%)
-        );
+        // Deploy vault (clone pattern)
+        {
+            UltraAlignmentVault _impl = new UltraAlignmentVault();
+            vault = UltraAlignmentVault(payable(LibClone.clone(address(_impl))));
+            vault.initialize(
+                mockWETH,
+                mockV4PoolManager,
+                address(0x5555555555555555555555555555555555555555), // V3 router
+                address(0x6666666666666666666666666666666666666666), // V2 router
+                address(0x7777777777777777777777777777777777777777), // V2 factory
+                address(0x8888888888888888888888888888888888888888), // V3 factory
+                address(execToken),
+                address(0xC1EA),  // vault creator
+                100,              // creator yield cut (1%)
+                IVaultSwapRouter(address(new MockVaultSwapRouter())),
+                IVaultPriceValidator(address(new MockVaultPriceValidator()))
+            );
+        }
 
         // Set V4 pool key
         PoolKey memory mockPoolKey = PoolKey({
@@ -113,7 +124,7 @@ contract NamespaceCollisionTest is Test {
         stakingModule = new ERC404StakingModule(address(stakingRegistry));
 
         // Deploy global message registry
-        GlobalMessageRegistry globalMsgRegistry = new GlobalMessageRegistry(owner, address(registry));
+        GlobalMessageRegistry globalMsgRegistry = new GlobalMessageRegistry(); globalMsgRegistry.initialize(owner, address(registry));
 
         // Deploy LaunchManager and CurveParamsComputer
         LaunchManager launchManager = new LaunchManager(owner);
