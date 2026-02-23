@@ -27,6 +27,7 @@ Thumbs.db
 
 # Foundry
 forge-cache/
+foundry.lock
 
 # Claude Code
 .claude/*
