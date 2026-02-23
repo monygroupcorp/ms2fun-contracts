@@ -2,11 +2,10 @@
 pragma solidity ^0.8.20;
 
 import {UltraAlignmentVault} from "../../src/vaults/UltraAlignmentVault.sol";
-import {IVaultSwapRouter} from "../../src/interfaces/IVaultSwapRouter.sol";
 import {IVaultPriceValidator} from "../../src/interfaces/IVaultPriceValidator.sol";
 
 /// @notice Test-only vault that overrides LP with mock behavior.
-/// @dev Swap behavior is controlled via MockVaultSwapRouter injected at initialize().
+/// @dev Swap behavior is handled by MockZRouter injected at initialize().
 ///      Only _addToLpPosition is overridden here since it requires a real V4 pool.
 contract TestableUltraAlignmentVault is UltraAlignmentVault {
     function _addToLpPosition(

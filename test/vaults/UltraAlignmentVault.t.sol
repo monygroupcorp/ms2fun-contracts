@@ -5,9 +5,13 @@ import {Test, console2} from "forge-std/Test.sol";
 import {UltraAlignmentVault} from "../../src/vaults/UltraAlignmentVault.sol";
 import {TestableUltraAlignmentVault} from "../helpers/TestableUltraAlignmentVault.sol";
 import {MockEXECToken} from "../mocks/MockEXECToken.sol";
+import {MockZRouter} from "../mocks/MockZRouter.sol";
+import {MockVaultPriceValidator} from "../mocks/MockVaultPriceValidator.sol";
+import {IVaultPriceValidator} from "../../src/interfaces/IVaultPriceValidator.sol";
 import {Currency} from "v4-core/types/Currency.sol";
 import {PoolKey} from "v4-core/types/PoolKey.sol";
 import {IHooks} from "v4-core/interfaces/IHooks.sol";
+import {LibClone} from "solady/utils/LibClone.sol";
 
 /**
  * @title UltraAlignmentVaultTest
@@ -26,10 +30,10 @@ contract UltraAlignmentVaultTest is Test {
 
     address public mockWETH = address(0x1111111111111111111111111111111111111111);
     address public mockPoolManager = address(0x2222222222222222222222222222222222222222);
-    address public mockV3Router = address(0x3333333333333333333333333333333333333333);
-    address public mockV2Router = address(0x4444444444444444444444444444444444444444);
-    address public mockV2Factory = address(0x5555555555555555555555555555555555555555);
-    address public mockV3Factory = address(0x6666666666666666666666666666666666666666);
+
+    MockZRouter public mockZRouter;
+    MockVaultPriceValidator public mockValidator;
+    TestableUltraAlignmentVault public vaultImpl;
 
     // Events
     event ContributionReceived(address indexed benefactor, uint256 amount);
@@ -49,17 +53,27 @@ contract UltraAlignmentVaultTest is Test {
         // Deploy mock alignment token
         alignmentToken = new MockEXECToken(1000000e18);
 
-        // Deploy vault (using testable version with mock swap/LP overrides)
-        vault = new TestableUltraAlignmentVault(
+        // Deploy mock peripherals
+        mockZRouter = new MockZRouter();
+        mockValidator = new MockVaultPriceValidator();
+
+        // Pre-fund MockZRouter for both swap directions
+        vm.deal(address(mockZRouter), 100 ether);
+        alignmentToken.transfer(address(mockZRouter), 100_000e18);
+
+        // Deploy testable vault implementation and clone it
+        vaultImpl = new TestableUltraAlignmentVault();
+        vault = TestableUltraAlignmentVault(payable(LibClone.clone(address(vaultImpl))));
+        vault.initialize(
             mockWETH,
             mockPoolManager,
-            mockV3Router,
-            mockV2Router,
-            mockV2Factory,
-            mockV3Factory,
             address(alignmentToken),
             address(0xC1EA),
-            100
+            100,
+            address(mockZRouter),
+            3000,
+            60,
+            IVaultPriceValidator(address(mockValidator))
         );
 
         // Set V4 pool key for conversion tests (using native ETH)
@@ -84,14 +98,14 @@ contract UltraAlignmentVaultTest is Test {
 
     // ========== Initialization Tests ==========
 
-    function test_Constructor_StoresParametersCorrectly() public view {
+    function test_Initialize_StoresParametersCorrectly() public view {
         assertEq(vault.weth(), mockWETH, "WETH address incorrect");
         assertEq(vault.poolManager(), mockPoolManager, "PoolManager address incorrect");
         assertEq(vault.alignmentToken(), address(alignmentToken), "AlignmentToken address incorrect");
         assertEq(vault.owner(), owner, "Owner address incorrect");
     }
 
-    function test_Constructor_InitializesStateVariables() public view {
+    function test_Initialize_InitializesStateVariables() public view {
         assertEq(vault.totalShares(), 0, "Total shares should be 0");
         assertEq(vault.totalPendingETH(), 0, "Total pending ETH should be 0");
         assertEq(vault.accumulatedFees(), 0, "Accumulated fees should be 0");
@@ -99,19 +113,48 @@ contract UltraAlignmentVaultTest is Test {
         assertEq(vault.standardConversionReward(), 0.0012 ether, "Standard conversion reward should be 0.0012 ETH");
     }
 
-    function test_Constructor_RevertsOnInvalidWETH() public {
+    function _freshClone() internal returns (TestableUltraAlignmentVault) {
+        return TestableUltraAlignmentVault(payable(LibClone.clone(address(vaultImpl))));
+    }
+
+    function test_Initialize_RevertsOnInvalidWETH() public {
+        TestableUltraAlignmentVault v = _freshClone();
         vm.expectRevert("Invalid WETH");
-        new UltraAlignmentVault(address(0), mockPoolManager, mockV3Router, mockV2Router, mockV2Factory, mockV3Factory, address(alignmentToken), address(0xC1EA), 100);
+        v.initialize(address(0), mockPoolManager,
+            address(alignmentToken), address(0xC1EA), 100,
+            address(mockZRouter), 3000, 60,
+            IVaultPriceValidator(address(mockValidator)));
     }
 
-    function test_Constructor_RevertsOnInvalidPoolManager() public {
+    function test_Initialize_RevertsOnInvalidPoolManager() public {
+        TestableUltraAlignmentVault v = _freshClone();
         vm.expectRevert("Invalid pool manager");
-        new UltraAlignmentVault(mockWETH, address(0), mockV3Router, mockV2Router, mockV2Factory, mockV3Factory, address(alignmentToken), address(0xC1EA), 100);
+        v.initialize(mockWETH, address(0),
+            address(alignmentToken), address(0xC1EA), 100,
+            address(mockZRouter), 3000, 60,
+            IVaultPriceValidator(address(mockValidator)));
     }
 
-    function test_Constructor_RevertsOnInvalidAlignmentToken() public {
+    function test_Initialize_RevertsOnInvalidAlignmentToken() public {
+        TestableUltraAlignmentVault v = _freshClone();
         vm.expectRevert("Invalid alignment token");
-        new UltraAlignmentVault(mockWETH, mockPoolManager, mockV3Router, mockV2Router, mockV2Factory, mockV3Factory, address(0), address(0xC1EA), 100);
+        v.initialize(mockWETH, mockPoolManager,
+            address(0), address(0xC1EA), 100,
+            address(mockZRouter), 3000, 60,
+            IVaultPriceValidator(address(mockValidator)));
+    }
+
+    function test_Initialize_RevertsOnDoubleInit() public {
+        TestableUltraAlignmentVault v = _freshClone();
+        v.initialize(mockWETH, mockPoolManager,
+            address(alignmentToken), address(0xC1EA), 100,
+            address(mockZRouter), 3000, 60,
+            IVaultPriceValidator(address(mockValidator)));
+        vm.expectRevert("Already initialized");
+        v.initialize(mockWETH, mockPoolManager,
+            address(alignmentToken), address(0xC1EA), 100,
+            address(mockZRouter), 3000, 60,
+            IVaultPriceValidator(address(mockValidator)));
     }
 
     // ========== Direct ETH Contribution Tests (receive) ==========
@@ -410,20 +453,14 @@ contract UltraAlignmentVaultTest is Test {
     }
 
     function test_ConvertAndAddLiquidity_RevertsWhenNoV4PoolSet() public {
-        // Deploy new vault without V4 pool
-        vm.startPrank(owner);
-        UltraAlignmentVault newVault = new UltraAlignmentVault(
-            mockWETH,
-            mockPoolManager,
-            mockV3Router,
-            mockV2Router,
-            mockV2Factory,
-            mockV3Factory,
-            address(alignmentToken),
-            address(0xC1EA),
-            100
+        // Deploy new vault without V4 pool set
+        TestableUltraAlignmentVault newVault = _freshClone();
+        newVault.initialize(
+            mockWETH, mockPoolManager,
+            address(alignmentToken), address(0xC1EA), 100,
+            address(mockZRouter), 3000, 60,
+            IVaultPriceValidator(address(mockValidator))
         );
-        vm.stopPrank();
 
         vm.deal(alice, 10 ether);
         vm.prank(alice);
