@@ -16,7 +16,7 @@ import {Currency} from "v4-core/types/Currency.sol";
  * - Instances remain vault-agnostic and interact only via this interface
  *
  * Compliance Requirements:
- * 1. Must accept ETH via receiveInstance() and receive()
+ * 1. Must accept ETH via receiveContribution() and receive()
  * 2. Must track benefactor contributions and issue shares
  * 3. Must allow benefactors to claim proportional fees
  * 4. Must emit standard events for transparency
@@ -48,18 +48,19 @@ interface IAlignmentVault {
     // ========== Fee Reception ==========
 
     /**
-     * @notice Receive alignment contributions from project instances and hooks
-     * @dev Called by project instances when routing fees to vault
+     * @notice Receive alignment contributions from project instances, hooks, or other vaults
+     * @dev Called by any registered contributor routing fees to this vault.
      *      - V4 hooks call this after collecting swap taxes
      *      - ERC1155 instances call this during creator withdrawals
+     *      - Meta-vaults call this when routing their alignment cut
      *      - Must track 'benefactor' as the contributor (not msg.sender)
      *      - Must emit ContributionReceived event
      *
-     * @param currency Currency of the tax (native ETH = address(0), or ERC20)
-     * @param amount Amount of tax received (in wei or token units)
-     * @param benefactor Address to credit for this contribution (the project instance)
+     * @param currency Currency of the contribution (native ETH = address(0), or ERC20)
+     * @param amount Amount received (in wei or token units)
+     * @param benefactor Address to credit for this contribution
      */
-    function receiveInstance(
+    function receiveContribution(
         Currency currency,
         uint256 amount,
         address benefactor
@@ -69,7 +70,7 @@ interface IAlignmentVault {
      * @notice Receive native ETH contributions via fallback
      * @dev Must track msg.sender as benefactor when ETH sent directly
      *      Implementation should call _trackBenefactorContribution(msg.sender, msg.value)
-     *      Used when instances send ETH without calling receiveInstance()
+     *      Used when instances send ETH without calling receiveContribution()
      */
     receive() external payable;
 
