@@ -2,8 +2,8 @@
 pragma solidity ^0.8.24;
 
 import {Test} from "forge-std/Test.sol";
-import {UltraAlignmentVaultV2Factory} from "../../src/vaults/UltraAlignmentVaultV2Factory.sol";
-import {UltraAlignmentVaultV2, IZAMM} from "../../src/vaults/UltraAlignmentVaultV2.sol";
+import {UltraAlignmentVaultV2Factory} from "../../src/vaults/zamm/UltraAlignmentVaultV2Factory.sol";
+import {UltraAlignmentVaultV2, IZAMM} from "../../src/vaults/zamm/UltraAlignmentVaultV2.sol";
 import {MockZAMM} from "../mocks/MockZAMM.sol";
 import {MockZRouter} from "../mocks/MockZRouter.sol";
 import {MockEXECToken} from "../mocks/MockEXECToken.sol";

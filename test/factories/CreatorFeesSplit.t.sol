@@ -9,7 +9,7 @@ import {ERC404BondingInstance} from "../../src/factories/erc404/ERC404BondingIns
 import {ERC404StakingModule} from "../../src/factories/erc404/ERC404StakingModule.sol";
 import {LaunchManager} from "../../src/factories/erc404/LaunchManager.sol";
 import {CurveParamsComputer} from "../../src/factories/erc404/CurveParamsComputer.sol";
-import {UltraAlignmentVault} from "../../src/vaults/UltraAlignmentVault.sol";
+import {UltraAlignmentVault} from "../../src/vaults/uni/UltraAlignmentVault.sol";
 import {MockEXECToken} from "../mocks/MockEXECToken.sol";
 import {MockMasterRegistry} from "../mocks/MockMasterRegistry.sol";
 import {MockZRouter} from "../mocks/MockZRouter.sol";

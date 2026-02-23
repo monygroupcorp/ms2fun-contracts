@@ -2,7 +2,7 @@
 pragma solidity ^0.8.20;
 
 import { ForkTestBase } from "./helpers/ForkTestBase.sol";
-import { UltraAlignmentVault } from "src/vaults/UltraAlignmentVault.sol";
+import { UltraAlignmentVault } from "src/vaults/uni/UltraAlignmentVault.sol";
 import { UniswapVaultPriceValidator } from "src/peripherals/UniswapVaultPriceValidator.sol";
 import { IVaultPriceValidator } from "src/interfaces/IVaultPriceValidator.sol";
 import { LibClone } from "solady/utils/LibClone.sol";

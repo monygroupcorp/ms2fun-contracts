@@ -3,7 +3,7 @@ pragma solidity ^0.8.20;
 
 import {LibClone} from "solady/utils/LibClone.sol";
 import {UltraAlignmentVault} from "./UltraAlignmentVault.sol";
-import {IVaultPriceValidator} from "../interfaces/IVaultPriceValidator.sol";
+import {IVaultPriceValidator} from "../../interfaces/IVaultPriceValidator.sol";
 
 /// @title UltraAlignmentVaultFactory
 /// @notice Deploys UltraAlignmentVault clones; zRouter config is shared across all vaults.

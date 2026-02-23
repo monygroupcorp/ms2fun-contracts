@@ -4,7 +4,7 @@ pragma solidity ^0.8.24;
 import {Test, console, console2} from "forge-std/Test.sol";
 import {ERC1155Factory} from "../../../src/factories/erc1155/ERC1155Factory.sol";
 import {ERC1155Instance} from "../../../src/factories/erc1155/ERC1155Instance.sol";
-import {UltraAlignmentVault} from "../../../src/vaults/UltraAlignmentVault.sol";
+import {UltraAlignmentVault} from "../../../src/vaults/uni/UltraAlignmentVault.sol";
 import {MockEXECToken} from "../../mocks/MockEXECToken.sol";
 import {MockMasterRegistry} from "../../mocks/MockMasterRegistry.sol";
 import {MockZRouter} from "../../mocks/MockZRouter.sol";

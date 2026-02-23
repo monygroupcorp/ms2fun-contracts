@@ -10,7 +10,7 @@ import {Currency, CurrencyLibrary} from "v4-core/types/Currency.sol";
 import {PoolKey} from "v4-core/types/PoolKey.sol";
 import {SafeCast} from "v4-core/libraries/SafeCast.sol";
 import {LPFeeLibrary} from "v4-core/libraries/LPFeeLibrary.sol";
-import {UltraAlignmentVault} from "../../src/vaults/UltraAlignmentVault.sol";
+import {UltraAlignmentVault} from "../../src/vaults/uni/UltraAlignmentVault.sol";
 import {ReentrancyGuard} from "solady/utils/ReentrancyGuard.sol";
 import {Ownable} from "solady/auth/Ownable.sol";
 

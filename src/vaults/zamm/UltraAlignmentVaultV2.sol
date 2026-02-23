@@ -7,7 +7,7 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {FixedPointMathLib} from "solady/utils/FixedPointMathLib.sol";
 import {Currency} from "v4-core/types/Currency.sol";
-import {IAlignmentVault} from "../interfaces/IAlignmentVault.sol";
+import {IAlignmentVault} from "../../interfaces/IAlignmentVault.sol";
 
 /// @notice Minimal ZAMM interface (mirrors ZAMM.sol ABI without requiring its compiler version)
 interface IZAMM {

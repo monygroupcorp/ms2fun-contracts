@@ -3,8 +3,8 @@ pragma solidity ^0.8.20;
 
 import "forge-std/Test.sol";
 import {IAlignmentVault} from "../../src/interfaces/IAlignmentVault.sol";
-import {UltraAlignmentVault} from "../../src/vaults/UltraAlignmentVault.sol";
-import {UltraAlignmentVaultV2, IZAMM} from "../../src/vaults/UltraAlignmentVaultV2.sol";
+import {UltraAlignmentVault} from "../../src/vaults/uni/UltraAlignmentVault.sol";
+import {UltraAlignmentVaultV2, IZAMM} from "../../src/vaults/zamm/UltraAlignmentVaultV2.sol";
 import {MockVault} from "../mocks/MockVault.sol";
 import {MockVaultPriceValidator} from "../mocks/MockVaultPriceValidator.sol";
 import {MockZAMM} from "../mocks/MockZAMM.sol";

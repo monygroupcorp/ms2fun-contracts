@@ -3,7 +3,7 @@ pragma solidity ^0.8.20;
 
 import {Test, console, console2} from "forge-std/Test.sol";
 import {UltraAlignmentHookFactory} from "../../../../src/factories/erc404/hooks/UltraAlignmentHookFactory.sol";
-import {UltraAlignmentVault} from "../../../../src/vaults/UltraAlignmentVault.sol";
+import {UltraAlignmentVault} from "../../../../src/vaults/uni/UltraAlignmentVault.sol";
 import {MockEXECToken} from "../../../mocks/MockEXECToken.sol";
 import {MockPoolManager} from "../../../mocks/MockPoolManager.sol";
 import {MockZRouter} from "../../../mocks/MockZRouter.sol";

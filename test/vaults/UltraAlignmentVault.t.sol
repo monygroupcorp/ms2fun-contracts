@@ -2,7 +2,7 @@
 pragma solidity ^0.8.20;
 
 import {Test, console2} from "forge-std/Test.sol";
-import {UltraAlignmentVault} from "../../src/vaults/UltraAlignmentVault.sol";
+import {UltraAlignmentVault} from "../../src/vaults/uni/UltraAlignmentVault.sol";
 import {TestableUltraAlignmentVault} from "../helpers/TestableUltraAlignmentVault.sol";
 import {MockEXECToken} from "../mocks/MockEXECToken.sol";
 import {MockZRouter} from "../mocks/MockZRouter.sol";

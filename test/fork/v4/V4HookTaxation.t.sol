@@ -674,6 +674,6 @@ contract MockFeeHook is BaseTestHooks {
 /**
  * @notice Imports for types
  */
-import { UltraAlignmentVault } from "../../../src/vaults/UltraAlignmentVault.sol";
+import { UltraAlignmentVault } from "../../../src/vaults/uni/UltraAlignmentVault.sol";
 import { BaseTestHooks } from "v4-core/test/BaseTestHooks.sol";
 import { SafeCast } from "v4-core/libraries/SafeCast.sol";

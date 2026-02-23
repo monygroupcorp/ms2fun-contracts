@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import {UltraAlignmentVault} from "../../src/vaults/UltraAlignmentVault.sol";
+import {UltraAlignmentVault} from "../../src/vaults/uni/UltraAlignmentVault.sol";
 import {IVaultPriceValidator} from "../../src/interfaces/IVaultPriceValidator.sol";
 
 /// @notice Test-only vault that overrides LP with mock behavior.

@@ -14,7 +14,7 @@ import {ProtocolTreasuryV1} from "../src/treasury/ProtocolTreasuryV1.sol";
 import {GrandCentral} from "../src/dao/GrandCentral.sol";
 import {ShareOffering} from "../src/dao/conductors/ShareOffering.sol";
 import {StipendConductor} from "../src/dao/conductors/StipendConductor.sol";
-import {UltraAlignmentVault} from "../src/vaults/UltraAlignmentVault.sol";
+import {UltraAlignmentVault} from "../src/vaults/uni/UltraAlignmentVault.sol";
 import {UniswapVaultPriceValidator} from "../src/peripherals/UniswapVaultPriceValidator.sol";
 import {IVaultPriceValidator} from "../src/interfaces/IVaultPriceValidator.sol";
 import {ERC404Factory} from "../src/factories/erc404/ERC404Factory.sol";

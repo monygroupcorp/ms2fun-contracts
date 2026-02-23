@@ -11,7 +11,7 @@ import {CurveParamsComputer} from "../../src/factories/erc404/CurveParamsCompute
 import {ERC1155Factory} from "../../src/factories/erc1155/ERC1155Factory.sol";
 import {GlobalMessageRegistry} from "../../src/registry/GlobalMessageRegistry.sol";
 import {ERC404BondingInstance} from "../../src/factories/erc404/ERC404BondingInstance.sol";
-import {UltraAlignmentVault} from "../../src/vaults/UltraAlignmentVault.sol";
+import {UltraAlignmentVault} from "../../src/vaults/uni/UltraAlignmentVault.sol";
 import {MockEXECToken} from "../mocks/MockEXECToken.sol";
 import {MockZRouter} from "../mocks/MockZRouter.sol";
 import {MockVaultPriceValidator} from "../mocks/MockVaultPriceValidator.sol";

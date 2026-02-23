@@ -6,7 +6,7 @@ import {ForkTestBase} from "../helpers/ForkTestBase.sol";
 import {HookAddressMiner} from "../helpers/HookAddressMiner.sol";
 import {UltraAlignmentHookFactory} from "../../../src/factories/erc404/hooks/UltraAlignmentHookFactory.sol";
 import {UltraAlignmentV4Hook} from "../../../src/factories/erc404/hooks/UltraAlignmentV4Hook.sol";
-import {UltraAlignmentVault} from "../../../src/vaults/UltraAlignmentVault.sol";
+import {UltraAlignmentVault} from "../../../src/vaults/uni/UltraAlignmentVault.sol";
 import {MockZRouter} from "../../mocks/MockZRouter.sol";
 import {MockVaultPriceValidator} from "../../mocks/MockVaultPriceValidator.sol";
 import {IVaultPriceValidator} from "../../../src/interfaces/IVaultPriceValidator.sol";

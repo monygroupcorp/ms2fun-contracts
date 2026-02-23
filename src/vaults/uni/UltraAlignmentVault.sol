@@ -11,12 +11,12 @@ import {PoolKey} from "v4-core/types/PoolKey.sol";
 import {PoolId, PoolIdLibrary} from "v4-core/types/PoolId.sol";
 import {BalanceDelta, BalanceDeltaLibrary} from "v4-core/types/BalanceDelta.sol";
 import {StateLibrary} from "v4-core/libraries/StateLibrary.sol";
-import {CurrencySettler} from "../libraries/v4/CurrencySettler.sol";
-import {LiquidityAmounts} from "../libraries/v4/LiquidityAmounts.sol";
+import {CurrencySettler} from "../../libraries/v4/CurrencySettler.sol";
+import {LiquidityAmounts} from "../../libraries/v4/LiquidityAmounts.sol";
 import {TickMath} from "v4-core/libraries/TickMath.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {IAlignmentVault} from "../interfaces/IAlignmentVault.sol";
-import {IVaultPriceValidator} from "../interfaces/IVaultPriceValidator.sol";
+import {IAlignmentVault} from "../../interfaces/IAlignmentVault.sol";
+import {IVaultPriceValidator} from "../../interfaces/IVaultPriceValidator.sol";
 
 interface IzRouterV4 {
     function swapV4(

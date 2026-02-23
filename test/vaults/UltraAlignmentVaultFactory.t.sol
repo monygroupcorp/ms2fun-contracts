@@ -2,8 +2,8 @@
 pragma solidity ^0.8.20;
 
 import "forge-std/Test.sol";
-import "../../src/vaults/UltraAlignmentVaultFactory.sol";
-import "../../src/vaults/UltraAlignmentVault.sol";
+import "../../src/vaults/uni/UltraAlignmentVaultFactory.sol";
+import "../../src/vaults/uni/UltraAlignmentVault.sol";
 import {IVaultPriceValidator} from "../../src/interfaces/IVaultPriceValidator.sol";
 import {MockZRouter} from "../mocks/MockZRouter.sol";
 import {MockVaultPriceValidator} from "../mocks/MockVaultPriceValidator.sol";
