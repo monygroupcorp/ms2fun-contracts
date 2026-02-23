@@ -183,7 +183,8 @@ contract ERC721AuctionFactory is Ownable, ReentrancyGuard, IFactory {
             _baseDuration,
             _timeBuffer,
             _bidIncrement,
-            globalMessageRegistry
+            globalMessageRegistry,
+            address(masterRegistry)
         ));
 
         // Register with master registry

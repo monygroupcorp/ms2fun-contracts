@@ -118,7 +118,8 @@ contract ERC404BondingInstanceTest is Test {
             1_000_000 ether, // unit
             address(stakingModule), // staking module
             mockLiquidityDeployer, // liquidity deployer module
-            address(curveComputer), // curve computer\n            mockMasterRegistry // master registry
+            address(curveComputer), // curve computer
+            mockMasterRegistry // master registry
         );
 
         vm.stopPrank();
@@ -358,7 +359,8 @@ contract ERC404BondingInstanceTest is Test {
             1_000_000 ether, // unit
             address(stakingModule), // staking module
             mockLiquidityDeployer, // liquidity deployer module
-            address(curveComputer) // curve computer
+            address(curveComputer), // curve computer
+            mockMasterRegistry // master registry
         );
         uint256 futureTime = block.timestamp + 1 days;
         zeroFeeInstance.setBondingOpenTime(futureTime);
@@ -411,7 +413,8 @@ contract ERC404BondingInstanceTest is Test {
             1_000_000 ether, // unit
             address(stakingModule), // staking module
             mockLiquidityDeployer, // liquidity deployer module
-            address(curveComputer) // curve computer
+            address(curveComputer), // curve computer
+            mockMasterRegistry // master registry
         );
         uint256 futureTime = block.timestamp + 1 days;
         noTreasuryInstance.setBondingOpenTime(futureTime);
@@ -507,7 +510,8 @@ contract ERC404BondingInstanceTest is Test {
             1_000_000 ether, // unit
             address(stakingModule), // staking module
             mockLiquidityDeployer, // liquidity deployer module
-            address(curveComputer) // curve computer
+            address(curveComputer), // curve computer
+            mockMasterRegistry // master registry
         );
         vm.stopPrank();
 
@@ -544,7 +548,8 @@ contract ERC404BondingInstanceTest is Test {
             1_000_000 ether, // unit
             address(stakingModule), // staking module
             mockLiquidityDeployer, // liquidity deployer module
-            address(curveComputer) // curve computer
+            address(curveComputer), // curve computer
+            mockMasterRegistry // master registry
         );
         vm.stopPrank();
 
@@ -630,7 +635,8 @@ contract ERC404BondingInstanceTest is Test {
             1_000_000 ether, // unit
             address(stakingModule), // staking module
             mockLiquidityDeployer, // liquidity deployer module
-            address(curveComputer) // curve computer
+            address(curveComputer), // curve computer
+            mockMasterRegistry // master registry
         );
         vm.stopPrank();
 
@@ -692,7 +698,8 @@ contract ERC404BondingInstanceTest is Test {
             1_000_000 ether, // unit
             address(stakingModule), // staking module
             mockLiquidityDeployer, // liquidity deployer module
-            address(curveComputer) // curve computer
+            address(curveComputer), // curve computer
+            mockMasterRegistry // master registry
         );
         vm.stopPrank();
 
@@ -734,7 +741,8 @@ contract ERC404BondingInstanceTest is Test {
             1_000_000 ether, // unit
             address(stakingModule), // staking module
             mockLiquidityDeployer, // liquidity deployer module
-            address(curveComputer) // curve computer
+            address(curveComputer), // curve computer
+            mockMasterRegistry // master registry
         );
         vm.stopPrank();
 
@@ -802,7 +810,8 @@ contract ERC404BondingInstanceTest is Test {
             1_000_000 ether, // unit
             address(stakingModule), // staking module
             mockLiquidityDeployer, // liquidity deployer module
-            address(curveComputer) // curve computer
+            address(curveComputer), // curve computer
+            mockMasterRegistry // master registry
         );
         uint256 futureTime = block.timestamp + 1 days;
         noHookInstance.setBondingOpenTime(futureTime);
@@ -829,6 +838,12 @@ contract ERC404BondingInstanceTest is Test {
 
     function test_MigrateVault_UpdatesActiveVault() public {
         address newVault = makeAddr("newVault");
+        // mockMasterRegistry is an EOA — stub the migrateVault call
+        vm.mockCall(
+            mockMasterRegistry,
+            abi.encodeWithSignature("migrateVault(address,address)", address(instance), newVault),
+            abi.encode()
+        );
         vm.prank(owner);
         instance.migrateVault(newVault);
         assertEq(address(instance.vault()), newVault);

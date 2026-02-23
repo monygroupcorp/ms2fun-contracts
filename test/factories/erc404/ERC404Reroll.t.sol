@@ -106,7 +106,8 @@ contract ERC404RerollTest is Test {
             1_000_000 ether, // unit
             address(stakingModule), // staking module
             address(0x600), // mockLiquidityDeployer
-            address(curveComputer) // curve computer
+            address(curveComputer), // curve computer
+            address(0x1234) // master registry (mock)
         );
 
         // Fund users with ETH

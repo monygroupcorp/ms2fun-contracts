@@ -177,7 +177,8 @@ contract ERC1155Factory is Ownable, ReentrancyGuard, IFactory {
             vault,
             styleUri,
             globalMessageRegistry,
-            protocolTreasury
+            protocolTreasury,
+            address(masterRegistry)
         ));
 
         // Register with master registry

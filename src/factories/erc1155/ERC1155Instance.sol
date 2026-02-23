@@ -6,6 +6,7 @@ import { ReentrancyGuard } from "solady/utils/ReentrancyGuard.sol";
 import { SafeTransferLib } from "solady/utils/SafeTransferLib.sol";
 import { EditionPricing } from "./libraries/EditionPricing.sol";
 import { IAlignmentVault } from "../../interfaces/IAlignmentVault.sol";
+import {IMasterRegistry} from "../../master/interfaces/IMasterRegistry.sol";
 import { IGlobalMessageRegistry } from "../../registry/interfaces/IGlobalMessageRegistry.sol";
 import { Currency } from "v4-core/types/Currency.sol";
 import { IInstanceLifecycle, TYPE_ERC1155, STATE_MINTING } from "../../interfaces/IInstanceLifecycle.sol";
@@ -47,6 +48,7 @@ contract ERC1155Instance is Ownable, ReentrancyGuard, IInstanceLifecycle {
     address public creator;
     address public factory;
     IAlignmentVault public vault;
+    IMasterRegistry public masterRegistry;
     IGlobalMessageRegistry public immutable globalMessageRegistry;
     address public immutable protocolTreasury;
 
@@ -119,7 +121,8 @@ contract ERC1155Instance is Ownable, ReentrancyGuard, IInstanceLifecycle {
         address _vault,
         string memory _styleUri,
         address _globalMessageRegistry,
-        address _protocolTreasury
+        address _protocolTreasury,
+        address _masterRegistry
     ) {
         require(bytes(_name).length > 0, "Invalid name");
         require(_creator != address(0), "Invalid creator");
@@ -132,6 +135,7 @@ contract ERC1155Instance is Ownable, ReentrancyGuard, IInstanceLifecycle {
         creator = _creator;
         factory = _factory;
         vault = IAlignmentVault(payable(_vault));
+        masterRegistry = IMasterRegistry(_masterRegistry);
         globalMessageRegistry = IGlobalMessageRegistry(_globalMessageRegistry);
         protocolTreasury = _protocolTreasury;
         styleUri = _styleUri;
@@ -372,6 +376,21 @@ contract ERC1155Instance is Ownable, ReentrancyGuard, IInstanceLifecycle {
         // Route all claimed fees to the owner
         require(totalClaimed > 0, "No fees to claim");
         SafeTransferLib.safeTransferETH(owner(), totalClaimed);
+    }
+
+    /// @notice Migrate to a new vault. New vault must share this instance's alignment target.
+    /// @dev Updates local active vault and appends to registry vault array.
+    function migrateVault(address newVault) external onlyOwner {
+        vault = IAlignmentVault(payable(newVault));
+        masterRegistry.migrateVault(address(this), newVault);
+    }
+
+    /// @notice Claim accumulated fees from all vault positions (current and historical).
+    function claimAllFees() external onlyOwner {
+        address[] memory allVaults = masterRegistry.getInstanceVaults(address(this));
+        for (uint256 i = 0; i < allVaults.length; i++) {
+            IAlignmentVault(payable(allVaults[i])).claimFees();
+        }
     }
 
     // ┌─────────────────────────┐

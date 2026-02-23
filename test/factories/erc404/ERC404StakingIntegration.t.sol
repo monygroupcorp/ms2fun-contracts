@@ -199,7 +199,8 @@ contract ERC404StakingIntegrationTest is Test {
             TOKEN_UNIT,     // unit (1 NFT = TOKEN_UNIT tokens)
             address(stakingModule),
             address(0x600), // mockLiquidityDeployer
-            address(curveComputer) // curve computer
+            address(curveComputer), // curve computer
+            address(0x1234) // master registry (mock)
         );
 
         vm.stopPrank();

@@ -6,6 +6,7 @@ import {Ownable} from "solady/auth/Ownable.sol";
 import {ReentrancyGuard} from "solady/utils/ReentrancyGuard.sol";
 import {SafeTransferLib} from "solady/utils/SafeTransferLib.sol";
 import {IAlignmentVault} from "../../interfaces/IAlignmentVault.sol";
+import {IMasterRegistry} from "../../master/interfaces/IMasterRegistry.sol";
 import {IFactoryInstance} from "../../interfaces/IFactoryInstance.sol";
 import {IGlobalMessageRegistry} from "../../registry/interfaces/IGlobalMessageRegistry.sol";
 import {Currency} from "v4-core/types/Currency.sol";
@@ -38,7 +39,8 @@ contract ERC721AuctionInstance is ERC721, Ownable, ReentrancyGuard, IFactoryInst
     // │   Immutable Config      │
     // └─────────────────────────┘
 
-    IAlignmentVault public immutable _vault;
+    IAlignmentVault public _vault;
+    IMasterRegistry public masterRegistry;
     address public immutable _protocolTreasury;
     IGlobalMessageRegistry public immutable globalMessageRegistry;
     uint8 public immutable lines;
@@ -90,7 +92,8 @@ contract ERC721AuctionInstance is ERC721, Ownable, ReentrancyGuard, IFactoryInst
         uint40 baseDuration_,
         uint40 timeBuffer_,
         uint256 bidIncrement_,
-        address globalMessageRegistry_
+        address globalMessageRegistry_,
+        address masterRegistry_
     ) {
         require(vault_ != address(0), "Invalid vault");
         require(protocolTreasury_ != address(0), "Invalid treasury");
@@ -105,6 +108,7 @@ contract ERC721AuctionInstance is ERC721, Ownable, ReentrancyGuard, IFactoryInst
 
         _initializeOwner(owner_);
         _vault = IAlignmentVault(payable(vault_));
+        masterRegistry = IMasterRegistry(masterRegistry_);
         _protocolTreasury = protocolTreasury_;
         _name = name_;
         _symbol = symbol_;
@@ -329,6 +333,21 @@ contract ERC721AuctionInstance is ERC721, Ownable, ReentrancyGuard, IFactoryInst
         totalClaimed = _vault.claimFees();
         require(totalClaimed > 0, "No fees to claim");
         SafeTransferLib.safeTransferETH(owner(), totalClaimed);
+    }
+
+    /// @notice Migrate to a new vault. New vault must share this instance's alignment target.
+    /// @dev Updates local active vault and appends to registry vault array.
+    function migrateVault(address newVault) external onlyOwner {
+        _vault = IAlignmentVault(payable(newVault));
+        masterRegistry.migrateVault(address(this), newVault);
+    }
+
+    /// @notice Claim accumulated fees from all vault positions (current and historical).
+    function claimAllFees() external onlyOwner {
+        address[] memory allVaults = masterRegistry.getInstanceVaults(address(this));
+        for (uint256 i = 0; i < allVaults.length; i++) {
+            IAlignmentVault(payable(allVaults[i])).claimFees();
+        }
     }
 
     // ┌─────────────────────────┐
