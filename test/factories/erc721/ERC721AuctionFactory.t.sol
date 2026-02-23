@@ -7,9 +7,8 @@ import {ERC721AuctionInstance} from "../../../src/factories/erc721/ERC721Auction
 import {UltraAlignmentVault} from "../../../src/vaults/UltraAlignmentVault.sol";
 import {MockEXECToken} from "../../mocks/MockEXECToken.sol";
 import {MockMasterRegistry} from "../../mocks/MockMasterRegistry.sol";
-import {MockVaultSwapRouter} from "../../mocks/MockVaultSwapRouter.sol";
+import {MockZRouter} from "../../mocks/MockZRouter.sol";
 import {MockVaultPriceValidator} from "../../mocks/MockVaultPriceValidator.sol";
-import {IVaultSwapRouter} from "../../../src/interfaces/IVaultSwapRouter.sol";
 import {IVaultPriceValidator} from "../../../src/interfaces/IVaultPriceValidator.sol";
 import {GlobalMessageRegistry} from "../../../src/registry/GlobalMessageRegistry.sol";
 import {LibClone} from "solady/utils/LibClone.sol";
@@ -44,14 +43,12 @@ contract ERC721AuctionFactoryTest is Test {
             vault.initialize(
                 address(0x2222222222222222222222222222222222222222),
                 address(0x4444444444444444444444444444444444444444),
-                address(0x5555555555555555555555555555555555555555),
-                address(0x6666666666666666666666666666666666666666),
-                address(0x7777777777777777777777777777777777777777),
-                address(0x8888888888888888888888888888888888888888),
                 address(token),
                 address(0xC1EA),
                 100,
-                IVaultSwapRouter(address(new MockVaultSwapRouter())),
+                address(new MockZRouter()),
+                3000,
+                60,
                 IVaultPriceValidator(address(new MockVaultPriceValidator()))
             );
         }

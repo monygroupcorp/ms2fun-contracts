@@ -6,12 +6,10 @@ import {IAlignmentVault} from "../../src/interfaces/IAlignmentVault.sol";
 import {UltraAlignmentVault} from "../../src/vaults/UltraAlignmentVault.sol";
 import {UltraAlignmentVaultV2, IZAMM} from "../../src/vaults/UltraAlignmentVaultV2.sol";
 import {MockVault} from "../mocks/MockVault.sol";
-import {MockVaultSwapRouter} from "../mocks/MockVaultSwapRouter.sol";
 import {MockVaultPriceValidator} from "../mocks/MockVaultPriceValidator.sol";
 import {MockZAMM} from "../mocks/MockZAMM.sol";
 import {MockZRouter} from "../mocks/MockZRouter.sol";
 import {MockEXECToken} from "../mocks/MockEXECToken.sol";
-import {IVaultSwapRouter} from "../../src/interfaces/IVaultSwapRouter.sol";
 import {IVaultPriceValidator} from "../../src/interfaces/IVaultPriceValidator.sol";
 import {Currency} from "v4-core/types/Currency.sol";
 import {LibClone} from "solady/utils/LibClone.sol";
@@ -30,10 +28,6 @@ contract VaultInterfaceComplianceTest is Test {
     // Mock addresses for UltraAlignmentVault constructor
     address constant MOCK_WETH = address(0x1);
     address constant MOCK_POOL_MANAGER = address(0x2);
-    address constant MOCK_V3_ROUTER = address(0x3);
-    address constant MOCK_V2_ROUTER = address(0x4);
-    address constant MOCK_V2_FACTORY = address(0x5);
-    address constant MOCK_V3_FACTORY = address(0x6);
     address constant MOCK_ALIGNMENT_TOKEN = address(0x7);
 
     // Test benefactors
@@ -42,7 +36,7 @@ contract VaultInterfaceComplianceTest is Test {
 
     function setUp() public {
         // Deploy mock peripherals
-        MockVaultSwapRouter mockRouter = new MockVaultSwapRouter();
+        MockZRouter ultraMockZRouter = new MockZRouter();
         MockVaultPriceValidator mockValidator = new MockVaultPriceValidator();
 
         // Deploy UltraAlignmentVault via clone+initialize pattern
@@ -51,14 +45,12 @@ contract VaultInterfaceComplianceTest is Test {
         ultraVault.initialize(
             MOCK_WETH,
             MOCK_POOL_MANAGER,
-            MOCK_V3_ROUTER,
-            MOCK_V2_ROUTER,
-            MOCK_V2_FACTORY,
-            MOCK_V3_FACTORY,
             MOCK_ALIGNMENT_TOKEN,
             address(0xC1EA),
             100,
-            IVaultSwapRouter(address(mockRouter)),
+            address(ultraMockZRouter),
+            3000,
+            60,
             IVaultPriceValidator(address(mockValidator))
         );
 

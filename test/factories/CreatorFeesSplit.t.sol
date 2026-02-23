@@ -12,9 +12,8 @@ import {CurveParamsComputer} from "../../src/factories/erc404/CurveParamsCompute
 import {UltraAlignmentVault} from "../../src/vaults/UltraAlignmentVault.sol";
 import {MockEXECToken} from "../mocks/MockEXECToken.sol";
 import {MockMasterRegistry} from "../mocks/MockMasterRegistry.sol";
-import {MockVaultSwapRouter} from "../mocks/MockVaultSwapRouter.sol";
+import {MockZRouter} from "../mocks/MockZRouter.sol";
 import {MockVaultPriceValidator} from "../mocks/MockVaultPriceValidator.sol";
-import {IVaultSwapRouter} from "../../src/interfaces/IVaultSwapRouter.sol";
 import {IVaultPriceValidator} from "../../src/interfaces/IVaultPriceValidator.sol";
 import {LibClone} from "solady/utils/LibClone.sol";
 import {GlobalMessageRegistry} from "../../src/registry/GlobalMessageRegistry.sol";
@@ -79,14 +78,12 @@ contract CreatorFeesSplitTest is Test {
             vault.initialize(
                 mockWETH,
                 mockV4PoolManager,
-                address(0x5555555555555555555555555555555555555555),
-                address(0x6666666666666666666666666666666666666666),
-                address(0x7777777777777777777777777777777777777777),
-                address(0x8888888888888888888888888888888888888888),
                 address(token),
                 vaultFactoryCreator,
                 CREATOR_YIELD_CUT_BPS,
-                IVaultSwapRouter(address(new MockVaultSwapRouter())),
+                address(new MockZRouter()),
+                3000,
+                60,
                 IVaultPriceValidator(address(new MockVaultPriceValidator()))
             );
         }
@@ -393,14 +390,12 @@ contract CreatorFeesSplitTest is Test {
         badClone.initialize(
             mockWETH,
             mockV4PoolManager,
-            address(0x5555555555555555555555555555555555555555),
-            address(0x6666666666666666666666666666666666666666),
-            address(0x7777777777777777777777777777777777777777),
-            address(0x8888888888888888888888888888888888888888),
             address(token),
             vaultFactoryCreator,
             600, // 6% > 5% protocol cut, should revert
-            IVaultSwapRouter(address(0)),
+            address(0),
+            3000,
+            60,
             IVaultPriceValidator(address(0))
         );
     }

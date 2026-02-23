@@ -6,9 +6,8 @@ import {UltraAlignmentHookFactory} from "../../../../src/factories/erc404/hooks/
 import {UltraAlignmentVault} from "../../../../src/vaults/UltraAlignmentVault.sol";
 import {MockEXECToken} from "../../../mocks/MockEXECToken.sol";
 import {MockPoolManager} from "../../../mocks/MockPoolManager.sol";
-import {MockVaultSwapRouter} from "../../../mocks/MockVaultSwapRouter.sol";
+import {MockZRouter} from "../../../mocks/MockZRouter.sol";
 import {MockVaultPriceValidator} from "../../../mocks/MockVaultPriceValidator.sol";
-import {IVaultSwapRouter} from "../../../../src/interfaces/IVaultSwapRouter.sol";
 import {IVaultPriceValidator} from "../../../../src/interfaces/IVaultPriceValidator.sol";
 import {LibClone} from "solady/utils/LibClone.sol";
 import {Currency} from "v4-core/types/Currency.sol";
@@ -62,14 +61,12 @@ contract UltraAlignmentHookFactoryTest is Test {
             vault.initialize(
                 wethAddr,
                 address(poolManager),
-                address(0x5555555555555555555555555555555555555555),  // V3 router
-                address(0x6666666666666666666666666666666666666666),  // V2 router
-                address(0x7777777777777777777777777777777777777777),  // V2 factory
-                address(0x8888888888888888888888888888888888888888),  // V3 factory
                 address(token),
                 address(0xC1EA),
                 100,
-                IVaultSwapRouter(address(new MockVaultSwapRouter())),
+                address(new MockZRouter()),
+                3000,
+                60,
                 IVaultPriceValidator(address(new MockVaultPriceValidator()))
             );
         }

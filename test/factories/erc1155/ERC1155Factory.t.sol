@@ -7,9 +7,8 @@ import {ERC1155Instance} from "../../../src/factories/erc1155/ERC1155Instance.so
 import {UltraAlignmentVault} from "../../../src/vaults/UltraAlignmentVault.sol";
 import {MockEXECToken} from "../../mocks/MockEXECToken.sol";
 import {MockMasterRegistry} from "../../mocks/MockMasterRegistry.sol";
-import {MockVaultSwapRouter} from "../../mocks/MockVaultSwapRouter.sol";
+import {MockZRouter} from "../../mocks/MockZRouter.sol";
 import {MockVaultPriceValidator} from "../../mocks/MockVaultPriceValidator.sol";
-import {IVaultSwapRouter} from "../../../src/interfaces/IVaultSwapRouter.sol";
 import {IVaultPriceValidator} from "../../../src/interfaces/IVaultPriceValidator.sol";
 import {LibClone} from "solady/utils/LibClone.sol";
 import {Currency} from "v4-core/types/Currency.sol";
@@ -48,14 +47,12 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
             vault.initialize(
                 address(0x2222222222222222222222222222222222222222),  // WETH
                 address(0x4444444444444444444444444444444444444444),  // V4 pool manager
-                address(0x5555555555555555555555555555555555555555),  // V3 router
-                address(0x6666666666666666666666666666666666666666),  // V2 router
-                address(0x7777777777777777777777777777777777777777),  // V2 factory
-                address(0x8888888888888888888888888888888888888888),  // V3 factory
                 address(token),                                       // alignment target
                 address(0xC1EA),                                      // vault creator
                 100,                                                  // creator yield cut (1%)
-                IVaultSwapRouter(address(new MockVaultSwapRouter())),
+                address(new MockZRouter()),
+                3000,
+                60,
                 IVaultPriceValidator(address(new MockVaultPriceValidator()))
             );
         }

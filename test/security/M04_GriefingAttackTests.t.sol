@@ -5,9 +5,8 @@ import "forge-std/Test.sol";
 import "../../src/vaults/UltraAlignmentVault.sol";
 import {TestableUltraAlignmentVault} from "../helpers/TestableUltraAlignmentVault.sol";
 import "../../src/master/MasterRegistryV1.sol";
-import {MockVaultSwapRouter} from "../mocks/MockVaultSwapRouter.sol";
+import {MockZRouter} from "../mocks/MockZRouter.sol";
 import {MockVaultPriceValidator} from "../mocks/MockVaultPriceValidator.sol";
-import {IVaultSwapRouter} from "../../src/interfaces/IVaultSwapRouter.sol";
 import {IVaultPriceValidator} from "../../src/interfaces/IVaultPriceValidator.sol";
 import {LibClone} from "solady/utils/LibClone.sol";
 import {PoolKey} from "v4-core/types/PoolKey.sol";
@@ -118,16 +117,12 @@ contract M04_GriefingAttackTests is Test {
     MockEXECToken public alignmentToken;
 
     TestableUltraAlignmentVault public vaultImpl;
-    MockVaultSwapRouter public mockRouter;
+    MockZRouter public mockZRouter;
     MockVaultPriceValidator public mockValidator;
 
     address public owner;
     address public alice;
     address public mockPoolManager;
-    address public mockV3Router;
-    address public mockV2Router;
-    address public mockV2Factory;
-    address public mockV3Factory;
     address public mockWeth;
 
     // Events to test
@@ -141,33 +136,28 @@ contract M04_GriefingAttackTests is Test {
 
         // Deploy mock addresses (as EOAs - no code)
         mockPoolManager = makeAddr("poolManager");
-        mockV3Router = makeAddr("v3Router");
-        mockV2Router = makeAddr("v2Router");
-        mockV2Factory = makeAddr("v2Factory");
-        mockV3Factory = makeAddr("v3Factory");
         mockWeth = makeAddr("weth");
 
         // Deploy real ERC20 token for alignment token
         alignmentToken = new MockEXECToken(1000000e18);
 
         // Deploy vault (using testable version with mock swap/LP overrides)
-        mockRouter = new MockVaultSwapRouter();
+        mockZRouter = new MockZRouter();
         mockValidator = new MockVaultPriceValidator();
-        alignmentToken.transfer(address(mockRouter), 100000e18);
+        vm.deal(address(mockZRouter), 100 ether);
+        alignmentToken.transfer(address(mockZRouter), 100_000e18);
 
         vaultImpl = new TestableUltraAlignmentVault();
         vault = TestableUltraAlignmentVault(payable(LibClone.clone(address(vaultImpl))));
         vault.initialize(
             mockWeth,
             mockPoolManager,
-            mockV3Router,
-            mockV2Router,
-            mockV2Factory,
-            mockV3Factory,
             address(alignmentToken),
             address(0xC1EA),
             100,
-            IVaultSwapRouter(address(mockRouter)),
+            address(mockZRouter),
+            3000,
+            60,
             IVaultPriceValidator(address(mockValidator))
         );
 
@@ -307,22 +297,20 @@ contract M04_GriefingAttackTests is Test {
 
     function test_InsufficientBalance_OperationStillSucceeds() public {
         // Setup vault with NO ETH for rewards
-        MockVaultSwapRouter poorRouter = new MockVaultSwapRouter();
+        MockZRouter poorZRouter = new MockZRouter();
         MockVaultPriceValidator poorValidator = new MockVaultPriceValidator();
-        alignmentToken.transfer(address(poorRouter), 100000e18);
+        alignmentToken.transfer(address(poorZRouter), 100_000e18);
 
         UltraAlignmentVault poorVault = TestableUltraAlignmentVault(payable(LibClone.clone(address(vaultImpl))));
         poorVault.initialize(
             mockWeth,
             mockPoolManager,
-            mockV3Router,
-            mockV2Router,
-            mockV2Factory,
-            mockV3Factory,
             address(alignmentToken),
             address(0xC1EA),
             100,
-            IVaultSwapRouter(address(poorRouter)),
+            address(poorZRouter),
+            3000,
+            60,
             IVaultPriceValidator(address(poorValidator))
         );
 

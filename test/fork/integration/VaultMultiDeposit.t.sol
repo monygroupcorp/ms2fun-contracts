@@ -3,9 +3,7 @@ pragma solidity ^0.8.20;
 
 import { ForkTestBase } from "../helpers/ForkTestBase.sol";
 import { UltraAlignmentVault } from "src/vaults/UltraAlignmentVault.sol";
-import { UniswapVaultSwapRouter } from "src/peripherals/UniswapVaultSwapRouter.sol";
 import { UniswapVaultPriceValidator } from "src/peripherals/UniswapVaultPriceValidator.sol";
-import { IVaultSwapRouter } from "src/interfaces/IVaultSwapRouter.sol";
 import { IVaultPriceValidator } from "src/interfaces/IVaultPriceValidator.sol";
 import { LibClone } from "solady/utils/LibClone.sol";
 import { Currency } from "v4-core/types/Currency.sol";
@@ -43,24 +41,18 @@ contract VaultMultiDepositTest is ForkTestBase {
         UniswapVaultPriceValidator priceValidator = new UniswapVaultPriceValidator(
             WETH, UNISWAP_V2_FACTORY, UNISWAP_V3_FACTORY, UNISWAP_V4_POOL_MANAGER, 1000
         );
-        UniswapVaultSwapRouter swapRouter = new UniswapVaultSwapRouter(
-            WETH, UNISWAP_V4_POOL_MANAGER, UNISWAP_V3_ROUTER, UNISWAP_V2_ROUTER,
-            UNISWAP_V2_FACTORY, UNISWAP_V3_FACTORY, 3000
-        );
         UltraAlignmentVault vaultImpl = new UltraAlignmentVault();
         vault = UltraAlignmentVault(payable(LibClone.clone(address(vaultImpl))));
         vm.prank(owner);
         vault.initialize(
             WETH,
             UNISWAP_V4_POOL_MANAGER,
-            UNISWAP_V3_ROUTER,
-            UNISWAP_V2_ROUTER,
-            UNISWAP_V2_FACTORY,
-            UNISWAP_V3_FACTORY,
             alignmentToken,
             address(0xC1EA),
             100,
-            IVaultSwapRouter(address(swapRouter)),
+            address(0), // TODO: replace with deployed zRouter address
+            3000,
+            60,
             IVaultPriceValidator(address(priceValidator))
         );
 

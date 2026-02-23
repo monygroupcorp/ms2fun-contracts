@@ -7,9 +7,8 @@ import {HookAddressMiner} from "../helpers/HookAddressMiner.sol";
 import {UltraAlignmentHookFactory} from "../../../src/factories/erc404/hooks/UltraAlignmentHookFactory.sol";
 import {UltraAlignmentV4Hook} from "../../../src/factories/erc404/hooks/UltraAlignmentV4Hook.sol";
 import {UltraAlignmentVault} from "../../../src/vaults/UltraAlignmentVault.sol";
-import {MockVaultSwapRouter} from "../../mocks/MockVaultSwapRouter.sol";
+import {MockZRouter} from "../../mocks/MockZRouter.sol";
 import {MockVaultPriceValidator} from "../../mocks/MockVaultPriceValidator.sol";
-import {IVaultSwapRouter} from "../../../src/interfaces/IVaultSwapRouter.sol";
 import {IVaultPriceValidator} from "../../../src/interfaces/IVaultPriceValidator.sol";
 import {LibClone} from "solady/utils/LibClone.sol";
 import {IPoolManager} from "v4-core/interfaces/IPoolManager.sol";
@@ -114,14 +113,12 @@ contract V4HookDeploymentTest is ForkTestBase {
             vault.initialize(
                 WETH,
                 UNISWAP_V4_POOL_MANAGER,
-                UNISWAP_V3_ROUTER,
-                UNISWAP_V2_ROUTER,
-                UNISWAP_V2_FACTORY,
-                UNISWAP_V3_FACTORY,
                 USDC,  // Using USDC as alignment token for test
                 address(0xC1EA),
                 100,
-                IVaultSwapRouter(address(new MockVaultSwapRouter())),
+                address(new MockZRouter()),
+                3000,
+                60,
                 IVaultPriceValidator(address(new MockVaultPriceValidator()))
             );
         }
