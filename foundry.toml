@@ -19,7 +19,9 @@ remappings = [
     "dn404/=lib/dn404/",
     "@uniswap/v3-core/=lib/v3-core/contracts/",
     "@uniswap/v3-periphery/=lib/v3-periphery/contracts/",
-    "@uniswap/v2-core/=lib/v2-core/contracts/"
+    "@uniswap/v2-core/=lib/v2-core/contracts/",
+    "zamm/=lib/zamm/src/",
+    "zRouter/=lib/zRouter/src/"
 ]
 
 [profile.ci]

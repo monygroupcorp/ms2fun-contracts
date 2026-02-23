@@ -22,3 +22,9 @@
 [submodule "lib/v2-core"]
 	path = lib/v2-core
 	url = https://github.com/Uniswap/v2-core
+[submodule "lib/zamm"]
+	path = lib/zamm
+	url = https://github.com/z-fi/zamm
+[submodule "lib/zRouter"]
+	path = lib/zRouter
+	url = https://github.com/z-fi/zRouter
