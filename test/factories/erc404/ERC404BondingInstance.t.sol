@@ -118,7 +118,7 @@ contract ERC404BondingInstanceTest is Test {
             1_000_000 ether, // unit
             address(stakingModule), // staking module
             mockLiquidityDeployer, // liquidity deployer module
-            address(curveComputer) // curve computer
+            address(curveComputer), // curve computer\n            mockMasterRegistry // master registry
         );
 
         vm.stopPrank();
@@ -823,6 +823,41 @@ contract ERC404BondingInstanceTest is Test {
         vm.prank(owner);
         vm.expectRevert(NoReserve.selector);
         instance.deployLiquidity();
+    }
+
+    // ── Vault migration tests ─────────────────────────────────────────────────
+
+    function test_MigrateVault_UpdatesActiveVault() public {
+        address newVault = makeAddr("newVault");
+        vm.prank(owner);
+        instance.migrateVault(newVault);
+        assertEq(address(instance.vault()), newVault);
+    }
+
+    function test_ClaimAllFees_IteratesAllVaults() public {
+        address vault1 = address(0xBEEF);
+        address vault2 = makeAddr("vault2");
+
+        address[] memory vaults = new address[](2);
+        vaults[0] = vault1;
+        vaults[1] = vault2;
+
+        vm.mockCall(
+            mockMasterRegistry,
+            abi.encodeWithSignature("getInstanceVaults(address)", address(instance)),
+            abi.encode(vaults)
+        );
+        vm.mockCall(vault1, abi.encodeWithSignature("claimFees()"), abi.encode(uint256(0)));
+        vm.mockCall(vault2, abi.encodeWithSignature("claimFees()"), abi.encode(uint256(0)));
+
+        vm.prank(owner);
+        instance.claimAllFees();
+    }
+
+    function test_MigrateVault_RevertIfNotOwner() public {
+        vm.prank(user1);
+        vm.expectRevert();
+        instance.migrateVault(makeAddr("newVault"));
     }
 }
 

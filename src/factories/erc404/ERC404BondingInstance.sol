@@ -13,6 +13,7 @@ import { LiquidityDeployerModule } from "./LiquidityDeployerModule.sol";
 import { IPoolManager } from "v4-core/interfaces/IPoolManager.sol";
 import { IHooks } from "v4-core/interfaces/IHooks.sol";
 import { IAlignmentVault } from "../../interfaces/IAlignmentVault.sol";
+import {IMasterRegistry} from "../../master/interfaces/IMasterRegistry.sol";
 import { IGlobalMessageRegistry } from "../../registry/interfaces/IGlobalMessageRegistry.sol";
 import { IInstanceLifecycle, TYPE_ERC404, STATE_BONDING, STATE_PAUSED, STATE_GRADUATED } from "../../interfaces/IInstanceLifecycle.sol";
 
@@ -114,6 +115,7 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IInstanceLife
     address public factory;
     address public weth;
     IAlignmentVault public vault;
+    IMasterRegistry public masterRegistry;
     IGlobalMessageRegistry public globalMessageRegistry;
 
     // Protocol revenue
@@ -210,7 +212,8 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IInstanceLife
         uint256 _tokenUnit,
         address _stakingModule,
         address _liquidityDeployer,
-        address _curveComputer
+        address _curveComputer,
+        address _masterRegistry
     ) external {
         if (_initialized) revert AlreadyInitialized();
         _initialized = true;
@@ -246,6 +249,7 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IInstanceLife
         globalMessageRegistry = IGlobalMessageRegistry(_globalMessageRegistry);
         if (_vault == address(0)) revert InvalidVault();
         vault = IAlignmentVault(payable(_vault));
+        masterRegistry = IMasterRegistry(_masterRegistry);
         styleUri = _styleUri;
         protocolTreasury = _protocolTreasury;
         bondingFeeBps = _bondingFeeBps;
@@ -330,6 +334,21 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IInstanceLife
         if (v4Hook != address(0)) revert HookAlreadySet();
         v4Hook = _hook;
         emit V4HookSet(_hook);
+    }
+
+    /// @notice Migrate to a new vault. New vault must share this instance's alignment target.
+    /// @dev Updates local active vault and appends to registry vault array.
+    function migrateVault(address newVault) external onlyOwner {
+        vault = IAlignmentVault(payable(newVault));
+        masterRegistry.migrateVault(address(this), newVault);
+    }
+
+    /// @notice Claim accumulated fees from all vault positions (current and historical).
+    function claimAllFees() external onlyOwner {
+        address[] memory allVaults = masterRegistry.getInstanceVaults(address(this));
+        for (uint256 i = 0; i < allVaults.length; i++) {
+            IAlignmentVault(payable(allVaults[i])).claimFees();
+        }
     }
 
     // ┌─────────────────────────┐
