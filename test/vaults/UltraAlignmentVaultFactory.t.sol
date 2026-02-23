@@ -4,9 +4,8 @@ pragma solidity ^0.8.20;
 import "forge-std/Test.sol";
 import "../../src/vaults/UltraAlignmentVaultFactory.sol";
 import "../../src/vaults/UltraAlignmentVault.sol";
-import {IVaultSwapRouter} from "../../src/interfaces/IVaultSwapRouter.sol";
 import {IVaultPriceValidator} from "../../src/interfaces/IVaultPriceValidator.sol";
-import {MockVaultSwapRouter} from "../mocks/MockVaultSwapRouter.sol";
+import {MockZRouter} from "../mocks/MockZRouter.sol";
 import {MockVaultPriceValidator} from "../mocks/MockVaultPriceValidator.sol";
 import {MockEXECToken} from "../mocks/MockEXECToken.sol";
 
@@ -16,32 +15,30 @@ contract UltraAlignmentVaultFactoryTest is Test {
 
     address public owner;
     address public mockPoolManager;
-    address public mockV3Router;
-    address public mockV2Router;
-    address public mockV2Factory;
-    address public mockV3Factory;
     address public mockWeth;
+
+    MockZRouter public mockZRouter;
+    MockVaultPriceValidator public mockPriceValidator;
 
     event VaultDeployed(address indexed vault, address indexed alignmentToken, address indexed creator);
 
     function setUp() public {
         owner = address(this);
         mockPoolManager = makeAddr("poolManager");
-        mockV3Router = makeAddr("v3Router");
-        mockV2Router = makeAddr("v2Router");
-        mockV2Factory = makeAddr("v2Factory");
-        mockV3Factory = makeAddr("v3Factory");
         mockWeth = makeAddr("weth");
 
         alignmentToken = new MockEXECToken(1000000e18);
 
+        mockZRouter = new MockZRouter();
+        mockPriceValidator = new MockVaultPriceValidator();
+
         factory = new UltraAlignmentVaultFactory(
             mockWeth,
             mockPoolManager,
-            mockV3Router,
-            mockV2Router,
-            mockV2Factory,
-            mockV3Factory
+            address(mockZRouter),
+            3000,
+            60,
+            IVaultPriceValidator(address(mockPriceValidator))
         );
     }
 
@@ -50,27 +47,23 @@ contract UltraAlignmentVaultFactoryTest is Test {
             address(alignmentToken),
             owner,
             100,
-            IVaultSwapRouter(address(0)),
             IVaultPriceValidator(address(0))
         );
 
         assertEq(UltraAlignmentVault(payable(vault)).alignmentToken(), address(alignmentToken));
     }
 
-    function test_deployVault_usesDefaultSwapRouter() public {
+    function test_deployVault_usesFactoryZRouterConfig() public {
         address vault = factory.deployVault(
             address(alignmentToken),
             owner,
             100,
-            IVaultSwapRouter(address(0)),
             IVaultPriceValidator(address(0))
         );
 
-        assertEq(
-            address(UltraAlignmentVault(payable(vault)).swapRouter()),
-            address(factory.defaultSwapRouter()),
-            "Should use default swap router"
-        );
+        assertEq(UltraAlignmentVault(payable(vault)).zRouter(), factory.zRouter(), "Should use factory zRouter");
+        assertEq(UltraAlignmentVault(payable(vault)).zRouterFee(), factory.zRouterFee(), "Should use factory fee");
+        assertEq(UltraAlignmentVault(payable(vault)).zRouterTickSpacing(), factory.zRouterTickSpacing(), "Should use factory tickSpacing");
         assertEq(
             address(UltraAlignmentVault(payable(vault)).priceValidator()),
             address(factory.defaultPriceValidator()),
@@ -78,23 +71,16 @@ contract UltraAlignmentVaultFactoryTest is Test {
         );
     }
 
-    function test_deployVault_acceptsCustomSwapRouter() public {
-        MockVaultSwapRouter customRouter = new MockVaultSwapRouter();
+    function test_deployVault_acceptsCustomPriceValidator() public {
         MockVaultPriceValidator customValidator = new MockVaultPriceValidator();
 
         address vault = factory.deployVault(
             address(alignmentToken),
             owner,
             100,
-            IVaultSwapRouter(address(customRouter)),
             IVaultPriceValidator(address(customValidator))
         );
 
-        assertEq(
-            address(UltraAlignmentVault(payable(vault)).swapRouter()),
-            address(customRouter),
-            "Should use custom swap router"
-        );
         assertEq(
             address(UltraAlignmentVault(payable(vault)).priceValidator()),
             address(customValidator),
@@ -109,7 +95,6 @@ contract UltraAlignmentVaultFactoryTest is Test {
             address(alignmentToken),
             owner,
             100,
-            IVaultSwapRouter(address(0)),
             IVaultPriceValidator(address(0))
         );
 
@@ -117,7 +102,6 @@ contract UltraAlignmentVaultFactoryTest is Test {
             address(token2),
             owner,
             200,
-            IVaultSwapRouter(address(0)),
             IVaultPriceValidator(address(0))
         );
 
@@ -136,7 +120,6 @@ contract UltraAlignmentVaultFactoryTest is Test {
             address(alignmentToken),
             owner,
             100,
-            IVaultSwapRouter(address(0)),
             IVaultPriceValidator(address(0))
         );
     }
@@ -144,12 +127,10 @@ contract UltraAlignmentVaultFactoryTest is Test {
     function test_constructor_storesAddresses() public view {
         assertEq(factory.weth(), mockWeth);
         assertEq(factory.poolManager(), mockPoolManager);
-        assertEq(factory.v3Router(), mockV3Router);
-        assertEq(factory.v2Router(), mockV2Router);
-        assertEq(factory.v2Factory(), mockV2Factory);
-        assertEq(factory.v3Factory(), mockV3Factory);
-        assertTrue(address(factory.defaultSwapRouter()) != address(0));
-        assertTrue(address(factory.defaultPriceValidator()) != address(0));
+        assertEq(factory.zRouter(), address(mockZRouter));
+        assertEq(factory.zRouterFee(), 3000);
+        assertEq(factory.zRouterTickSpacing(), 60);
+        assertEq(address(factory.defaultPriceValidator()), address(mockPriceValidator));
         assertTrue(factory.vaultImplementation() != address(0));
     }
 }
