@@ -28,24 +28,32 @@ contract GlobalMessageRegistryTest is Test {
 
     function setUp() public {
         masterRegistry = new MockMasterRegistry();
-        registry = new GlobalMessageRegistry(owner, address(masterRegistry));
+        registry = new GlobalMessageRegistry();
+        registry.initialize(owner, address(masterRegistry));
     }
 
-    // ── Constructor ──
+    // ── Initialize ──
 
     function test_constructor() public view {
         assertEq(registry.messageCount(), 0);
         assertEq(address(registry.masterRegistry()), address(masterRegistry));
     }
 
-    function test_constructor_revertZeroOwner() public {
+    function test_initialize_revertZeroOwner() public {
+        GlobalMessageRegistry r = new GlobalMessageRegistry();
         vm.expectRevert("Invalid owner");
-        new GlobalMessageRegistry(address(0), address(masterRegistry));
+        r.initialize(address(0), address(masterRegistry));
     }
 
-    function test_constructor_revertZeroRegistry() public {
+    function test_initialize_revertZeroRegistry() public {
+        GlobalMessageRegistry r = new GlobalMessageRegistry();
         vm.expectRevert("Invalid master registry");
-        new GlobalMessageRegistry(owner, address(0));
+        r.initialize(owner, address(0));
+    }
+
+    function test_initialize_revertAlreadyInitialized() public {
+        vm.expectRevert("Already initialized");
+        registry.initialize(owner, address(masterRegistry));
     }
 
     // ── postForAction ──

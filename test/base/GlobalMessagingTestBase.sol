@@ -13,7 +13,8 @@ abstract contract GlobalMessagingTestBase is Test {
     GlobalMessageRegistry public globalRegistry;
 
     function _setUpGlobalMessaging(address masterRegistry) internal {
-        globalRegistry = new GlobalMessageRegistry(address(this), masterRegistry);
+        globalRegistry = new GlobalMessageRegistry();
+        globalRegistry.initialize(address(this), masterRegistry);
     }
 
     function _assertMessageCount(uint256 expected) internal view {

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
+import { UUPSUpgradeable } from "solady/utils/UUPSUpgradeable.sol";
 import { Ownable } from "solady/auth/Ownable.sol";
 import { SafeTransferLib } from "solady/utils/SafeTransferLib.sol";
 import { IMasterRegistry } from "../master/interfaces/IMasterRegistry.sol";
@@ -13,13 +14,15 @@ import { IGlobalMessageRegistry } from "./interfaces/IGlobalMessageRegistry.sol"
  *      - postForAction: called by registered instances to forward user messages atomically with actions
  *      - post: called directly by users, instance acts as channel
  *      All message data is emitted via events for off-chain indexing.
+ *      UUPS upgradeable. Owner is the DAO via Timelock.
  */
-contract GlobalMessageRegistry is Ownable, IGlobalMessageRegistry {
+contract GlobalMessageRegistry is UUPSUpgradeable, Ownable, IGlobalMessageRegistry {
 
     // ┌─────────────────────────┐
     // │      State Variables    │
     // └─────────────────────────┘
 
+    bool private _initialized;
     uint256 public messageCount;
     IMasterRegistry public masterRegistry;
 
@@ -44,12 +47,20 @@ contract GlobalMessageRegistry is Ownable, IGlobalMessageRegistry {
     // │      Constructor        │
     // └─────────────────────────┘
 
-    constructor(address _owner, address _masterRegistry) {
+    constructor() {
+        _initializeOwner(msg.sender);
+    }
+
+    function initialize(address _owner, address _masterRegistry) public {
+        require(!_initialized, "Already initialized");
         require(_owner != address(0), "Invalid owner");
         require(_masterRegistry != address(0), "Invalid master registry");
-        _initializeOwner(_owner);
+        _initialized = true;
+        _setOwner(_owner);
         masterRegistry = IMasterRegistry(_masterRegistry);
     }
+
+    function _authorizeUpgrade(address) internal override onlyOwner {}
 
     // ┌─────────────────────────┐
     // │    Write Functions      │
