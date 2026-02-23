@@ -133,7 +133,7 @@ contract VaultInterfaceComplianceTest is Test {
 
         // Test receiveInstance
         vm.prank(benefactor1);
-        vault.receiveInstance{value: 1 ether}(
+        vault.receiveContribution{value: 1 ether}(
             Currency.wrap(address(0)),
             1 ether,
             benefactor1
@@ -190,7 +190,7 @@ contract VaultInterfaceComplianceTest is Test {
      */
     function test_MockVault_ReceiveHookTax() public {
         vm.prank(benefactor1);
-        mockVault.receiveInstance{value: 5 ether}(
+        mockVault.receiveContribution{value: 5 ether}(
             Currency.wrap(address(0)),
             5 ether,
             benefactor1
@@ -220,7 +220,7 @@ contract VaultInterfaceComplianceTest is Test {
     function test_MockVault_MultiBenefactor() public {
         // Benefactor1 contributes 6 ETH
         vm.prank(benefactor1);
-        mockVault.receiveInstance{value: 6 ether}(
+        mockVault.receiveContribution{value: 6 ether}(
             Currency.wrap(address(0)),
             6 ether,
             benefactor1
@@ -228,7 +228,7 @@ contract VaultInterfaceComplianceTest is Test {
 
         // Benefactor2 contributes 4 ETH
         vm.prank(benefactor2);
-        mockVault.receiveInstance{value: 4 ether}(
+        mockVault.receiveContribution{value: 4 ether}(
             Currency.wrap(address(0)),
             4 ether,
             benefactor2
@@ -253,7 +253,7 @@ contract VaultInterfaceComplianceTest is Test {
     function test_MockVault_ClaimAndReclaim() public {
         // Initial contribution
         vm.prank(benefactor1);
-        mockVault.receiveInstance{value: 10 ether}(
+        mockVault.receiveContribution{value: 10 ether}(
             Currency.wrap(address(0)),
             10 ether,
             benefactor1
@@ -431,7 +431,7 @@ contract VaultInterfaceComplianceTest is Test {
 
         // Contribute first to become a benefactor
         vm.prank(benefactor1);
-        v.receiveInstance{value: 1 ether}(Currency.wrap(address(0)), 1 ether, benefactor1);
+        v.receiveContribution{value: 1 ether}(Currency.wrap(address(0)), 1 ether, benefactor1);
 
         // Set delegation on UltraVault (needs contribution)
         vm.prank(benefactor1);
@@ -469,7 +469,7 @@ contract VaultInterfaceComplianceTest is Test {
     function test_V2_ReceiveInstance_TracksContribution() public {
         IAlignmentVault v = IAlignmentVault(payable(address(ultraVaultV2)));
         vm.prank(benefactor1);
-        v.receiveInstance{value: 1 ether}(Currency.wrap(address(0)), 1 ether, benefactor1);
+        v.receiveContribution{value: 1 ether}(Currency.wrap(address(0)), 1 ether, benefactor1);
         assertEq(ultraVaultV2.pendingETH(), 1 ether);
         assertEq(ultraVaultV2.pendingContribution(benefactor1), 1 ether);
     }
@@ -478,7 +478,7 @@ contract VaultInterfaceComplianceTest is Test {
         IAlignmentVault v = IAlignmentVault(payable(address(ultraVaultV2)));
         vm.expectRevert();
         vm.prank(benefactor1);
-        v.receiveInstance{value: 0}(Currency.wrap(address(0x1234)), 0, benefactor1);
+        v.receiveContribution{value: 0}(Currency.wrap(address(0x1234)), 0, benefactor1);
     }
 
     function test_MockVault_Delegation_RemoveBySettingZero() public {
@@ -487,7 +487,7 @@ contract VaultInterfaceComplianceTest is Test {
 
         // Become benefactor and set delegate
         vm.prank(benefactor1);
-        v.receiveInstance{value: 1 ether}(Currency.wrap(address(0)), 1 ether, benefactor1);
+        v.receiveContribution{value: 1 ether}(Currency.wrap(address(0)), 1 ether, benefactor1);
         vm.prank(benefactor1);
         mockVault.delegateBenefactor(delegate);
 
@@ -505,9 +505,9 @@ contract VaultInterfaceComplianceTest is Test {
 
         // Two benefactors contribute
         vm.prank(benefactor1);
-        v.receiveInstance{value: 5 ether}(Currency.wrap(address(0)), 5 ether, benefactor1);
+        v.receiveContribution{value: 5 ether}(Currency.wrap(address(0)), 5 ether, benefactor1);
         vm.prank(benefactor2);
-        v.receiveInstance{value: 5 ether}(Currency.wrap(address(0)), 5 ether, benefactor2);
+        v.receiveContribution{value: 5 ether}(Currency.wrap(address(0)), 5 ether, benefactor2);
 
         // Both delegate to same address
         vm.prank(benefactor1);
@@ -539,7 +539,7 @@ contract VaultInterfaceComplianceTest is Test {
         emit IAlignmentVault.ContributionReceived(benefactor1, 1 ether);
 
         vm.prank(benefactor1);
-        mockVault.receiveInstance{value: 1 ether}(
+        mockVault.receiveContribution{value: 1 ether}(
             Currency.wrap(address(0)),
             1 ether,
             benefactor1
@@ -552,7 +552,7 @@ contract VaultInterfaceComplianceTest is Test {
     function test_Event_FeesClaimed() public {
         // Setup: contribute first
         vm.prank(benefactor1);
-        mockVault.receiveInstance{value: 1 ether}(
+        mockVault.receiveContribution{value: 1 ether}(
             Currency.wrap(address(0)),
             1 ether,
             benefactor1
@@ -575,7 +575,7 @@ contract VaultInterfaceComplianceTest is Test {
         emit IAlignmentVault.FeesAccumulated(1 ether);
 
         vm.prank(benefactor1);
-        mockVault.receiveInstance{value: 1 ether}(
+        mockVault.receiveContribution{value: 1 ether}(
             Currency.wrap(address(0)),
             1 ether,
             benefactor1

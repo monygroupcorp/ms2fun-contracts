@@ -574,7 +574,7 @@ contract V4HookTaxationTest is ForkTestBase, IUnlockCallback {
 contract MockVault {
     uint256 public lastFeeReceived;
 
-    function receiveInstance(Currency currency, uint256 amount, address sender) external payable {
+    function receiveContribution(Currency currency, uint256 amount, address sender) external payable {
         lastFeeReceived = amount;
     }
 
@@ -653,7 +653,7 @@ contract MockFeeHook is BaseTestHooks {
 
         if (feeAmount > 0) {
             poolManager.take(key.currency0, address(this), feeAmount);
-            MockVault(payable(vault)).receiveInstance{value: feeAmount}(key.currency0, feeAmount, sender);
+            MockVault(payable(vault)).receiveContribution{value: feeAmount}(key.currency0, feeAmount, sender);
             emit AlignmentFeeCollected(feeAmount, sender);
             return (IHooks.afterSwap.selector, feeAmount.toInt128());
         }

@@ -274,7 +274,7 @@ contract ERC721AuctionInstance is ERC721, Ownable, ReentrancyGuard, IFactoryInst
         uint256 vaultCut = (auction.highBid * 20) / 100;
         uint256 creatorCut = auction.highBid - vaultCut;
 
-        _vault.receiveInstance{value: vaultCut}(
+        _vault.receiveContribution{value: vaultCut}(
             Currency.wrap(address(0)),
             vaultCut,
             address(this)

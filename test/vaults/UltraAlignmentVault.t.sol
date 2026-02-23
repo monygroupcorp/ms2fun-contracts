@@ -225,14 +225,14 @@ contract UltraAlignmentVaultTest is Test {
         vm.expectEmit(true, true, true, true);
         emit ContributionReceived(bob, 1 ether);
 
-        vault.receiveInstance{value: 1 ether}(Currency.wrap(address(0)), 1 ether, bob);
+        vault.receiveContribution{value: 1 ether}(Currency.wrap(address(0)), 1 ether, bob);
 
         vm.stopPrank();
     }
 
     function test_ReceiveHookTax_TracksBenefactorNotSender() public {
         vm.prank(alice);
-        vault.receiveInstance{value: 2 ether}(Currency.wrap(address(0)), 2 ether, bob);
+        vault.receiveContribution{value: 2 ether}(Currency.wrap(address(0)), 2 ether, bob);
 
         assertEq(vault.benefactorTotalETH(bob), 2 ether, "Bob should be tracked as benefactor");
         assertEq(vault.benefactorTotalETH(alice), 0, "Alice should not be benefactor");
@@ -240,7 +240,7 @@ contract UltraAlignmentVaultTest is Test {
 
     function test_ReceiveHookTax_TracksPendingETH() public {
         vm.prank(alice);
-        vault.receiveInstance{value: 3 ether}(Currency.wrap(address(0)), 3 ether, bob);
+        vault.receiveContribution{value: 3 ether}(Currency.wrap(address(0)), 3 ether, bob);
 
         assertEq(vault.pendingETH(bob), 3 ether, "Bob's pending ETH should be 3 ether");
         assertEq(vault.totalPendingETH(), 3 ether, "Total pending ETH should be 3 ether");
@@ -249,14 +249,14 @@ contract UltraAlignmentVaultTest is Test {
     function test_ReceiveHookTax_RevertsOnZeroAmount() public {
         vm.startPrank(alice);
         vm.expectRevert("Amount must be positive");
-        vault.receiveInstance(Currency.wrap(address(0)), 0, bob);
+        vault.receiveContribution(Currency.wrap(address(0)), 0, bob);
         vm.stopPrank();
     }
 
     function test_ReceiveHookTax_RevertsOnInvalidBenefactor() public {
         vm.startPrank(alice);
         vm.expectRevert("Invalid benefactor");
-        vault.receiveInstance{value: 1 ether}(Currency.wrap(address(0)), 1 ether, address(0));
+        vault.receiveContribution{value: 1 ether}(Currency.wrap(address(0)), 1 ether, address(0));
         vm.stopPrank();
     }
 
@@ -307,7 +307,7 @@ contract UltraAlignmentVaultTest is Test {
 
         // Bob via receiveInstance (charlie is sender)
         vm.prank(charlie);
-        vault.receiveInstance{value: 2 ether}(Currency.wrap(address(0)), 2 ether, bob);
+        vault.receiveContribution{value: 2 ether}(Currency.wrap(address(0)), 2 ether, bob);
 
         // Charlie via receive
         vm.prank(charlie);
@@ -942,7 +942,7 @@ contract UltraAlignmentVaultTest is Test {
 
     function test_ReceiveHookTax_ReentrancyProtection() public {
         vm.prank(alice);
-        vault.receiveInstance{value: 1 ether}(Currency.wrap(address(0)), 1 ether, bob);
+        vault.receiveContribution{value: 1 ether}(Currency.wrap(address(0)), 1 ether, bob);
         // Should succeed without reentrancy issues
     }
 

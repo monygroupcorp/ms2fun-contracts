@@ -11,7 +11,7 @@ import {Currency} from "v4-core/types/Currency.sol";
  *      Perfect for testing factory/instance integration without complex yield logic
  *
  * Features:
- * - Accepts ETH via receiveInstance() and receive()
+ * - Accepts ETH via receiveContribution() and receive()
  * - Tracks benefactor contributions
  * - Issues shares 1:1 with ETH (no yield generation)
  * - Allows fee claims (just returns stored ETH)
@@ -20,7 +20,7 @@ import {Currency} from "v4-core/types/Currency.sol";
  * Usage:
  * ```solidity
  * MockVault vault = new MockVault();
- * vault.receiveInstance{value: 1 ether}(Currency.wrap(address(0)), 1 ether, benefactor);
+ * vault.receiveContribution{value: 1 ether}(Currency.wrap(address(0)), 1 ether, benefactor);
  * uint256 claimable = vault.calculateClaimableAmount(benefactor); // Returns 1 ether
  * uint256 claimed = vault.claimFees(); // Transfers 1 ether to benefactor
  * ```
@@ -55,7 +55,7 @@ contract MockVault is IAlignmentVault {
      * @param amount Amount of tax received
      * @param benefactor Address to credit for this contribution
      */
-    function receiveInstance(
+    function receiveContribution(
         Currency currency,
         uint256 amount,
         address benefactor

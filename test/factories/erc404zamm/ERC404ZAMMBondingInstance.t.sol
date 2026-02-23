@@ -262,7 +262,7 @@ contract ERC404ZAMMBondingInstanceTest is Test {
         // We need to make vault accept the call — use a mock vault
         vm.mockCall(
             vault,
-            abi.encodeWithSignature("receiveInstance(address,uint256,address)"),
+            abi.encodeWithSignature("receiveContribution(address,uint256,address)"),
             abi.encode()
         );
 

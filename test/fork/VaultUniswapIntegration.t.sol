@@ -230,13 +230,13 @@ contract VaultUniswapIntegrationTest is ForkTestBase {
         emit log_string("[PASS] Multiple contributions from same benefactor accumulate");
     }
 
-    function test_receiveInstance_withBenefactor() public {
+    function test_receiveContribution_withBenefactor() public {
         uint256 amount = 1 ether;
         address hookCaller = makeAddr("hookCaller");
 
         vm.deal(hookCaller, amount);
         vm.prank(hookCaller);
-        vault.receiveInstance{value: amount}(
+        vault.receiveContribution{value: amount}(
             Currency.wrap(vault.weth()), // currency (unused in current implementation)
             amount,
             alice // benefactor attribution

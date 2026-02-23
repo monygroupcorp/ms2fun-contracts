@@ -663,7 +663,7 @@ contract TestableHook is ReentrancyGuard, Ownable {
 
         if (feeAmount > 0) {
             poolManager.take(key.currency0, address(this), feeAmount);
-            vault.receiveInstance{value: feeAmount}(key.currency0, feeAmount, sender);
+            vault.receiveContribution{value: feeAmount}(key.currency0, feeAmount, sender);
             emit AlignmentFeeCollected(feeAmount, sender);
             return (IHooks.afterSwap.selector, feeAmount.toInt128());
         }
@@ -702,7 +702,7 @@ contract MockVault {
 
     receive() external payable {}
 
-    function receiveInstance(
+    function receiveContribution(
         Currency currency,
         uint256 amount,
         address benefactor
@@ -717,7 +717,7 @@ contract MockVault {
 contract MockRevertingVault {
     receive() external payable {}
 
-    function receiveInstance(
+    function receiveContribution(
         Currency currency,
         uint256 amount,
         address benefactor

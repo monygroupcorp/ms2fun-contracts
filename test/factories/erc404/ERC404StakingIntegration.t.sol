@@ -41,7 +41,7 @@ contract MockAlignmentVault is IAlignmentVault {
 
     // ── IAlignmentVault ──
 
-    function receiveInstance(Currency, uint256, address) external payable override {}
+    function receiveContribution(Currency, uint256, address) external payable override {}
 
     function claimFees() external override returns (uint256 ethClaimed) {
         ethClaimed = feesToReturn;

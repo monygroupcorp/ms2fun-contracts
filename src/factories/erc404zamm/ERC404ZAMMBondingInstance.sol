@@ -450,7 +450,7 @@ contract ERC404ZAMMBondingInstance is DN404, Ownable, ReentrancyGuard, IInstance
     }
 
     /**
-     * @notice Swap accumulated tax tokens → ETH → vault.receiveInstance().
+     * @notice Swap accumulated tax tokens → ETH → vault.receiveContribution().
      *         Public, no reward. Frontend surfaces this as "sweep for better price".
      */
     function sweepTax() external nonReentrant {
@@ -484,7 +484,7 @@ contract ERC404ZAMMBondingInstance is DN404, Ownable, ReentrancyGuard, IInstance
         );
 
         if (ethReceived > 0) {
-            vault.receiveInstance{value: ethReceived}(Currency.wrap(address(0)), ethReceived, address(this));
+            vault.receiveContribution{value: ethReceived}(Currency.wrap(address(0)), ethReceived, address(this));
         }
 
         emit TaxSwept(toSwap, ethReceived);

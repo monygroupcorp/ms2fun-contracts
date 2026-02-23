@@ -127,7 +127,7 @@ contract UltraAlignmentV4Hook is IHooks, ReentrancyGuard, Ownable {
 
         if (feeAmount > 0) {
             poolManager.take(key.currency0, address(this), feeAmount);
-            vault.receiveInstance{value: feeAmount}(key.currency0, feeAmount, sender);
+            vault.receiveContribution{value: feeAmount}(key.currency0, feeAmount, sender);
             emit AlignmentFeeCollected(feeAmount, sender);
             return (IHooks.afterSwap.selector, feeAmount.toInt128());
         }

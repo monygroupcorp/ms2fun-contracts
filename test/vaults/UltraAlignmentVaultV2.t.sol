@@ -118,7 +118,7 @@ contract UltraAlignmentVaultV2Test is Test {
 
     function test_receiveInstance_tracksPending() public {
         vm.prank(alice);
-        vault.receiveInstance{value: 1 ether}(Currency.wrap(address(0)), 1 ether, alice);
+        vault.receiveContribution{value: 1 ether}(Currency.wrap(address(0)), 1 ether, alice);
 
         assertEq(vault.pendingETH(), 1 ether);
         assertEq(vault.pendingContribution(alice), 1 ether);
@@ -126,10 +126,10 @@ contract UltraAlignmentVaultV2Test is Test {
 
     function test_receiveInstance_accumulatesMultiple() public {
         vm.prank(alice);
-        vault.receiveInstance{value: 1 ether}(Currency.wrap(address(0)), 1 ether, alice);
+        vault.receiveContribution{value: 1 ether}(Currency.wrap(address(0)), 1 ether, alice);
 
         vm.prank(bob);
-        vault.receiveInstance{value: 2 ether}(Currency.wrap(address(0)), 2 ether, bob);
+        vault.receiveContribution{value: 2 ether}(Currency.wrap(address(0)), 2 ether, bob);
 
         assertEq(vault.pendingETH(), 3 ether);
         assertEq(vault.pendingContribution(alice), 1 ether);
@@ -141,13 +141,13 @@ contract UltraAlignmentVaultV2Test is Test {
         emit ContributionReceived(alice, 1 ether);
 
         vm.prank(alice);
-        vault.receiveInstance{value: 1 ether}(Currency.wrap(address(0)), 1 ether, alice);
+        vault.receiveContribution{value: 1 ether}(Currency.wrap(address(0)), 1 ether, alice);
     }
 
     function test_receiveInstance_revertOnNonEthCurrency() public {
         vm.expectRevert();
         vm.prank(alice);
-        vault.receiveInstance{value: 0}(
+        vault.receiveContribution{value: 0}(
             Currency.wrap(address(alignmentToken)),
             1 ether,
             alice
@@ -165,7 +165,7 @@ contract UltraAlignmentVaultV2Test is Test {
 
     function _receiveFromAlice(uint256 amount) internal {
         vm.prank(alice);
-        vault.receiveInstance{value: amount}(Currency.wrap(address(0)), amount, alice);
+        vault.receiveContribution{value: amount}(Currency.wrap(address(0)), amount, alice);
     }
 
     function _setupPool(uint112 r0, uint112 r1) internal {
@@ -198,7 +198,7 @@ contract UltraAlignmentVaultV2Test is Test {
         _receiveFromAlice(1 ether);
 
         vm.prank(bob);
-        vault.receiveInstance{value: 3 ether}(Currency.wrap(address(0)), 3 ether, bob);
+        vault.receiveContribution{value: 3 ether}(Currency.wrap(address(0)), 3 ether, bob);
 
         _setupPool(10 ether, 10_000e18);
         vault.convertAndAddLiquidity(0, 0, 0);
@@ -361,9 +361,9 @@ contract UltraAlignmentVaultV2Test is Test {
     function test_claimFeesAsDelegate_batchClaim() public {
         // Bob and Charlie both receive from alice (as benefactors)
         vm.prank(bob);
-        vault.receiveInstance{value: 2 ether}(Currency.wrap(address(0)), 2 ether, bob);
+        vault.receiveContribution{value: 2 ether}(Currency.wrap(address(0)), 2 ether, bob);
         vm.prank(charlie);
-        vault.receiveInstance{value: 2 ether}(Currency.wrap(address(0)), 2 ether, charlie);
+        vault.receiveContribution{value: 2 ether}(Currency.wrap(address(0)), 2 ether, charlie);
 
         _setupPool(10 ether, 10_000e18);
         vault.convertAndAddLiquidity(0, 0, 0);
@@ -389,7 +389,7 @@ contract UltraAlignmentVaultV2Test is Test {
 
     function test_claimFeesAsDelegate_revertIfNotDelegate() public {
         vm.prank(alice);
-        vault.receiveInstance{value: 1 ether}(Currency.wrap(address(0)), 1 ether, alice);
+        vault.receiveContribution{value: 1 ether}(Currency.wrap(address(0)), 1 ether, alice);
         _setupPool(10 ether, 10_000e18);
         vault.convertAndAddLiquidity(0, 0, 0);
 

@@ -336,8 +336,8 @@ contract ERC1155Instance is Ownable, ReentrancyGuard, IInstanceLifecycle {
         uint256 ownerAmount = amount - taxAmount;
 
         // Send tithe to vault via explicit attribution path
-        // Uses receiveInstance() so the vault tracks this instance as the benefactor
-        vault.receiveInstance{value: taxAmount}(Currency.wrap(address(0)), taxAmount, address(this));
+        // Uses receiveContribution() so the vault tracks this instance as the benefactor
+        vault.receiveContribution{value: taxAmount}(Currency.wrap(address(0)), taxAmount, address(this));
 
         // Transfer remainder to owner
         SafeTransferLib.safeTransferETH(owner(), ownerAmount);
