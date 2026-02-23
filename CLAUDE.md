@@ -40,6 +40,15 @@ GrandCentral is a Moloch-pattern DAO. Shares = voting power, loot = economic rig
 
 Solidity 0.8.20, Foundry/Forge, Solady (Ownable, UUPS), Uniswap V4 (hooks, LP), DN404 (ERC404). Run `forge test` for full suite (~1009 tests).
 
+## Build & Test Performance
+
+This repo has many contracts and a full build/test is slow. Always use targeted commands during development:
+
+- **Run specific tests**: `forge test --match-contract MyContractTest` or `--match-path "test/vaults/**"`
+- **Build without tests/scripts**: `forge build --skip "test/**" --skip "script/**"`
+- **Trust incremental builds**: never use `--no-cache` unless diagnosing a stale artifact issue
+- **Per-area profile** (optional): `FOUNDRY_PROFILE=fast forge build` with a profile that scopes `src` to the area you're working in
+
 ## File Layout
 
 - `src/dao/` — GrandCentral DAO, conductors (StipendConductor, ShareOffering, RevenueConductor)
