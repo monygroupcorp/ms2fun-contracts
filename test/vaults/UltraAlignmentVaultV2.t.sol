@@ -334,7 +334,6 @@ contract UltraAlignmentVaultV2Test is Test {
         uint256 pending = vault.calculateClaimableAmount(alice);
         assertGt(pending, 0);
 
-        uint256 balBefore = alice.balance;
         vm.prank(alice);
         uint256 claimed = vault.claimFees();
         assertEq(pending, claimed);
