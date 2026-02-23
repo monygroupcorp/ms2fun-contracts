@@ -15,9 +15,7 @@ import {GrandCentral} from "../src/dao/GrandCentral.sol";
 import {ShareOffering} from "../src/dao/conductors/ShareOffering.sol";
 import {StipendConductor} from "../src/dao/conductors/StipendConductor.sol";
 import {UltraAlignmentVault} from "../src/vaults/UltraAlignmentVault.sol";
-import {UniswapVaultSwapRouter} from "../src/peripherals/UniswapVaultSwapRouter.sol";
 import {UniswapVaultPriceValidator} from "../src/peripherals/UniswapVaultPriceValidator.sol";
-import {IVaultSwapRouter} from "../src/interfaces/IVaultSwapRouter.sol";
 import {IVaultPriceValidator} from "../src/interfaces/IVaultPriceValidator.sol";
 import {ERC404Factory} from "../src/factories/erc404/ERC404Factory.sol";
 import {ERC404BondingInstance} from "../src/factories/erc404/ERC404BondingInstance.sol";
@@ -35,10 +33,13 @@ contract DeploySepolia is Script {
     // Sepolia default addresses (overridable via env vars)
     address public constant SEPOLIA_WETH = 0xfFf9976782d46CC05630D1f6eBAb18b2324d6B14;
     address public constant SEPOLIA_V4_POOL_MANAGER = 0xE03A1074c86CFeDd5C142C4F04F1a1536e203543;
-    address public constant SEPOLIA_V3_SWAP_ROUTER = 0x3bFA4769FB09eefC5a80d6E87c3B9C650f7Ae48E;
     address public constant SEPOLIA_V3_FACTORY = 0x0227628f3F023bb0B980b67D528571c95c6DaC1c;
-    address public constant SEPOLIA_V2_ROUTER = 0xeE567Fe1712Faf6149d80dA1E6934E354124CfE3;
     address public constant SEPOLIA_V2_FACTORY = 0xF62c03E08ada871A0bEb309762E260a7a6a880E6;
+
+    // zRouter singleton on Sepolia — TODO: replace with actual deployed address
+    address public constant SEPOLIA_ZROUTER = address(0); // placeholder
+    uint24  public constant ZROUTER_FEE = 3000;
+    int24   public constant ZROUTER_TICK_SPACING = 60;
 
     // Deployed addresses (public for test access)
     MasterRegistryV1 public masterRegistryImpl;
@@ -84,9 +85,7 @@ contract DeploySepolia is Script {
         // Resolve addresses with env var overrides
         address weth = vm.envOr("WETH", SEPOLIA_WETH);
         address poolManager = vm.envOr("V4_POOL_MANAGER", SEPOLIA_V4_POOL_MANAGER);
-        address v3Router = vm.envOr("V3_SWAP_ROUTER", SEPOLIA_V3_SWAP_ROUTER);
         address v3Factory = vm.envOr("V3_FACTORY", SEPOLIA_V3_FACTORY);
-        address v2Router = vm.envOr("V2_ROUTER", SEPOLIA_V2_ROUTER);
         address v2Factory = vm.envOr("V2_FACTORY", SEPOLIA_V2_FACTORY);
 
         // ============ Phase 1: Core Infrastructure ============
@@ -179,22 +178,17 @@ contract DeploySepolia is Script {
         UniswapVaultPriceValidator priceValidator = new UniswapVaultPriceValidator(
             weth, v2Factory, v3Factory, poolManager, 1000
         );
-        UniswapVaultSwapRouter swapRouter = new UniswapVaultSwapRouter(
-            weth, poolManager, v3Router, v2Router, v2Factory, v3Factory, 3000
-        );
         UltraAlignmentVault vaultImpl = new UltraAlignmentVault();
         vault = UltraAlignmentVault(payable(LibClone.clone(address(vaultImpl))));
         vault.initialize(
             weth,
             poolManager,
-            v3Router,
-            v2Router,
-            v2Factory,
-            v3Factory,
             address(testToken),
             deployer,       // factoryCreator
             100,            // creatorYieldCutBps (1%)
-            IVaultSwapRouter(address(swapRouter)),
+            SEPOLIA_ZROUTER,
+            ZROUTER_FEE,
+            ZROUTER_TICK_SPACING,
             IVaultPriceValidator(address(priceValidator))
         );
 
