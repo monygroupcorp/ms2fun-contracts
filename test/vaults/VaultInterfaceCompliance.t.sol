@@ -4,8 +4,17 @@ pragma solidity ^0.8.20;
 import "forge-std/Test.sol";
 import {IAlignmentVault} from "../../src/interfaces/IAlignmentVault.sol";
 import {UltraAlignmentVault} from "../../src/vaults/UltraAlignmentVault.sol";
+import {UltraAlignmentVaultV2, IZAMM} from "../../src/vaults/UltraAlignmentVaultV2.sol";
 import {MockVault} from "../mocks/MockVault.sol";
+import {MockVaultSwapRouter} from "../mocks/MockVaultSwapRouter.sol";
+import {MockVaultPriceValidator} from "../mocks/MockVaultPriceValidator.sol";
+import {MockZAMM} from "../mocks/MockZAMM.sol";
+import {MockZRouter} from "../mocks/MockZRouter.sol";
+import {MockEXECToken} from "../mocks/MockEXECToken.sol";
+import {IVaultSwapRouter} from "../../src/interfaces/IVaultSwapRouter.sol";
+import {IVaultPriceValidator} from "../../src/interfaces/IVaultPriceValidator.sol";
 import {Currency} from "v4-core/types/Currency.sol";
+import {LibClone} from "solady/utils/LibClone.sol";
 
 /**
  * @title VaultInterfaceComplianceTest
@@ -15,6 +24,7 @@ import {Currency} from "v4-core/types/Currency.sol";
 contract VaultInterfaceComplianceTest is Test {
     // Vault instances
     UltraAlignmentVault ultraVault;
+    UltraAlignmentVaultV2 ultraVaultV2;
     MockVault mockVault;
 
     // Mock addresses for UltraAlignmentVault constructor
@@ -31,8 +41,14 @@ contract VaultInterfaceComplianceTest is Test {
     address benefactor2 = makeAddr("benefactor2");
 
     function setUp() public {
-        // Deploy UltraAlignmentVault with mock addresses
-        ultraVault = new UltraAlignmentVault(
+        // Deploy mock peripherals
+        MockVaultSwapRouter mockRouter = new MockVaultSwapRouter();
+        MockVaultPriceValidator mockValidator = new MockVaultPriceValidator();
+
+        // Deploy UltraAlignmentVault via clone+initialize pattern
+        UltraAlignmentVault impl = new UltraAlignmentVault();
+        ultraVault = UltraAlignmentVault(payable(LibClone.clone(address(impl))));
+        ultraVault.initialize(
             MOCK_WETH,
             MOCK_POOL_MANAGER,
             MOCK_V3_ROUTER,
@@ -41,7 +57,36 @@ contract VaultInterfaceComplianceTest is Test {
             MOCK_V3_FACTORY,
             MOCK_ALIGNMENT_TOKEN,
             address(0xC1EA),
-            100
+            100,
+            IVaultSwapRouter(address(mockRouter)),
+            IVaultPriceValidator(address(mockValidator))
+        );
+
+        // Deploy UltraAlignmentVaultV2 via clone+initialize pattern
+        MockZAMM mockZamm = new MockZAMM();
+        MockZRouter mockZRouter = new MockZRouter();
+        MockEXECToken alignmentToken = new MockEXECToken(1_000_000e18);
+        vm.deal(address(mockZamm), 10 ether);
+        vm.deal(address(mockZRouter), 10 ether);
+        alignmentToken.transfer(address(mockZRouter), 100_000e18);
+
+        IZAMM.PoolKey memory poolKey = IZAMM.PoolKey({
+            id0: 0, id1: 0,
+            token0: address(0),
+            token1: address(alignmentToken),
+            feeOrHook: 30
+        });
+
+        UltraAlignmentVaultV2 implV2 = new UltraAlignmentVaultV2();
+        ultraVaultV2 = UltraAlignmentVaultV2(payable(LibClone.clone(address(implV2))));
+        ultraVaultV2.initialize(
+            address(mockZamm),
+            address(mockZRouter),
+            address(alignmentToken),
+            poolKey,
+            address(0xC1EA),
+            100,
+            address(0x99)
         );
 
         // Deploy MockVault
@@ -401,6 +446,47 @@ contract VaultInterfaceComplianceTest is Test {
         mockVault.delegateBenefactor(delegate);
 
         assertEq(v.getBenefactorDelegate(benefactor1), delegate, "Delegate should be set");
+    }
+
+    // ========== UltraAlignmentVaultV2 Compliance Tests ==========
+
+    function test_V2_ImplementsInterface() public {
+        IAlignmentVault v = IAlignmentVault(payable(address(ultraVaultV2)));
+        assertEq(v.vaultType(), "ZAMMLP");
+        assertTrue(bytes(v.description()).length > 0);
+    }
+
+    function test_V2_SupportsCorrectCapabilities() public {
+        IAlignmentVault v = IAlignmentVault(payable(address(ultraVaultV2)));
+        assertTrue(v.supportsCapability(keccak256("YIELD_GENERATION")));
+        assertTrue(v.supportsCapability(keccak256("BENEFACTOR_DELEGATION")));
+        assertFalse(v.supportsCapability(keccak256("GOVERNANCE")));
+    }
+
+    function test_V2_PolicyAndCompliance() public {
+        IAlignmentVault v = IAlignmentVault(payable(address(ultraVaultV2)));
+        assertEq(v.currentPolicy().length, 0);
+        assertTrue(v.validateCompliance(address(0xBEEF)));
+    }
+
+    function test_V2_DelegateDefault_ReturnsSelf() public {
+        IAlignmentVault v = IAlignmentVault(payable(address(ultraVaultV2)));
+        assertEq(v.getBenefactorDelegate(benefactor1), benefactor1);
+    }
+
+    function test_V2_ReceiveInstance_TracksContribution() public {
+        IAlignmentVault v = IAlignmentVault(payable(address(ultraVaultV2)));
+        vm.prank(benefactor1);
+        v.receiveInstance{value: 1 ether}(Currency.wrap(address(0)), 1 ether, benefactor1);
+        assertEq(ultraVaultV2.pendingETH(), 1 ether);
+        assertEq(ultraVaultV2.pendingContribution(benefactor1), 1 ether);
+    }
+
+    function test_V2_RejectsNonEthCurrency() public {
+        IAlignmentVault v = IAlignmentVault(payable(address(ultraVaultV2)));
+        vm.expectRevert();
+        vm.prank(benefactor1);
+        v.receiveInstance{value: 0}(Currency.wrap(address(0x1234)), 0, benefactor1);
     }
 
     function test_MockVault_Delegation_RemoveBySettingZero() public {
