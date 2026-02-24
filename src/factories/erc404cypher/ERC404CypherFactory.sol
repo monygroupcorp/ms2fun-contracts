@@ -90,9 +90,8 @@ contract ERC404CypherFactory is OwnableRoles, ReentrancyGuard, IFactory {
         require(_implementation != address(0), "Invalid implementation");
         require(_vaultFactory != address(0), "Invalid vault factory");
         require(_liquidityDeployer != address(0), "Invalid deployer");
-        require(_algebraFactory != address(0), "Invalid algebra factory");
-        require(_positionManager != address(0), "Invalid position manager");
         require(_weth != address(0), "Invalid weth");
+        // _algebraFactory, _positionManager, _swapRouter may be address(0) for placeholder deployments
         require(_protocol != address(0), "Invalid protocol");
         require(_creator != address(0), "Invalid creator");
         require(_globalMessageRegistry != address(0), "Invalid GMR");

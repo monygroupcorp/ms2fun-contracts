@@ -26,10 +26,20 @@ import {CurveParamsComputer} from "../src/factories/erc404/CurveParamsComputer.s
 import {ERC1155Factory} from "../src/factories/erc1155/ERC1155Factory.sol";
 import {ERC721AuctionFactory} from "../src/factories/erc721/ERC721AuctionFactory.sol";
 import {PromotionBadges} from "../src/promotion/PromotionBadges.sol";
+import {ERC404CypherFactory} from "../src/factories/erc404cypher/ERC404CypherFactory.sol";
+import {ERC404CypherBondingInstance} from "../src/factories/erc404cypher/ERC404CypherBondingInstance.sol";
+import {CypherLiquidityDeployerModule} from "../src/factories/erc404cypher/CypherLiquidityDeployerModule.sol";
+import {UltraAlignmentCypherVault} from "../src/vaults/cypher/UltraAlignmentCypherVault.sol";
+import {UltraAlignmentCypherVaultFactory} from "../src/vaults/cypher/UltraAlignmentCypherVaultFactory.sol";
 import {MockSafe} from "../test/mocks/MockSafe.sol";
 import {MockERC20} from "../test/mocks/MockERC20.sol";
 
 contract DeploySepolia is Script {
+    // Algebra V2 (Cypher AMM) addresses on Sepolia — fill before deploying
+    address public constant SEPOLIA_ALGEBRA_FACTORY  = address(0); // TODO: fill with real address
+    address public constant SEPOLIA_POSITION_MANAGER = address(0); // TODO: fill with real address
+    address public constant SEPOLIA_ALGEBRA_ROUTER   = address(0); // TODO: fill with real address
+
     // Sepolia default addresses (overridable via env vars)
     address public constant SEPOLIA_WETH = 0xfFf9976782d46CC05630D1f6eBAb18b2324d6B14;
     address public constant SEPOLIA_V4_POOL_MANAGER = 0xE03A1074c86CFeDd5C142C4F04F1a1536e203543;
@@ -70,6 +80,9 @@ contract DeploySepolia is Script {
     ERC404Factory public erc404Factory;
     ERC1155Factory public erc1155Factory;
     ERC721AuctionFactory public erc721Factory;
+    ERC404CypherFactory public erc404CypherFactory;
+    CypherLiquidityDeployerModule public cypherLiquidityDeployer;
+    UltraAlignmentCypherVaultFactory public cypherVaultFactory;
 
     PromotionBadges public promotionBadges;
 
@@ -254,6 +267,41 @@ contract DeploySepolia is Script {
         );
         erc721Factory.setProtocolTreasury(address(treasury));
 
+        // ============ Phase 5b: Cypher AMM Factory ============
+
+        // 17b. UltraAlignmentCypherVault implementation + factory
+        UltraAlignmentCypherVault cypherVaultImpl = new UltraAlignmentCypherVault();
+        cypherVaultFactory = new UltraAlignmentCypherVaultFactory(address(cypherVaultImpl));
+
+        // 17c. CypherLiquidityDeployerModule
+        cypherLiquidityDeployer = new CypherLiquidityDeployerModule();
+
+        // 17d. ERC404CypherBondingInstance implementation + factory
+        ERC404CypherBondingInstance erc404CypherImpl = new ERC404CypherBondingInstance();
+        erc404CypherFactory = new ERC404CypherFactory(
+            address(erc404CypherImpl),
+            masterRegistry,
+            address(cypherVaultFactory),
+            address(cypherLiquidityDeployer),
+            vm.envOr("ALGEBRA_FACTORY",  SEPOLIA_ALGEBRA_FACTORY),
+            vm.envOr("POSITION_MANAGER", SEPOLIA_POSITION_MANAGER),
+            vm.envOr("ALGEBRA_ROUTER",   SEPOLIA_ALGEBRA_ROUTER),
+            weth,
+            deployer,  // protocol
+            deployer,  // creator
+            500,       // creatorFeeBps (5%)
+            100,       // creatorGraduationFeeBps (1%)
+            address(globalMessageRegistry),
+            address(curveParamsComputer)
+        );
+        erc404CypherFactory.setProtocolTreasury(address(treasury));
+        erc404CypherFactory.setProfile(1, ERC404CypherFactory.GraduationProfile({
+            targetETH: 15 ether,
+            unitPerNFT: 1_000_000,
+            liquidityReserveBps: 1000,
+            active: true
+        }));
+
         // ============ Phase 6: Promotional ============
 
         // 17. PromotionBadges
@@ -288,6 +336,9 @@ contract DeploySepolia is Script {
         MasterRegistryV1(masterRegistry).registerFactory(
             address(erc721Factory), "ERC721", "ERC721-Auction", "ERC721 Auction Factory", "https://sepolia.ms2.fun/factory/erc721", new bytes32[](0)
         );
+        MasterRegistryV1(masterRegistry).registerFactory(
+            address(erc404CypherFactory), "ERC404", "ERC404-Cypher", "ERC404 Cypher Bonding Factory", "https://sepolia.ms2.fun/factory/erc404cypher", new bytes32[](0)
+        );
     }
 
     function _logAddresses() internal view {
@@ -311,6 +362,9 @@ contract DeploySepolia is Script {
         console.log("ERC404Factory:", address(erc404Factory));
         console.log("ERC1155Factory:", address(erc1155Factory));
         console.log("ERC721AuctionFactory:", address(erc721Factory));
+        console.log("ERC404CypherFactory:", address(erc404CypherFactory));
+        console.log("CypherLiquidityDeployer:", address(cypherLiquidityDeployer));
+        console.log("CypherVaultFactory:", address(cypherVaultFactory));
         console.log("PromotionBadges:", address(promotionBadges));
         console.log("");
         console.log("=== POST-DEPLOY CHECKLIST ===");
