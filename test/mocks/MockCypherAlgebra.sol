@@ -172,6 +172,15 @@ contract MockAlgebraPositionManager {
         fees0[tokenId] = _f0;
         fees1[tokenId] = _f1;
     }
+
+    function setPosition(uint256 tokenId, address _token0, address _token1, address _owner) external {
+        _positions[tokenId] = Position({
+            token0: _token0, token1: _token1, deployer: address(0),
+            tickLower: -887220, tickUpper: 887220,
+            liquidity: 1, tokensOwed0: 0, tokensOwed1: 0
+        });
+        owners[tokenId] = _owner;
+    }
 }
 
 /// @notice Mock Algebra swap router
