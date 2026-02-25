@@ -9,6 +9,7 @@ broadcast/
 
 # Prompt artifacts
 docs/plans/*
+reference/*
 
 # Environment variables
 .env
