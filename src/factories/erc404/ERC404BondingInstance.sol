@@ -16,6 +16,8 @@ import { IAlignmentVault } from "../../interfaces/IAlignmentVault.sol";
 import {IMasterRegistry} from "../../master/interfaces/IMasterRegistry.sol";
 import { IGlobalMessageRegistry } from "../../registry/interfaces/IGlobalMessageRegistry.sol";
 import { IInstanceLifecycle, TYPE_ERC404, STATE_BONDING, STATE_PAUSED, STATE_GRADUATED } from "../../interfaces/IInstanceLifecycle.sol";
+import { IGatingModule } from "../../gating/IGatingModule.sol";
+import { IdentityParams } from "../../interfaces/IFactoryTypes.sol";
 
 // Custom errors (replaces string literals in require statements to reduce bytecode)
 error AlreadyInitialized();
@@ -78,16 +80,31 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IInstanceLife
     // │         Types           │
     // └─────────────────────────┘
 
-    enum TierType {
-        VOLUME_CAP,    // Password unlocks higher purchase limits
-        TIME_BASED     // Password allows early access
+    /// @dev Factory-computed from profile + nftCount.
+    struct BondingParams {
+        uint256 maxSupply;
+        uint256 unit;
+        uint256 liquidityReservePercent;
+        BondingCurveMath.Params curve;
+        uint24  poolFee;
+        int24   tickSpacing;
     }
 
-    struct TierConfig {
-        TierType tierType;
-        bytes32[] passwordHashes;
-        uint256[] volumeCaps;      // For VOLUME_CAP mode
-        uint256[] tierUnlockTimes; // For TIME_BASED mode (relative to bondingOpenTime)
+    /// @dev Factory's own config — protocol-controlled.
+    struct ProtocolParams {
+        address globalMessageRegistry;
+        address protocolTreasury;
+        address masterRegistry;
+        address stakingModule;
+        address liquidityDeployer;
+        address curveComputer;
+        address v4PoolManager;
+        address weth;
+        uint256 bondingFeeBps;
+        uint256 graduationFeeBps;
+        uint256 polBps;
+        address factoryCreator;
+        uint256 creatorGraduationFeeBps;
     }
 
     // ┌─────────────────────────┐
@@ -102,8 +119,6 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IInstanceLife
     uint256 public MAX_SUPPLY;
     uint256 public LIQUIDITY_RESERVE;
     BondingCurveMath.Params public curveParams; // Storage (set in initialize, never changed)
-    TierConfig public tierConfig; // Storage (set in initialize, never changed)
-    uint256 public tierCount;
 
     // Pool configuration (from graduation profile)
     uint24 public poolFee;
@@ -138,12 +153,8 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IInstanceLife
     uint256 public reserve;
     address public liquidityPool;     // V4 pool address after deployment
 
-    // Password-protected tier system
-    mapping(bytes32 => uint256) public tierByPasswordHash; // hash => tier index (0 = no tier)
-    mapping(address => uint256) public userTierUnlocked;    // user => highest tier unlocked
-    mapping(address => uint256) public userPurchaseVolume;   // For volume cap mode
-
-    // Reroll system
+    // Gating module (address(0) = open gating)
+    IGatingModule public gatingModule;
 
     // Staking delegation
     ERC404StakingModule public stakingModule;
@@ -187,97 +198,62 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IInstanceLife
      * @dev Called by the factory immediately after cloning. Can only be called once.
      */
     function initialize(
-        string memory name_,
-        string memory symbol_,
-        uint256 _maxSupply,
-        uint256 _liquidityReservePercent,
-        BondingCurveMath.Params memory _curveParams,
-        TierConfig memory _tierConfig,
-        address _v4PoolManager,
-        address _v4Hook,
-        address _weth,
-        address _factory,
-        address _globalMessageRegistry,
-        address _vault,
-        address _owner,
-        string memory _styleUri,
-        address _protocolTreasury,
-        uint256 _bondingFeeBps,
-        uint256 _graduationFeeBps,
-        uint256 _polBps,
-        address _factoryCreator,
-        uint256 _creatorGraduationFeeBps,
-        uint24 _poolFee,
-        int24 _tickSpacing,
-        uint256 _tokenUnit,
-        address _stakingModule,
-        address _liquidityDeployer,
-        address _curveComputer,
-        address _masterRegistry
+        IdentityParams calldata identity,
+        BondingParams calldata bonding,
+        ProtocolParams calldata protocol,
+        address hook,
+        address _gatingModule
     ) external {
         if (_initialized) revert AlreadyInitialized();
         _initialized = true;
 
-        if (_maxSupply == 0) revert InvalidMaxSupply();
-        if (_liquidityReservePercent >= 100) revert InvalidReservePercent();
-        if (_v4PoolManager == address(0)) revert InvalidPoolManager();
-        if (_weth == address(0)) revert InvalidWETH();
-        // Hook can be address(0) initially and set later
-        if (_factory == address(0)) revert InvalidFactory();
-        if (_globalMessageRegistry == address(0)) revert InvalidGlobalMessageRegistry();
-        if (_owner == address(0)) revert InvalidOwner();
-        if (_tierConfig.passwordHashes.length == 0) revert NoTiers();
-        if (_tierConfig.tierType == TierType.VOLUME_CAP
-                ? _tierConfig.volumeCaps.length != _tierConfig.passwordHashes.length
-                : _tierConfig.tierUnlockTimes.length != _tierConfig.passwordHashes.length
-        ) revert TierConfigMismatch();
+        if (identity.nftCount == 0) revert InvalidMaxSupply();
+        if (protocol.v4PoolManager == address(0)) revert InvalidPoolManager();
+        if (protocol.weth == address(0)) revert InvalidWETH();
+        if (protocol.globalMessageRegistry == address(0)) revert InvalidGlobalMessageRegistry();
+        if (identity.owner == address(0)) revert InvalidOwner();
+        if (identity.vault == address(0)) revert InvalidVault();
+        if (protocol.stakingModule == address(0)) revert InvalidStakingModule();
+        if (protocol.liquidityDeployer == address(0)) revert InvalidLiquidityDeployer();
+        if (protocol.curveComputer == address(0)) revert InvalidCurveComputer();
 
-        _initializeOwner(_owner);
+        _initializeOwner(identity.owner);
 
-        _name = name_;
-        _symbol = symbol_;
-        MAX_SUPPLY = _maxSupply;
-        LIQUIDITY_RESERVE = (_maxSupply * _liquidityReservePercent) / 100;
-        curveParams = _curveParams;
-        tierConfig = _tierConfig;
-        tierCount = _tierConfig.passwordHashes.length;
+        _name = identity.name;
+        _symbol = identity.symbol;
+        styleUri = identity.styleUri;
 
-        v4PoolManager = _v4PoolManager;
-        v4Hook = _v4Hook; // Can be address(0)
-        weth = _weth;
-        factory = _factory;
-        globalMessageRegistry = IGlobalMessageRegistry(_globalMessageRegistry);
-        if (_vault == address(0)) revert InvalidVault();
-        vault = IAlignmentVault(payable(_vault));
-        masterRegistry = IMasterRegistry(_masterRegistry);
-        styleUri = _styleUri;
-        protocolTreasury = _protocolTreasury;
-        bondingFeeBps = _bondingFeeBps;
-        graduationFeeBps = _graduationFeeBps;
-        polBps = _polBps;
-        factoryCreator = _factoryCreator;
-        creatorGraduationFeeBps = _creatorGraduationFeeBps;
-        poolFee = _poolFee;
-        tickSpacing = _tickSpacing;
-        UNIT = _tokenUnit;
-        if (_stakingModule == address(0)) revert InvalidStakingModule();
-        stakingModule = ERC404StakingModule(_stakingModule);
-        if (_liquidityDeployer == address(0)) revert InvalidLiquidityDeployer();
-        liquidityDeployer = LiquidityDeployerModule(payable(_liquidityDeployer));
-        if (_curveComputer == address(0)) revert InvalidCurveComputer();
-        curveComputer = CurveParamsComputer(_curveComputer);
+        MAX_SUPPLY = bonding.maxSupply;
+        LIQUIDITY_RESERVE = (bonding.maxSupply * bonding.liquidityReservePercent) / 100;
+        curveParams = bonding.curve;
+        poolFee = bonding.poolFee;
+        tickSpacing = bonding.tickSpacing;
+        UNIT = bonding.unit;
 
-        // Initialize password hash mapping
-        for (uint256 i = 0; i < _tierConfig.passwordHashes.length; i++) {
-            if (_tierConfig.passwordHashes[i] == bytes32(0)) revert InvalidPasswordHash();
-            tierByPasswordHash[_tierConfig.passwordHashes[i]] = i + 1; // Tier 1-indexed
-        }
+        v4PoolManager = protocol.v4PoolManager;
+        v4Hook = hook;
+        weth = protocol.weth;
+        factory = msg.sender;
+        vault = IAlignmentVault(payable(identity.vault));
+        masterRegistry = IMasterRegistry(protocol.masterRegistry);
+        globalMessageRegistry = IGlobalMessageRegistry(protocol.globalMessageRegistry);
+
+        protocolTreasury = protocol.protocolTreasury;
+        bondingFeeBps = protocol.bondingFeeBps;
+        graduationFeeBps = protocol.graduationFeeBps;
+        polBps = protocol.polBps;
+        factoryCreator = protocol.factoryCreator;
+        creatorGraduationFeeBps = protocol.creatorGraduationFeeBps;
+
+        stakingModule = ERC404StakingModule(protocol.stakingModule);
+        liquidityDeployer = LiquidityDeployerModule(payable(protocol.liquidityDeployer));
+        curveComputer = CurveParamsComputer(protocol.curveComputer);
+
+        gatingModule = IGatingModule(_gatingModule);
 
         // Deploy DN404 mirror and initialize
-        // Note: _factory is passed as deployer for linking authorization only.
-        // The actual owner is synced via pullOwner() from this contract's owner().
-        address mirror = address(new DN404Mirror(_factory));
-        _initializeDN404(_maxSupply, address(this), mirror);
+        address mirror = address(new DN404Mirror(msg.sender));
+        _initializeDN404(bonding.maxSupply, address(this), mirror);
     }
 
     // ┌─────────────────────────┐
@@ -386,21 +362,11 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IInstanceLife
         if (v4Hook == address(0)) revert HookNotConfigured();
         if (totalBondingSupply + amount > MAX_SUPPLY - LIQUIDITY_RESERVE) revert ExceedsBonding();
 
-        // Check tier access
-        uint256 tier = passwordHash == bytes32(0) ? 0 : tierByPasswordHash[passwordHash];
-        if (tier == 0 && passwordHash != bytes32(0)) revert InvalidPassword();
-
-        if (tierConfig.tierType == TierType.VOLUME_CAP) {
-            // Verify user hasn't exceeded volume cap for this tier
-            uint256 cap = tier == 0 ? type(uint256).max : tierConfig.volumeCaps[tier - 1];
-            if (userPurchaseVolume[msg.sender] + amount > cap) revert VolumeCapExceeded();
-        } else {
-            // For TIME_BASED: verify tier unlock time has passed
-            if (bondingOpenTime == 0) revert BondingNotConfigured();
-            if (tier > 0) {
-                uint256 tierUnlockTime = bondingOpenTime + tierConfig.tierUnlockTimes[tier - 1];
-                if (block.timestamp < tierUnlockTime) revert TierNotAvailableYet();
-            }
+        // Gating check (address(0) = open gating)
+        if (address(gatingModule) != address(0)) {
+            bytes memory gatingData = abi.encode(passwordHash, bondingOpenTime);
+            require(gatingModule.canMint(msg.sender, amount, gatingData), "Gating check failed");
+            gatingModule.onMint(msg.sender, amount);
         }
 
         uint256 totalCost = curveComputer.calculateCost(curveParams, totalBondingSupply, amount);
@@ -425,11 +391,6 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IInstanceLife
         if (bondingFee > 0 && protocolTreasury != address(0)) {
             SafeTransferLib.safeTransferETH(protocolTreasury, bondingFee);
             emit BondingFeePaid(msg.sender, bondingFee);
-        }
-
-        // Update purchase volume for volume cap mode
-        if (tierConfig.tierType == TierType.VOLUME_CAP) {
-            userPurchaseVolume[msg.sender] += amount;
         }
 
         // Forward message to global registry
@@ -477,19 +438,6 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IInstanceLife
         /// terminal state until migration to Uniswap V4 liquidity.
         uint256 maxBondingSupply = MAX_SUPPLY - LIQUIDITY_RESERVE;
         if (totalBondingSupply >= maxBondingSupply) revert ExceedsBonding();
-
-        // Check tier access (for sellBonding, mainly TIME_BASED tiers)
-        uint256 tier = passwordHash == bytes32(0) ? 0 : tierByPasswordHash[passwordHash];
-        if (tier == 0 && passwordHash != bytes32(0)) revert InvalidPassword();
-
-        if (tierConfig.tierType == TierType.TIME_BASED) {
-            if (bondingOpenTime == 0) revert BondingNotConfigured();
-            if (tier > 0) {
-                uint256 tierUnlockTime = bondingOpenTime + tierConfig.tierUnlockTimes[tier - 1];
-                if (block.timestamp < tierUnlockTime) revert TierNotAvailableYet();
-            }
-        }
-        // For VOLUME_CAP, no special restrictions on selling
 
         uint256 balance = balanceOf(msg.sender);
         if (balance < amount) revert InsufficientBalance();
