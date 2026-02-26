@@ -168,28 +168,7 @@ contract ERC1155Factory is Ownable, ReentrancyGuard, IFactory {
         // Check namespace availability before deploying (saves gas on collision)
         require(!masterRegistry.isNameTaken(name), "Name already taken");
 
-        // Deploy new instance
-        instance = address(new ERC1155Instance(
-            name,
-            metadataURI,
-            creator,
-            address(this),
-            vault,
-            styleUri,
-            globalMessageRegistry,
-            protocolTreasury,
-            address(masterRegistry)
-        ));
-
-        // Register with master registry
-        masterRegistry.registerInstance(
-            instance,
-            address(this),
-            creator,
-            name,
-            metadataURI,
-            vault
-        );
+        instance = _deployAndRegister(name, metadataURI, creator, vault, styleUri);
 
         // Apply tier perks AFTER successful deployment and registration
         if (config.featuredDuration > 0 && address(featuredQueueManager) != address(0) && featuredCost > 0) {
@@ -212,6 +191,34 @@ contract ERC1155Factory is Ownable, ReentrancyGuard, IFactory {
         if (creationTier != CreationTier.STANDARD) {
             emit InstanceCreatedWithTier(instance, creationTier, fee);
         }
+    }
+
+    function _deployAndRegister(
+        string memory name,
+        string memory metadataURI,
+        address creator,
+        address vault,
+        string memory styleUri
+    ) private returns (address instance) {
+        instance = address(new ERC1155Instance(
+            name,
+            metadataURI,
+            creator,
+            address(this),
+            vault,
+            styleUri,
+            globalMessageRegistry,
+            protocolTreasury,
+            address(masterRegistry)
+        ));
+        masterRegistry.registerInstance(
+            instance,
+            address(this),
+            creator,
+            name,
+            metadataURI,
+            vault
+        );
     }
 
     /**

@@ -80,6 +80,14 @@ contract LiquidityDeployerModule is IUnlockCallback {
         IPoolManager poolManager;
     }
 
+    struct PoolSetupResult {
+        PoolKey poolKey;
+        int24 tickLower;
+        int24 tickUpper;
+        bool token0IsThis;
+        uint128 liquidity;
+    }
+
     CallbackContext private _ctx;
 
     event LiquidityDeployed(address indexed pool, uint256 amountToken, uint256 amountETH);
@@ -96,61 +104,70 @@ contract LiquidityDeployerModule is IUnlockCallback {
      */
     function deployLiquidity(DeployParams calldata p) external payable returns (uint128 liquidity) {
         require(msg.value == p.ethReserve, "ETH mismatch");
-
         AmountsResult memory r = _computeAmounts(p);
+        PoolSetupResult memory setup = _setupPoolAndUnlock(p, r);
+        liquidity = setup.liquidity;
+        _postUnlock(p, r, setup);
+    }
 
-        // Determine token ordering (Currency wraps address as uint160)
+    /// @dev Sets up pool, stores callback context, performs unlock, clears context, returns liquidity.
+    function _setupPoolAndUnlock(
+        DeployParams calldata p,
+        AmountsResult memory r
+    ) private returns (PoolSetupResult memory setup) {
         Currency currencyToken = Currency.wrap(p.token);
-        Currency currencyWETH = Currency.wrap(p.weth);
-        bool token0IsThis = currencyToken < currencyWETH;
+        Currency currencyWETH  = Currency.wrap(p.weth);
+        setup.token0IsThis = currencyToken < currencyWETH;
 
-        Currency currency0 = token0IsThis ? currencyToken : currencyWETH;
-        Currency currency1 = token0IsThis ? currencyWETH : currencyToken;
+        Currency currency0 = setup.token0IsThis ? currencyToken : currencyWETH;
+        Currency currency1 = setup.token0IsThis ? currencyWETH  : currencyToken;
 
-        uint160 sqrtPriceX96 = _computeSqrtPrice(r.ethForPool, r.tokensForPool, token0IsThis);
+        uint160 sqrtPriceX96 = _computeSqrtPrice(r.ethForPool, r.tokensForPool, setup.token0IsThis);
 
-        int24 tickLower = TickMath.minUsableTick(p.tickSpacing);
-        int24 tickUpper = TickMath.maxUsableTick(p.tickSpacing);
+        setup.tickLower = TickMath.minUsableTick(p.tickSpacing);
+        setup.tickUpper = TickMath.maxUsableTick(p.tickSpacing);
 
-        PoolKey memory poolKey = PoolKey({
-            currency0: currency0,
-            currency1: currency1,
-            fee: p.poolFee,
+        setup.poolKey = PoolKey({
+            currency0:   currency0,
+            currency1:   currency1,
+            fee:         p.poolFee,
             tickSpacing: p.tickSpacing,
-            hooks: p.v4Hook
+            hooks:       p.v4Hook
         });
 
-        // Wrap ETH for the primary pool position
+        // Wrap ETH and approve pool manager
         IWETH(p.weth).deposit{value: r.ethForPool}();
-        // Approve poolManager to pull WETH (ERC20 path)
         IWETH(p.weth).approve(address(p.v4PoolManager), r.ethForPool);
 
         // Initialize pool
-        p.v4PoolManager.initialize(poolKey, sqrtPriceX96);
+        p.v4PoolManager.initialize(setup.poolKey, sqrtPriceX96);
 
-        uint256 amount0 = token0IsThis ? r.tokensForPool : r.ethForPool;
-        uint256 amount1 = token0IsThis ? r.ethForPool : r.tokensForPool;
+        uint256 amount0 = setup.token0IsThis ? r.tokensForPool : r.ethForPool;
+        uint256 amount1 = setup.token0IsThis ? r.ethForPool   : r.tokensForPool;
 
-        // Store context for unlock callback
         _ctx = CallbackContext({
-            poolKey: poolKey,
-            tickLower: tickLower,
-            tickUpper: tickUpper,
-            amount0: amount0,
-            amount1: amount1,
-            instance: p.instance,
+            poolKey:     setup.poolKey,
+            tickLower:   setup.tickLower,
+            tickUpper:   setup.tickUpper,
+            amount0:     amount0,
+            amount1:     amount1,
+            instance:    p.instance,
             poolManager: p.v4PoolManager
         });
 
         bytes memory result = p.v4PoolManager.unlock(abi.encode(uint8(0)));
-
-        // Clear context
         delete _ctx;
 
-        // Decode returned liquidity
-        liquidity = abi.decode(result, (uint128));
+        setup.liquidity = abi.decode(result, (uint128));
+    }
 
-        // Send graduation fees (we hold ETH from msg.value minus what was wrapped)
+    /// @dev Dispatches graduation fees, deploys POL, emits final event.
+    function _postUnlock(
+        DeployParams calldata p,
+        AmountsResult memory r,
+        PoolSetupResult memory setup
+    ) private {
+        // Send graduation fees (ETH held = msg.value minus what was wrapped for pool)
         if (r.graduationFee > 0) {
             uint256 protocolCut = r.graduationFee - r.creatorGradCut;
             if (protocolCut > 0) {
@@ -166,7 +183,8 @@ contract LiquidityDeployerModule is IUnlockCallback {
         // Deploy protocol-owned liquidity (POL)
         if (r.polETH > 0 && r.polTokens > 0) {
             _deployProtocolLiquidity(
-                p, poolKey, tickLower, tickUpper, r.polTokens, r.polETH, token0IsThis
+                p, setup.poolKey, setup.tickLower, setup.tickUpper,
+                r.polTokens, r.polETH, setup.token0IsThis
             );
         }
 
