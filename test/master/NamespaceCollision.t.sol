@@ -8,10 +8,10 @@ import {ERC404Factory} from "../../src/factories/erc404/ERC404Factory.sol";
 import {ERC404StakingModule} from "../../src/factories/erc404/ERC404StakingModule.sol";
 import {LaunchManager} from "../../src/factories/erc404/LaunchManager.sol";
 import {CurveParamsComputer} from "../../src/factories/erc404/CurveParamsComputer.sol";
+import {PasswordTierGatingModule} from "../../src/gating/PasswordTierGatingModule.sol";
 import {ERC1155Factory} from "../../src/factories/erc1155/ERC1155Factory.sol";
 import {GlobalMessageRegistry} from "../../src/registry/GlobalMessageRegistry.sol";
 import {ERC404BondingInstance} from "../../src/factories/erc404/ERC404BondingInstance.sol";
-import {UltraAlignmentVault} from "../../src/vaults/uni/UltraAlignmentVault.sol";
 import {MockEXECToken} from "../mocks/MockEXECToken.sol";
 import {MockZRouter} from "../mocks/MockZRouter.sol";
 import {MockVaultPriceValidator} from "../mocks/MockVaultPriceValidator.sol";
@@ -20,6 +20,7 @@ import {LibClone} from "solady/utils/LibClone.sol";
 import {Currency} from "v4-core/types/Currency.sol";
 import {PoolKey} from "v4-core/types/PoolKey.sol";
 import {IHooks} from "v4-core/interfaces/IHooks.sol";
+import {IdentityParams} from "../../src/interfaces/IFactoryTypes.sol";
 
 /**
  * @title MockHook
@@ -29,11 +30,18 @@ contract MockHook {
     // Minimal mock hook contract
 }
 
+/// @dev Mock vault that returns a hook address and satisfies factory checks
+contract MockVaultWithHook {
+    address private _hook;
+    constructor(address hookAddr) { _hook = hookAddr; }
+    function hook() external view returns (address) { return _hook; }
+    function supportsCapability(bytes32) external pure returns (bool) { return true; }
+    receive() external payable {}
+}
+
 /**
  * @title NamespaceCollisionTest
  * @notice Tests that project names are unique across all factory types
- * @dev Proves that two projects cannot have the same name, regardless of whether
- *      they were created via ERC404Factory or ERC1155Factory
  */
 contract MockMasterRegistryForStakingN {
     mapping(address => bool) public instances;
@@ -49,8 +57,8 @@ contract NamespaceCollisionTest is Test {
     ERC404Factory public erc404Factory;
     ERC1155Factory public erc1155Factory;
 
-    UltraAlignmentVault public vault;
     MockHook public mockHook;
+    MockVaultWithHook public mockVault;  // vault with hook() for ERC404 factory
     MockMasterRegistryForStakingN public stakingRegistry;
     ERC404StakingModule public stakingModule;
     MockEXECToken public execToken;
@@ -66,7 +74,6 @@ contract NamespaceCollisionTest is Test {
 
     // Test constants
     uint256 constant INSTANCE_FEE = 0.01 ether;
-    ERC404BondingInstance.TierConfig defaultTierConfig;
 
     function setUp() public {
         vm.startPrank(owner);
@@ -86,64 +93,45 @@ contract NamespaceCollisionTest is Test {
         address innerProxy = proxy.getProxyAddress();
         registry = MasterRegistryV1(innerProxy);
 
-        // Deploy vault (clone pattern)
-        {
-            UltraAlignmentVault _impl = new UltraAlignmentVault();
-            vault = UltraAlignmentVault(payable(LibClone.clone(address(_impl))));
-            vault.initialize(
-                mockWETH,
-                mockV4PoolManager,
-                address(execToken),
-                address(0xC1EA),  // vault creator
-                100,              // creator yield cut (1%)
-                address(new MockZRouter()),
-                3000,
-                60,
-                IVaultPriceValidator(address(new MockVaultPriceValidator()))
-            );
-        }
-
-        // Set V4 pool key
-        PoolKey memory mockPoolKey = PoolKey({
-            currency0: Currency.wrap(address(0)),
-            currency1: Currency.wrap(address(execToken)),
-            fee: 3000,
-            tickSpacing: 60,
-            hooks: IHooks(address(0))
-        });
-        vault.setV4PoolKey(mockPoolKey);
-
-        // Deploy mock hook
+        // Deploy mock hook and vault with hook
         mockHook = new MockHook();
+        mockVault = new MockVaultWithHook(address(mockHook));
 
         // Deploy staking module
         stakingRegistry = new MockMasterRegistryForStakingN();
         stakingModule = new ERC404StakingModule(address(stakingRegistry));
 
         // Deploy global message registry
-        GlobalMessageRegistry globalMsgRegistry = new GlobalMessageRegistry(); globalMsgRegistry.initialize(owner, address(registry));
+        GlobalMessageRegistry globalMsgRegistry = new GlobalMessageRegistry();
+        globalMsgRegistry.initialize(owner, address(registry));
 
         // Deploy LaunchManager and CurveParamsComputer
         LaunchManager launchManager = new LaunchManager(owner);
         CurveParamsComputer curveComputer = new CurveParamsComputer(owner);
+        PasswordTierGatingModule tierGatingModule = new PasswordTierGatingModule();
 
         // Deploy ERC404Factory
         ERC404BondingInstance nsImpl = new ERC404BondingInstance();
         erc404Factory = new ERC404Factory(
-            address(nsImpl),
-            address(registry),
-            mockInstanceTemplate,
-            mockV4PoolManager,
-            mockWETH,
-            owner,              // protocol
-            address(0xC1EA),
-            2000,
-            40,
-            address(stakingModule),
-            address(0x600),     // mockLiquidityDeployer
-            address(globalMsgRegistry),
-            address(launchManager),
-            address(curveComputer)
+            ERC404Factory.CoreConfig({
+                implementation: address(nsImpl),
+                masterRegistry: address(registry),
+                instanceTemplate: mockInstanceTemplate,
+                v4PoolManager: mockV4PoolManager,
+                weth: mockWETH,
+                protocol: owner,
+                creator: address(0xC1EA),
+                creatorFeeBps: 2000,
+                creatorGraduationFeeBps: 40
+            }),
+            ERC404Factory.ModuleConfig({
+                stakingModule: address(stakingModule),
+                liquidityDeployer: address(0x600),
+                globalMessageRegistry: address(globalMsgRegistry),
+                launchManager: address(launchManager),
+                curveComputer: address(curveComputer),
+                tierGatingModule: address(tierGatingModule)
+            })
         );
 
         // Deploy ERC1155Factory
@@ -188,22 +176,23 @@ contract NamespaceCollisionTest is Test {
             new bytes32[](0)
         );
 
-        bytes32[] memory passwordHashes = new bytes32[](2);
-        passwordHashes[0] = keccak256("password1");
-        passwordHashes[1] = keccak256("password2");
-
-        uint256[] memory volumeCaps = new uint256[](2);
-        volumeCaps[0] = 1000 * 1e18;
-        volumeCaps[1] = 10000 * 1e18;
-
-        defaultTierConfig = ERC404BondingInstance.TierConfig({
-            tierType: ERC404BondingInstance.TierType.VOLUME_CAP,
-            passwordHashes: passwordHashes,
-            volumeCaps: volumeCaps,
-            tierUnlockTimes: new uint256[](0)
-        });
-
         vm.stopPrank();
+    }
+
+    function _erc404Identity(string memory name_, string memory symbol_, address vault_)
+        internal
+        view
+        returns (IdentityParams memory)
+    {
+        return IdentityParams({
+            name: name_,
+            symbol: symbol_,
+            styleUri: "",
+            owner: msg.sender,
+            vault: vault_,
+            nftCount: 10,
+            profileId: 1
+        });
     }
 
     /**
@@ -222,16 +211,9 @@ contract NamespaceCollisionTest is Test {
         vm.startPrank(creator1);
 
         erc404Factory.createInstance{value: INSTANCE_FEE}(
-            "poggers",
-            "POG",
+            _erc404Identity("poggers", "POG", address(mockVault)),
             "ipfs://metadata",
-            10,
-            1,
-            defaultTierConfig,
-            creator1,
-            address(vault),
-            address(mockHook),
-            ""
+            ERC404Factory.CreationTier.STANDARD
         );
 
         vm.stopPrank();
@@ -251,7 +233,7 @@ contract NamespaceCollisionTest is Test {
             "poggers",
             "ipfs://metadata",
             creator1,
-            address(vault),
+            address(mockVault),
             ""
         );
 
@@ -262,7 +244,6 @@ contract NamespaceCollisionTest is Test {
 
     /**
      * @notice CRITICAL TEST: ERC404 cannot use name already taken by ERC1155
-     * @dev This proves cross-factory namespace protection works
      */
     function test_crossFactory_erc1155ThenErc404_reverts() public {
         vm.deal(creator1, 1 ether);
@@ -274,7 +255,7 @@ contract NamespaceCollisionTest is Test {
             "poggers",
             "ipfs://metadata",
             creator1,
-            address(vault),
+            address(mockVault),
             ""
         );
         vm.stopPrank();
@@ -283,23 +264,15 @@ contract NamespaceCollisionTest is Test {
         vm.startPrank(creator2);
         vm.expectRevert("Name already taken");
         erc404Factory.createInstance{value: INSTANCE_FEE}(
-            "poggers",
-            "POG",
+            _erc404Identity("poggers", "POG", address(mockVault)),
             "ipfs://metadata",
-            10,
-            1,
-            defaultTierConfig,
-            creator2,
-            address(vault),
-            address(mockHook),
-            ""
+            ERC404Factory.CreationTier.STANDARD
         );
         vm.stopPrank();
     }
 
     /**
      * @notice CRITICAL TEST: ERC1155 cannot use name already taken by ERC404
-     * @dev This proves cross-factory namespace protection works in reverse
      */
     function test_crossFactory_erc404ThenErc1155_reverts() public {
         vm.deal(creator1, 1 ether);
@@ -308,16 +281,9 @@ contract NamespaceCollisionTest is Test {
         // Creator1 creates ERC404 instance named "poggers"
         vm.startPrank(creator1);
         erc404Factory.createInstance{value: INSTANCE_FEE}(
-            "poggers",
-            "POG",
+            _erc404Identity("poggers", "POG", address(mockVault)),
             "ipfs://metadata",
-            10,
-            1,
-            defaultTierConfig,
-            creator1,
-            address(vault),
-            address(mockHook),
-            ""
+            ERC404Factory.CreationTier.STANDARD
         );
         vm.stopPrank();
 
@@ -328,7 +294,7 @@ contract NamespaceCollisionTest is Test {
             "poggers",
             "ipfs://metadata",
             creator2,
-            address(vault),
+            address(mockVault),
             ""
         );
         vm.stopPrank();
@@ -336,7 +302,6 @@ contract NamespaceCollisionTest is Test {
 
     /**
      * @notice Test case-insensitive collision detection
-     * @dev "POGGERS" and "poggers" should be considered the same name
      */
     function test_crossFactory_caseInsensitive_reverts() public {
         vm.deal(creator1, 1 ether);
@@ -348,7 +313,7 @@ contract NamespaceCollisionTest is Test {
             "POGGERS",
             "ipfs://metadata",
             creator1,
-            address(vault),
+            address(mockVault),
             ""
         );
         vm.stopPrank();
@@ -357,16 +322,9 @@ contract NamespaceCollisionTest is Test {
         vm.startPrank(creator2);
         vm.expectRevert("Name already taken");
         erc404Factory.createInstance{value: INSTANCE_FEE}(
-            "poggers",
-            "POG",
+            _erc404Identity("poggers", "POG", address(mockVault)),
             "ipfs://metadata",
-            10,
-            1,
-            defaultTierConfig,
-            creator2,
-            address(vault),
-            address(mockHook),
-            ""
+            ERC404Factory.CreationTier.STANDARD
         );
         vm.stopPrank();
     }
@@ -380,32 +338,18 @@ contract NamespaceCollisionTest is Test {
 
         vm.startPrank(creator1);
         erc404Factory.createInstance{value: INSTANCE_FEE}(
-            "poggers",
-            "POG",
+            _erc404Identity("poggers", "POG", address(mockVault)),
             "ipfs://metadata",
-            10,
-            1,
-            defaultTierConfig,
-            creator1,
-            address(vault),
-            address(mockHook),
-            ""
+            ERC404Factory.CreationTier.STANDARD
         );
         vm.stopPrank();
 
         vm.startPrank(creator2);
         vm.expectRevert("Name already taken");
         erc404Factory.createInstance{value: INSTANCE_FEE}(
-            "poggers",
-            "POG2",
+            _erc404Identity("poggers", "POG2", address(mockVault)),
             "ipfs://metadata2",
-            10,
-            1,
-            defaultTierConfig,
-            creator2,
-            address(vault),
-            address(mockHook),
-            ""
+            ERC404Factory.CreationTier.STANDARD
         );
         vm.stopPrank();
     }
@@ -422,23 +366,16 @@ contract NamespaceCollisionTest is Test {
             "poggers",
             "ipfs://metadata",
             creator1,
-            address(vault),
+            address(mockVault),
             ""
         );
         vm.stopPrank();
 
         vm.startPrank(creator2);
         address instance2 = erc404Factory.createInstance{value: INSTANCE_FEE}(
-            "different_name",
-            "DIFF",
+            _erc404Identity("different_name", "DIFF", address(mockVault)),
             "ipfs://metadata",
-            10,
-            1,
-            defaultTierConfig,
-            creator2,
-            address(vault),
-            address(mockHook),
-            ""
+            ERC404Factory.CreationTier.STANDARD
         );
         vm.stopPrank();
 

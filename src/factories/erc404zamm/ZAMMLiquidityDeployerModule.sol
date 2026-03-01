@@ -53,6 +53,15 @@ contract ZAMMLiquidityDeployerModule {
         uint256 feeOrHook;       // ZAMM pool feeOrHook (e.g. 30 = 0.3%)
     }
 
+    struct PoolResult {
+        uint256 ethForPool;
+        uint256 graduationFee;
+        uint256 creatorCut;
+        bool ethIsToken0;
+        ZAMMPoolKey poolKey;
+        uint256 liquidity;
+    }
+
     event LiquidityDeployed(address indexed zamm, address token0, address token1, uint256 liquidity);
     event GraduationFeePaid(address indexed treasury, uint256 amount);
     event CreatorGraduationFeePaid(address indexed creator, uint256 amount);
@@ -70,74 +79,63 @@ contract ZAMMLiquidityDeployerModule {
         returns (ZAMMPoolKey memory poolKey, uint256 liquidity)
     {
         require(msg.value == p.ethReserve, "ETH mismatch");
+        PoolResult memory r = _deployPool(p);
+        poolKey = r.poolKey;
+        liquidity = r.liquidity;
+        _payFees(p, r);
+    }
 
+    function _deployPool(DeployParams calldata p) private returns (PoolResult memory r) {
         // Compute fee splits
-        uint256 graduationFee;
-        uint256 creatorCut;
         if (p.graduationFeeBps > 0 && p.protocolTreasury != address(0)) {
-            graduationFee = (p.ethReserve * p.graduationFeeBps) / 10000;
+            r.graduationFee = (p.ethReserve * p.graduationFeeBps) / 10000;
             if (p.creatorGraduationFeeBps > 0 && p.factoryCreator != address(0)) {
-                creatorCut = (p.ethReserve * p.creatorGraduationFeeBps) / 10000;
-                if (creatorCut > graduationFee) creatorCut = graduationFee;
+                r.creatorCut = (p.ethReserve * p.creatorGraduationFeeBps) / 10000;
+                if (r.creatorCut > r.graduationFee) r.creatorCut = r.graduationFee;
             }
         }
+        r.ethForPool = p.ethReserve - r.graduationFee;
+        require(r.ethForPool > 0, "No ETH for pool");
+        require(p.tokenReserve > 0, "No tokens for pool");
 
-        uint256 ethForPool = p.ethReserve - graduationFee;
-        uint256 tokensForPool = p.tokenReserve;
-
-        require(ethForPool > 0, "No ETH for pool");
-        require(tokensForPool > 0, "No tokens for pool");
-
-        // Determine token ordering: address(0) = ETH sorts lowest
-        bool ethIsToken0 = address(0) < p.token;
-
-        poolKey = ZAMMPoolKey({
+        r.ethIsToken0 = address(0) < p.token;
+        r.poolKey = ZAMMPoolKey({
             id0: 0,
             id1: 0,
-            token0: ethIsToken0 ? address(0) : p.token,
-            token1: ethIsToken0 ? p.token : address(0),
+            token0: r.ethIsToken0 ? address(0) : p.token,
+            token1: r.ethIsToken0 ? p.token : address(0),
             feeOrHook: p.feeOrHook
         });
 
-        // Approve ZAMM to pull our tokens
-        IERC20(p.token).approve(p.zamm, tokensForPool);
-
-        // Deploy liquidity: ETH sent as msg.value
-        uint256 amount0Desired = ethIsToken0 ? ethForPool : tokensForPool;
-        uint256 amount1Desired = ethIsToken0 ? tokensForPool : ethForPool;
+        IERC20(p.token).approve(p.zamm, p.tokenReserve);
 
         IZAMM.PoolKey memory zammKey = IZAMM.PoolKey({
-            id0: poolKey.id0,
-            id1: poolKey.id1,
-            token0: poolKey.token0,
-            token1: poolKey.token1,
-            feeOrHook: poolKey.feeOrHook
+            id0: 0, id1: 0,
+            token0: r.poolKey.token0,
+            token1: r.poolKey.token1,
+            feeOrHook: p.feeOrHook
         });
 
-        (,, liquidity) = IZAMM(p.zamm).addLiquidity{value: ethForPool}(
-            zammKey,
-            amount0Desired,
-            amount1Desired,
-            0, // no slippage protection at graduation (deterministic)
-            0,
-            p.instance, // LP goes to the bonding instance
-            type(uint256).max
+        uint256 a0 = r.ethIsToken0 ? r.ethForPool : p.tokenReserve;
+        uint256 a1 = r.ethIsToken0 ? p.tokenReserve : r.ethForPool;
+        (,, r.liquidity) = IZAMM(p.zamm).addLiquidity{value: r.ethForPool}(
+            zammKey, a0, a1, 0, 0, p.instance, type(uint256).max
         );
+    }
 
-        // Pay graduation fees (from remaining ETH after pool deployment)
-        if (graduationFee > 0) {
-            uint256 protocolCut = graduationFee - creatorCut;
+    function _payFees(DeployParams calldata p, PoolResult memory r) private {
+        if (r.graduationFee > 0) {
+            uint256 protocolCut = r.graduationFee - r.creatorCut;
             if (protocolCut > 0) {
                 SafeTransferLib.safeTransferETH(p.protocolTreasury, protocolCut);
                 emit GraduationFeePaid(p.protocolTreasury, protocolCut);
             }
-            if (creatorCut > 0) {
-                SafeTransferLib.safeTransferETH(p.factoryCreator, creatorCut);
-                emit CreatorGraduationFeePaid(p.factoryCreator, creatorCut);
+            if (r.creatorCut > 0) {
+                SafeTransferLib.safeTransferETH(p.factoryCreator, r.creatorCut);
+                emit CreatorGraduationFeePaid(p.factoryCreator, r.creatorCut);
             }
         }
-
-        emit LiquidityDeployed(p.zamm, poolKey.token0, poolKey.token1, liquidity);
+        emit LiquidityDeployed(p.zamm, r.poolKey.token0, r.poolKey.token1, r.liquidity);
     }
 
     receive() external payable {}

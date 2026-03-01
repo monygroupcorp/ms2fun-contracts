@@ -39,9 +39,6 @@ interface IGrandCentral {
     event ProposalSubmitted(
         uint256 indexed proposalId,
         bytes32 indexed proposalDataHash,
-        address[] targets,
-        uint256[] values,
-        bytes[] calldatas,
         uint32 expiration,
         bool selfSponsor,
         string details

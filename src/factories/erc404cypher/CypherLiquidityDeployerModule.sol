@@ -38,6 +38,15 @@ contract CypherLiquidityDeployerModule {
     event GraduationFeePaid(address indexed treasury, uint256 amount);
     event CreatorGraduationFeePaid(address indexed creator, uint256 amount);
 
+    struct PoolSetupResult {
+        uint256 tokenId;
+        address pool;
+        uint256 ethToLP;
+        uint256 protocolFee;
+        uint256 creatorFee;
+        bool tokenIsZero;
+    }
+
     /// @notice Deploy Algebra pool liquidity and register with vault.
     /// @dev Caller must have pre-transferred tokenReserve to this contract.
     ///      ETH must equal p.ethReserve exactly.
@@ -48,43 +57,43 @@ contract CypherLiquidityDeployerModule {
         require(msg.value == p.ethReserve, "ETH mismatch");
         require(p.token != address(0) && p.vault != address(0), "Invalid params");
 
+        PoolSetupResult memory r = _setupPool(p);
+        tokenId = r.tokenId;
+        pool = r.pool;
+        _postMint(p, r);
+    }
+
+    function _setupPool(DeployParams calldata p) private returns (PoolSetupResult memory r) {
         // ── Compute fee splits ──
-        uint256 protocolFee;
-        uint256 creatorFee;
         if (p.graduationFeeBps > 0 && p.protocolTreasury != address(0)) {
-            protocolFee = p.ethReserve * p.graduationFeeBps / 10000;
+            r.protocolFee = p.ethReserve * p.graduationFeeBps / 10000;
             if (p.creatorGraduationFeeBps > 0 && p.factoryCreator != address(0)) {
-                creatorFee = p.ethReserve * p.creatorGraduationFeeBps / 10000;
+                r.creatorFee = p.ethReserve * p.creatorGraduationFeeBps / 10000;
             }
         }
-        uint256 ethToLP = p.ethReserve - protocolFee - creatorFee;
+        r.ethToLP = p.ethReserve - r.protocolFee - r.creatorFee;
 
         // ── Wrap ETH to WETH for LP ──
         address weth = p.weth;
-        (bool depositOk,) = weth.call{value: ethToLP}(abi.encodeWithSignature("deposit()"));
+        (bool depositOk,) = weth.call{value: r.ethToLP}(abi.encodeWithSignature("deposit()"));
         require(depositOk, "WETH deposit failed");
 
         // ── Create Algebra pool ──
-        pool = IAlgebraFactory(p.algebraFactory).createPool(p.token, weth, "");
+        r.pool = IAlgebraFactory(p.algebraFactory).createPool(p.token, weth, "");
+        IAlgebraPool(r.pool).initialize(p.sqrtPriceX96);
 
-        // ── Initialize pool price ──
-        IAlgebraPool(pool).initialize(p.sqrtPriceX96);
+        // ── Determine token ordering and amounts ──
+        r.tokenIsZero = p.token < weth;
+        (address token0, address token1) = r.tokenIsZero ? (p.token, weth) : (weth, p.token);
+        uint256 amount0 = r.tokenIsZero ? p.tokenReserve : r.ethToLP;
+        uint256 amount1 = r.tokenIsZero ? r.ethToLP : p.tokenReserve;
 
-        // ── Determine token ordering ──
-        bool tokenIsZero = p.token < weth;
-        (address token0, address token1) = tokenIsZero
-            ? (p.token, weth)
-            : (weth, p.token);
-        uint256 amount0 = tokenIsZero ? p.tokenReserve : ethToLP;
-        uint256 amount1 = tokenIsZero ? ethToLP : p.tokenReserve;
-
-        // ── Approve positionManager ──
+        // ── Approve and mint LP ──
         IERC20(p.token).approve(p.positionManager, p.tokenReserve);
-        IERC20(weth).approve(p.positionManager, ethToLP);
+        IERC20(weth).approve(p.positionManager, r.ethToLP);
 
-        // ── Mint LP position to vault ──
         uint128 liquidity;
-        (tokenId, liquidity,,) = IAlgebraNFTPositionManager(p.positionManager).mint(
+        (r.tokenId, liquidity,,) = IAlgebraNFTPositionManager(p.positionManager).mint(
             IAlgebraNFTPositionManager.MintParams({
                 token0: token0,
                 token1: token1,
@@ -100,23 +109,21 @@ contract CypherLiquidityDeployerModule {
             })
         );
         require(liquidity > 0, "Zero liquidity");
+    }
 
-        // ── Register position with vault ──
+    function _postMint(DeployParams calldata p, PoolSetupResult memory r) private {
         UltraAlignmentCypherVault(payable(p.vault)).registerPosition(
-            tokenId, pool, tokenIsZero, p.instance, ethToLP
+            r.tokenId, r.pool, r.tokenIsZero, p.instance, r.ethToLP
         );
-
-        // ── Pay graduation fees ──
-        if (protocolFee > 0) {
-            SafeTransferLib.safeTransferETH(p.protocolTreasury, protocolFee);
-            emit GraduationFeePaid(p.protocolTreasury, protocolFee);
+        if (r.protocolFee > 0) {
+            SafeTransferLib.safeTransferETH(p.protocolTreasury, r.protocolFee);
+            emit GraduationFeePaid(p.protocolTreasury, r.protocolFee);
         }
-        if (creatorFee > 0) {
-            SafeTransferLib.safeTransferETH(p.factoryCreator, creatorFee);
-            emit CreatorGraduationFeePaid(p.factoryCreator, creatorFee);
+        if (r.creatorFee > 0) {
+            SafeTransferLib.safeTransferETH(p.factoryCreator, r.creatorFee);
+            emit CreatorGraduationFeePaid(p.factoryCreator, r.creatorFee);
         }
-
-        emit LiquidityDeployed(p.vault, pool, tokenId, ethToLP, p.tokenReserve);
+        emit LiquidityDeployed(p.vault, r.pool, r.tokenId, r.ethToLP, p.tokenReserve);
     }
 
     receive() external payable {}

@@ -262,6 +262,12 @@ contract UltraAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback, IAlig
      * @param minOutTarget Minimum alignment tokens to receive (slippage protection)
      * @return lpPositionValue Total value of LP position added (ethSwapped + tokenReceived)
      */
+    // ── Internal result structs for convertAndAddLiquidity helpers ──────────────
+    struct SwapLPResult {
+        uint256 targetTokenReceived;
+        uint256 liquidityUnitsAdded;
+    }
+
     function convertAndAddLiquidity(
         uint256 minOutTarget
     ) external nonReentrant returns (uint256 lpPositionValue) {
@@ -269,58 +275,53 @@ contract UltraAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback, IAlig
         require(alignmentToken != address(0), "No alignment target set");
         require(Currency.unwrap(v4PoolKey.currency0) != address(0) || Currency.unwrap(v4PoolKey.currency1) != address(0), "V4 pool key not set");
 
-        // ENFORCE FULL-RANGE LIQUIDITY: Always use min/max usable ticks
         int24 tickLower = TickMath.minUsableTick(v4PoolKey.tickSpacing);
         int24 tickUpper = TickMath.maxUsableTick(v4PoolKey.tickSpacing);
-
         uint256 ethToAdd = totalPendingETH;
 
-        // Validate price (manipulation detection)
         priceValidator.validatePrice(alignmentToken, totalPendingETH);
-
-        // Calculate proportion of ETH to swap
         uint256 proportionToSwap = priceValidator.calculateSwapProportion(
-            alignmentToken,
-            lastTickLower,
-            lastTickUpper,
-            poolManager,
+            alignmentToken, lastTickLower, lastTickUpper, poolManager,
             bytes32(PoolId.unwrap(v4PoolKey.toId()))
         );
         uint256 ethToSwap = (ethToAdd * proportionToSwap) / 1e18;
 
-        // Swap ETH for alignment token via zRouter
-        (, uint256 targetTokenReceived) = IzRouterV4(zRouter).swapV4{value: ethToSwap}(
-            address(this),
-            false,
-            zRouterFee,
-            zRouterTickSpacing,
-            address(0),
-            alignmentToken,
-            ethToSwap,
-            minOutTarget,
-            type(uint256).max
+        SwapLPResult memory r = _doSwapAndLP(ethToAdd, ethToSwap, minOutTarget, tickLower, tickUpper);
+
+        address[] memory activeBenefactors = _getActiveBenefactors();
+        _distributeSharesAndCleanup(ethToAdd, r.liquidityUnitsAdded, activeBenefactors);
+
+        lpPositionValue = ethToSwap + r.targetTokenReceived;
+        uint256 callerReward = _payCallerReward(activeBenefactors.length);
+        emit LiquidityAdded(ethToSwap, r.targetTokenReceived, lpPositionValue, r.liquidityUnitsAdded, callerReward);
+    }
+
+    function _doSwapAndLP(
+        uint256 ethToAdd,
+        uint256 ethToSwap,
+        uint256 minOutTarget,
+        int24 tickLower,
+        int24 tickUpper
+    ) private returns (SwapLPResult memory r) {
+        (, r.targetTokenReceived) = IzRouterV4(zRouter).swapV4{value: ethToSwap}(
+            address(this), false, zRouterFee, zRouterTickSpacing,
+            address(0), alignmentToken, ethToSwap, minOutTarget, type(uint256).max
         );
 
-        // Add to LP position
-        uint128 newLiquidityUnits;
-        {
-            uint256 ethRemaining = ethToAdd - ethToSwap;
+        uint256 ethRemaining = ethToAdd - ethToSwap;
+        (uint256 amount0, uint256 amount1) = Currency.unwrap(v4PoolKey.currency0) == alignmentToken
+            ? (r.targetTokenReceived, ethRemaining)
+            : (ethRemaining, r.targetTokenReceived);
 
-            (uint256 amount0, uint256 amount1) = Currency.unwrap(v4PoolKey.currency0) == alignmentToken
-                ? (targetTokenReceived, ethRemaining)
-                : (ethRemaining, targetTokenReceived);
+        r.liquidityUnitsAdded = uint256(_addToLpPosition(amount0, amount1, tickLower, tickUpper));
+        totalLPUnits += r.liquidityUnitsAdded;
+    }
 
-            newLiquidityUnits = _addToLpPosition(amount0, amount1, tickLower, tickUpper);
-        }
-
-        uint256 liquidityUnitsAdded = uint256(newLiquidityUnits);
-        totalLPUnits += liquidityUnitsAdded;
-
-        uint256 totalSharesIssued = liquidityUnitsAdded;
-
-        // Issue shares to all pending benefactors
-        address[] memory activeBenefactors = _getActiveBenefactors();
-
+    function _distributeSharesAndCleanup(
+        uint256 ethToAdd,
+        uint256 totalSharesIssued,
+        address[] memory activeBenefactors
+    ) private {
         uint256 totalSharesActuallyIssued = 0;
         address largestContributor = activeBenefactors[0];
         uint256 largestContribution = 0;
@@ -340,7 +341,6 @@ contract UltraAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback, IAlig
             benefactorShares[benefactor] += sharesToIssue;
             totalShares += sharesToIssue;
             totalSharesActuallyIssued += sharesToIssue;
-
             pendingETH[benefactor] = 0;
         }
 
@@ -356,16 +356,14 @@ contract UltraAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback, IAlig
         }
 
         totalEthLocked += ethToAdd;
-
         totalPendingETH = 0;
         _clearConversionParticipants();
+    }
 
-        lpPositionValue = ethToSwap + targetTokenReceived;
-
-        // Pay caller reward (M-04 Security Fix: Gas-based + graceful degradation)
-        uint256 estimatedGas = CONVERSION_BASE_GAS + (activeBenefactors.length * GAS_PER_BENEFACTOR);
+    function _payCallerReward(uint256 activeBenefactorsLen) private returns (uint256 callerReward) {
+        uint256 estimatedGas = CONVERSION_BASE_GAS + (activeBenefactorsLen * GAS_PER_BENEFACTOR);
         uint256 gasCost = estimatedGas * tx.gasprice;
-        uint256 callerReward = gasCost + standardConversionReward;
+        callerReward = gasCost + standardConversionReward;
 
         if (address(this).balance >= callerReward && callerReward > 0) {
             (bool success, ) = payable(msg.sender).call{value: callerReward}("");
@@ -377,16 +375,6 @@ contract UltraAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback, IAlig
         } else if (callerReward > 0) {
             emit InsufficientRewardBalance(msg.sender, callerReward, address(this).balance);
         }
-
-        emit LiquidityAdded(
-            ethToSwap,
-            targetTokenReceived,
-            lpPositionValue,
-            totalSharesIssued,
-            callerReward
-        );
-
-        return lpPositionValue;
     }
 
     // ========== Fee Claims ==========

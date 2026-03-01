@@ -13,17 +13,11 @@ contract DeployERC404Factory is Script {
     function run() external {
         uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
         address masterRegistry = vm.envAddress("MASTER_REGISTRY");
-        address instanceTemplate = vm.envAddress("INSTANCE_TEMPLATE");
-        address v4PoolManager = vm.envAddress("V4_POOL_MANAGER");
-        address weth = vm.envAddress("WETH");
+        address protocol = vm.envAddress("PROTOCOL");
         address creator = vm.envAddress("CREATOR");
-        uint256 creatorFeeBps = vm.envUint("CREATOR_FEE_BPS");
-        uint256 creatorGraduationFeeBps = vm.envUint("CREATOR_GRADUATION_FEE_BPS");
-        address globalMessageRegistry = vm.envAddress("GLOBAL_MESSAGE_REGISTRY");
 
         vm.startBroadcast(deployerPrivateKey);
 
-        address protocol = vm.envAddress("PROTOCOL");
         ERC404BondingInstance impl = new ERC404BondingInstance();
         console.log("ERC404BondingInstance implementation deployed at:", address(impl));
         ERC404StakingModule stakingModule = new ERC404StakingModule(masterRegistry);
@@ -34,11 +28,11 @@ contract DeployERC404Factory is Script {
         console.log("LaunchManager deployed at:", address(launchManager));
         CurveParamsComputer curveComputer = new CurveParamsComputer(protocol);
         console.log("CurveParamsComputer deployed at:", address(curveComputer));
-        ERC404Factory factory = new ERC404Factory(
-            address(impl), masterRegistry, instanceTemplate, v4PoolManager, weth,
-            protocol, creator, creatorFeeBps, creatorGraduationFeeBps,
+
+        ERC404Factory factory = _deployFactory(
+            address(impl), masterRegistry, protocol, creator,
             address(stakingModule), address(liquidityDeployer),
-            globalMessageRegistry, address(launchManager), address(curveComputer)
+            address(launchManager), address(curveComputer)
         );
         console.log("ERC404Factory deployed at:", address(factory));
 
@@ -54,5 +48,38 @@ contract DeployERC404Factory is Script {
         console.log("Default graduation profile set (profileId=1)");
 
         vm.stopBroadcast();
+    }
+
+    function _deployFactory(
+        address impl,
+        address masterRegistry,
+        address protocol,
+        address creator,
+        address stakingModule,
+        address liquidityDeployer,
+        address launchManager,
+        address curveComputer
+    ) internal returns (ERC404Factory) {
+        return new ERC404Factory(
+            ERC404Factory.CoreConfig({
+                implementation: impl,
+                masterRegistry: masterRegistry,
+                instanceTemplate: vm.envAddress("INSTANCE_TEMPLATE"),
+                v4PoolManager: vm.envAddress("V4_POOL_MANAGER"),
+                weth: vm.envAddress("WETH"),
+                protocol: protocol,
+                creator: creator,
+                creatorFeeBps: vm.envUint("CREATOR_FEE_BPS"),
+                creatorGraduationFeeBps: vm.envUint("CREATOR_GRADUATION_FEE_BPS")
+            }),
+            ERC404Factory.ModuleConfig({
+                stakingModule: stakingModule,
+                liquidityDeployer: liquidityDeployer,
+                globalMessageRegistry: vm.envAddress("GLOBAL_MESSAGE_REGISTRY"),
+                launchManager: launchManager,
+                curveComputer: curveComputer,
+                tierGatingModule: address(0)
+            })
+        );
     }
 }

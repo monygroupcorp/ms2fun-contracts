@@ -214,93 +214,8 @@ contract DeploySepolia is Script {
             alignmentTargetId
         );
 
-        // ============ Phase 5: Factories ============
-
-        // 14. ERC404StakingModule + LiquidityDeployerModule + LaunchManager + CurveParamsComputer + ERC404Factory
-        ERC404BondingInstance erc404Impl = new ERC404BondingInstance();
-        ERC404StakingModule erc404StakingModule = new ERC404StakingModule(masterRegistry);
-        LiquidityDeployerModule erc404LiquidityDeployer = new LiquidityDeployerModule();
-        launchManager = new LaunchManager(deployer);
-        curveParamsComputer = new CurveParamsComputer(deployer);
-        erc404Factory = new ERC404Factory(
-            address(erc404Impl),
-            masterRegistry,
-            address(0),     // instanceTemplate (not used for direct deploy)
-            poolManager,
-            weth,
-            deployer,       // protocol
-            deployer,       // creator
-            500,            // creatorFeeBps (5%)
-            100,            // creatorGraduationFeeBps (1%)
-            address(erc404StakingModule),
-            address(erc404LiquidityDeployer),
-            address(globalMessageRegistry),
-            address(launchManager),
-            address(curveParamsComputer)
-        );
-        erc404Factory.setProtocolTreasury(address(treasury));
-        erc404Factory.setProfile(1, ERC404Factory.GraduationProfile({
-            targetETH: 15 ether,
-            unitPerNFT: 1_000_000,
-            poolFee: 3000,
-            tickSpacing: 60,
-            liquidityReserveBps: 1000,
-            active: true
-        }));
-
-        // 15. ERC1155Factory
-        erc1155Factory = new ERC1155Factory(
-            masterRegistry,
-            address(0),     // instanceTemplate
-            deployer,       // creator
-            500,            // creatorFeeBps (5%)
-            address(globalMessageRegistry)
-        );
-        erc1155Factory.setProtocolTreasury(address(treasury));
-
-        // 16. ERC721AuctionFactory
-        erc721Factory = new ERC721AuctionFactory(
-            masterRegistry,
-            deployer,       // creator
-            500,            // creatorFeeBps (5%)
-            address(globalMessageRegistry)
-        );
-        erc721Factory.setProtocolTreasury(address(treasury));
-
-        // ============ Phase 5b: Cypher AMM Factory ============
-
-        // 17b. UltraAlignmentCypherVault implementation + factory
-        UltraAlignmentCypherVault cypherVaultImpl = new UltraAlignmentCypherVault();
-        cypherVaultFactory = new UltraAlignmentCypherVaultFactory(address(cypherVaultImpl));
-
-        // 17c. CypherLiquidityDeployerModule
-        cypherLiquidityDeployer = new CypherLiquidityDeployerModule();
-
-        // 17d. ERC404CypherBondingInstance implementation + factory
-        ERC404CypherBondingInstance erc404CypherImpl = new ERC404CypherBondingInstance();
-        erc404CypherFactory = new ERC404CypherFactory(
-            address(erc404CypherImpl),
-            masterRegistry,
-            address(cypherVaultFactory),
-            address(cypherLiquidityDeployer),
-            vm.envOr("ALGEBRA_FACTORY",  SEPOLIA_ALGEBRA_FACTORY),
-            vm.envOr("POSITION_MANAGER", SEPOLIA_POSITION_MANAGER),
-            vm.envOr("ALGEBRA_ROUTER",   SEPOLIA_ALGEBRA_ROUTER),
-            weth,
-            deployer,  // protocol
-            deployer,  // creator
-            500,       // creatorFeeBps (5%)
-            100,       // creatorGraduationFeeBps (1%)
-            address(globalMessageRegistry),
-            address(curveParamsComputer)
-        );
-        erc404CypherFactory.setProtocolTreasury(address(treasury));
-        erc404CypherFactory.setProfile(1, ERC404CypherFactory.GraduationProfile({
-            targetETH: 15 ether,
-            unitPerNFT: 1_000_000,
-            liquidityReserveBps: 1000,
-            active: true
-        }));
+        // ============ Phase 5+5b: Factories ============
+        _deployFactories(deployer, weth, poolManager);
 
         // ============ Phase 6: Promotional ============
 
@@ -339,6 +254,96 @@ contract DeploySepolia is Script {
         MasterRegistryV1(masterRegistry).registerFactory(
             address(erc404CypherFactory), "ERC404", "ERC404-Cypher", "ERC404 Cypher Bonding Factory", "https://sepolia.ms2.fun/factory/erc404cypher", new bytes32[](0)
         );
+    }
+
+    function _deployFactories(address deployer, address weth, address poolManager) private {
+        // Phase 5: ERC404Factory
+        ERC404BondingInstance erc404Impl = new ERC404BondingInstance();
+        ERC404StakingModule erc404StakingModule = new ERC404StakingModule(masterRegistry);
+        LiquidityDeployerModule erc404LiquidityDeployer = new LiquidityDeployerModule();
+        launchManager = new LaunchManager(deployer);
+        curveParamsComputer = new CurveParamsComputer(deployer);
+        erc404Factory = new ERC404Factory(
+            ERC404Factory.CoreConfig({
+                implementation: address(erc404Impl),
+                masterRegistry: masterRegistry,
+                instanceTemplate: address(0),
+                v4PoolManager: poolManager,
+                weth: weth,
+                protocol: deployer,
+                creator: deployer,
+                creatorFeeBps: 500,
+                creatorGraduationFeeBps: 100
+            }),
+            ERC404Factory.ModuleConfig({
+                stakingModule: address(erc404StakingModule),
+                liquidityDeployer: address(erc404LiquidityDeployer),
+                globalMessageRegistry: address(globalMessageRegistry),
+                launchManager: address(launchManager),
+                curveComputer: address(curveParamsComputer),
+                tierGatingModule: address(0)
+            })
+        );
+        erc404Factory.setProtocolTreasury(address(treasury));
+        erc404Factory.setProfile(1, ERC404Factory.GraduationProfile({
+            targetETH: 15 ether,
+            unitPerNFT: 1_000_000,
+            poolFee: 3000,
+            tickSpacing: 60,
+            liquidityReserveBps: 1000,
+            active: true
+        }));
+
+        // Phase 5: ERC1155Factory
+        erc1155Factory = new ERC1155Factory(
+            masterRegistry, address(0), deployer, 500, address(globalMessageRegistry)
+        );
+        erc1155Factory.setProtocolTreasury(address(treasury));
+
+        // Phase 5: ERC721AuctionFactory
+        erc721Factory = new ERC721AuctionFactory(
+            masterRegistry, deployer, 500, address(globalMessageRegistry)
+        );
+        erc721Factory.setProtocolTreasury(address(treasury));
+
+        // Phase 5b: Cypher Factory
+        _deployCypherFactory(deployer, weth);
+    }
+
+    function _deployCypherFactory(address deployer, address weth) private {
+        UltraAlignmentCypherVault cypherVaultImpl = new UltraAlignmentCypherVault();
+        cypherVaultFactory = new UltraAlignmentCypherVaultFactory(address(cypherVaultImpl));
+        cypherLiquidityDeployer = new CypherLiquidityDeployerModule();
+
+        ERC404CypherBondingInstance erc404CypherImpl = new ERC404CypherBondingInstance();
+        erc404CypherFactory = new ERC404CypherFactory(
+            ERC404CypherFactory.CoreConfig({
+                implementation: address(erc404CypherImpl),
+                masterRegistry: masterRegistry,
+                vaultFactory: address(cypherVaultFactory),
+                liquidityDeployer: address(cypherLiquidityDeployer),
+                algebraFactory: vm.envOr("ALGEBRA_FACTORY",  SEPOLIA_ALGEBRA_FACTORY),
+                positionManager: vm.envOr("POSITION_MANAGER", SEPOLIA_POSITION_MANAGER),
+                swapRouter: vm.envOr("ALGEBRA_ROUTER",   SEPOLIA_ALGEBRA_ROUTER),
+                weth: weth,
+                protocol: deployer
+            }),
+            ERC404CypherFactory.ModuleConfig({
+                creator: deployer,
+                creatorFeeBps: 500,
+                creatorGraduationFeeBps: 100,
+                globalMessageRegistry: address(globalMessageRegistry),
+                curveComputer: address(curveParamsComputer),
+                tierGatingModule: address(0)
+            })
+        );
+        erc404CypherFactory.setProtocolTreasury(address(treasury));
+        erc404CypherFactory.setProfile(1, ERC404CypherFactory.GraduationProfile({
+            targetETH: 15 ether,
+            unitPerNFT: 1_000_000,
+            liquidityReserveBps: 1000,
+            active: true
+        }));
     }
 
     function _logAddresses() internal view {

@@ -7,7 +7,6 @@ struct IdentityParams {
     string  name;
     string  symbol;
     string  styleUri;
-    string  baseUri;
     address owner;
     address vault;
     uint256 nftCount;

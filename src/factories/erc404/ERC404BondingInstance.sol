@@ -107,6 +107,8 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IInstanceLife
         uint256 creatorGraduationFeeBps;
     }
 
+
+
     // ┌─────────────────────────┐
     // │      State Variables    │
     // └─────────────────────────┘
@@ -194,34 +196,27 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IInstanceLife
     // └─────────────────────────┘
 
     /**
-     * @notice Initialize a clone instance with all constructor params.
-     * @dev Called by the factory immediately after cloning. Can only be called once.
+     * @notice Initialize a clone instance. Called by factory immediately after cloning.
+     * @dev Strings (name, symbol, styleUri) are set separately via initializeMetadata().
      */
     function initialize(
-        IdentityParams calldata identity,
+        address owner,
+        address vault_,
         BondingParams calldata bonding,
-        ProtocolParams calldata protocol,
         address hook,
         address _gatingModule
     ) external {
         if (_initialized) revert AlreadyInitialized();
         _initialized = true;
 
-        if (identity.nftCount == 0) revert InvalidMaxSupply();
-        if (protocol.v4PoolManager == address(0)) revert InvalidPoolManager();
-        if (protocol.weth == address(0)) revert InvalidWETH();
-        if (protocol.globalMessageRegistry == address(0)) revert InvalidGlobalMessageRegistry();
-        if (identity.owner == address(0)) revert InvalidOwner();
-        if (identity.vault == address(0)) revert InvalidVault();
-        if (protocol.stakingModule == address(0)) revert InvalidStakingModule();
-        if (protocol.liquidityDeployer == address(0)) revert InvalidLiquidityDeployer();
-        if (protocol.curveComputer == address(0)) revert InvalidCurveComputer();
+        if (bonding.maxSupply == 0) revert InvalidMaxSupply();
+        if (owner == address(0)) revert InvalidOwner();
+        if (vault_ == address(0)) revert InvalidVault();
 
-        _initializeOwner(identity.owner);
+        _initializeOwner(owner);
 
-        _name = identity.name;
-        _symbol = identity.symbol;
-        styleUri = identity.styleUri;
+        factory = msg.sender;
+        vault = IAlignmentVault(payable(vault_));
 
         MAX_SUPPLY = bonding.maxSupply;
         LIQUIDITY_RESERVE = (bonding.maxSupply * bonding.liquidityReservePercent) / 100;
@@ -230,14 +225,33 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IInstanceLife
         tickSpacing = bonding.tickSpacing;
         UNIT = bonding.unit;
 
-        v4PoolManager = protocol.v4PoolManager;
         v4Hook = hook;
-        weth = protocol.weth;
-        factory = msg.sender;
-        vault = IAlignmentVault(payable(identity.vault));
+        gatingModule = IGatingModule(_gatingModule);
+
+        // Deploy DN404 mirror and initialize
+        address mirror = address(new DN404Mirror(msg.sender));
+        _initializeDN404(bonding.maxSupply, address(this), mirror);
+    }
+
+    /**
+     * @notice Set protocol params. Called by factory immediately after initialize().
+     * @dev Split from initialize() to avoid Yul headStart stack-too-deep on external call encoding.
+     */
+    function initializeProtocol(ProtocolParams calldata protocol) external {
+        require(msg.sender == factory, "Only factory");
+        require(_initialized, "Not initialized");
+
+        if (protocol.v4PoolManager == address(0)) revert InvalidPoolManager();
+        if (protocol.weth == address(0)) revert InvalidWETH();
+        if (protocol.globalMessageRegistry == address(0)) revert InvalidGlobalMessageRegistry();
+        if (protocol.stakingModule == address(0)) revert InvalidStakingModule();
+        if (protocol.liquidityDeployer == address(0)) revert InvalidLiquidityDeployer();
+        if (protocol.curveComputer == address(0)) revert InvalidCurveComputer();
+
         masterRegistry = IMasterRegistry(protocol.masterRegistry);
         globalMessageRegistry = IGlobalMessageRegistry(protocol.globalMessageRegistry);
-
+        v4PoolManager = protocol.v4PoolManager;
+        weth = protocol.weth;
         protocolTreasury = protocol.protocolTreasury;
         bondingFeeBps = protocol.bondingFeeBps;
         graduationFeeBps = protocol.graduationFeeBps;
@@ -248,12 +262,22 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IInstanceLife
         stakingModule = ERC404StakingModule(protocol.stakingModule);
         liquidityDeployer = LiquidityDeployerModule(payable(protocol.liquidityDeployer));
         curveComputer = CurveParamsComputer(protocol.curveComputer);
+    }
 
-        gatingModule = IGatingModule(_gatingModule);
-
-        // Deploy DN404 mirror and initialize
-        address mirror = address(new DN404Mirror(msg.sender));
-        _initializeDN404(bonding.maxSupply, address(this), mirror);
+    /**
+     * @notice Set token name, symbol, and styleUri. Called by factory once after initialize().
+     * @dev Only callable by factory, only before owner has set bondingOpenTime (i.e. during deploy).
+     */
+    function initializeMetadata(
+        string calldata name_,
+        string calldata symbol_,
+        string calldata styleUri_
+    ) external {
+        require(msg.sender == factory, "Only factory");
+        require(bytes(_name).length == 0, "Already set");
+        _name = name_;
+        _symbol = symbol_;
+        styleUri = styleUri_;
     }
 
     // ┌─────────────────────────┐

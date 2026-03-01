@@ -12,6 +12,8 @@ import {ERC404ZAMMBondingInstance} from "./ERC404ZAMMBondingInstance.sol";
 import {ZAMMLiquidityDeployerModule} from "./ZAMMLiquidityDeployerModule.sol";
 import {CurveParamsComputer} from "../erc404/CurveParamsComputer.sol";
 import {BondingCurveMath} from "../erc404/libraries/BondingCurveMath.sol";
+import {IdentityParams} from "../../interfaces/IFactoryTypes.sol";
+import {PasswordTierGatingModule} from "../../gating/PasswordTierGatingModule.sol";
 
 /**
  * @title ERC404ZAMMFactory
@@ -21,6 +23,26 @@ import {BondingCurveMath} from "../erc404/libraries/BondingCurveMath.sol";
 contract ERC404ZAMMFactory is OwnableRoles, ReentrancyGuard, IFactory {
     uint256 public constant PROTOCOL_ROLE = _ROLE_0;
     uint256 public constant CREATOR_ROLE  = _ROLE_1;
+
+    /// @dev Packs constructor params to stay within 16-local Yul stack limit.
+    struct CoreConfig {
+        address implementation;
+        address masterRegistry;
+        address zamm;
+        address zRouter;
+        uint256 feeOrHook;
+        uint256 taxBps;
+        address protocol;
+    }
+    struct ModuleConfig {
+        address creator;
+        uint256 creatorFeeBps;
+        uint256 creatorGraduationFeeBps;
+        address globalMessageRegistry;
+        address curveComputer;
+        address liquidityDeployer;
+        address tierGatingModule;
+    }
 
     // ── Immutables ────────────────────────────────────────────────────────────
     address public immutable globalMessageRegistry;
@@ -32,9 +54,9 @@ contract ERC404ZAMMFactory is OwnableRoles, ReentrancyGuard, IFactory {
     IMasterRegistry public masterRegistry;
     address public implementation;
     address public zamm;
-    address public zRouter;       // for future routing if needed
-    uint256 public feeOrHook;     // ZAMM pool feeOrHook for all instances
-    uint256 public taxBps;        // post-graduation transfer tax (e.g. 100 = 1%)
+    address public zRouter;
+    uint256 public feeOrHook;
+    uint256 public taxBps;
     address public protocolTreasury;
     uint256 public instanceCreationFee = 0.01 ether;
 
@@ -43,6 +65,7 @@ contract ERC404ZAMMFactory is OwnableRoles, ReentrancyGuard, IFactory {
 
     ZAMMLiquidityDeployerModule public immutable liquidityDeployer;
     CurveParamsComputer public immutable curveComputer;
+    PasswordTierGatingModule public immutable tierGatingModule;
 
     // Accumulated fees
     uint256 public accumulatedCreatorFees;
@@ -67,47 +90,34 @@ contract ERC404ZAMMFactory is OwnableRoles, ReentrancyGuard, IFactory {
     event InstanceCreationFeeUpdated(uint256 newFee);
     event TaxBpsUpdated(uint256 newBps);
 
-    constructor(
-        address _implementation,
-        address _masterRegistry,
-        address _zamm,
-        address _zRouter,
-        uint256 _feeOrHook,
-        uint256 _taxBps,
-        address _protocol,
-        address _creator,
-        uint256 _creatorFeeBps,
-        uint256 _creatorGraduationFeeBps,
-        address _liquidityDeployer,
-        address _globalMessageRegistry,
-        address _curveComputer
-    ) {
-        require(_implementation != address(0), "Invalid implementation");
-        require(_zamm != address(0), "Invalid zamm");
-        require(_protocol != address(0), "Invalid protocol");
-        require(_creator != address(0), "Invalid creator");
-        require(_liquidityDeployer != address(0), "Invalid deployer");
-        require(_globalMessageRegistry != address(0), "Invalid GMR");
-        require(_curveComputer != address(0), "Invalid curveComputer");
-        require(_creatorFeeBps <= 10000, "Invalid creator fee");
-        require(_creatorGraduationFeeBps <= 10000, "Invalid creator grad fee");
+    constructor(CoreConfig memory core, ModuleConfig memory modules) {
+        require(core.implementation != address(0), "Invalid implementation");
+        require(core.zamm != address(0), "Invalid zamm");
+        require(core.protocol != address(0), "Invalid protocol");
+        require(modules.creator != address(0), "Invalid creator");
+        require(modules.liquidityDeployer != address(0), "Invalid deployer");
+        require(modules.globalMessageRegistry != address(0), "Invalid GMR");
+        require(modules.curveComputer != address(0), "Invalid curveComputer");
+        require(modules.creatorFeeBps <= 10000, "Invalid creator fee");
+        require(modules.creatorGraduationFeeBps <= 10000, "Invalid creator grad fee");
 
-        _initializeOwner(_protocol);
-        _grantRoles(_protocol, PROTOCOL_ROLE);
-        _grantRoles(_creator, CREATOR_ROLE);
+        _initializeOwner(core.protocol);
+        _grantRoles(core.protocol, PROTOCOL_ROLE);
+        _grantRoles(modules.creator, CREATOR_ROLE);
 
-        implementation = _implementation;
-        masterRegistry = IMasterRegistry(_masterRegistry);
-        zamm = _zamm;
-        zRouter = _zRouter;
-        feeOrHook = _feeOrHook;
-        taxBps = _taxBps;
-        creator = _creator;
-        creatorFeeBps = _creatorFeeBps;
-        creatorGraduationFeeBps = _creatorGraduationFeeBps;
-        liquidityDeployer = ZAMMLiquidityDeployerModule(payable(_liquidityDeployer));
-        globalMessageRegistry = _globalMessageRegistry;
-        curveComputer = CurveParamsComputer(_curveComputer);
+        implementation = core.implementation;
+        masterRegistry = IMasterRegistry(core.masterRegistry);
+        zamm = core.zamm;
+        zRouter = core.zRouter;
+        feeOrHook = core.feeOrHook;
+        taxBps = core.taxBps;
+        creator = modules.creator;
+        creatorFeeBps = modules.creatorFeeBps;
+        creatorGraduationFeeBps = modules.creatorGraduationFeeBps;
+        liquidityDeployer = ZAMMLiquidityDeployerModule(payable(modules.liquidityDeployer));
+        globalMessageRegistry = modules.globalMessageRegistry;
+        curveComputer = CurveParamsComputer(modules.curveComputer);
+        tierGatingModule = PasswordTierGatingModule(modules.tierGatingModule);
 
         features.push(FeatureUtils.BONDING_CURVE);
         features.push(FeatureUtils.LIQUIDITY_POOL);
@@ -115,79 +125,113 @@ contract ERC404ZAMMFactory is OwnableRoles, ReentrancyGuard, IFactory {
         features.push(FeatureUtils.PORTFOLIO);
     }
 
+    /**
+     * @notice Create a new ERC404 ZAMM bonding instance with open gating (no password tiers).
+     */
     function createInstance(
-        string memory name,
-        string memory symbol,
-        string memory metadataURI,
-        uint256 nftCount,
-        uint256 profileId,
-        ERC404ZAMMBondingInstance.TierConfig memory tierConfig,
-        address instanceCreator,
-        address vault,
-        string memory styleUri
+        IdentityParams calldata identity,
+        string calldata metadataURI,
+        address vault
     ) external payable nonReentrant returns (address instance) {
+        PasswordTierGatingModule.TierConfig memory emptyConfig;
+        return _createInstanceInternal(identity, metadataURI, vault, emptyConfig);
+    }
+
+    /**
+     * @notice Create a new ERC404 ZAMM bonding instance with password-tier gating.
+     */
+    function createInstanceWithTiers(
+        IdentityParams calldata identity,
+        string calldata metadataURI,
+        address vault,
+        PasswordTierGatingModule.TierConfig calldata tiers
+    ) external payable nonReentrant returns (address instance) {
+        return _createInstanceInternal(identity, metadataURI, vault, tiers);
+    }
+
+    function _createInstanceInternal(
+        IdentityParams calldata identity,
+        string calldata metadataURI,
+        address vault,
+        PasswordTierGatingModule.TierConfig memory tiers
+    ) internal returns (address instance) {
         require(msg.value >= instanceCreationFee, "Insufficient fee");
-        require(nftCount > 0, "Invalid NFT count");
-        require(bytes(name).length > 0, "Invalid name");
-        require(instanceCreator != address(0), "Invalid creator");
+        require(identity.nftCount > 0, "Invalid NFT count");
+        require(bytes(identity.name).length > 0, "Invalid name");
+        require(identity.owner != address(0), "Invalid creator");
         require(vault != address(0), "Vault required");
         require(vault.code.length > 0, "Vault must be contract");
-        require(!masterRegistry.isNameTaken(name), "Name taken");
+        require(!masterRegistry.isNameTaken(identity.name), "Name taken");
 
-        // Fee split
         {
             uint256 creatorCut = (instanceCreationFee * creatorFeeBps) / 10000;
             accumulatedCreatorFees += creatorCut;
             accumulatedProtocolFees += instanceCreationFee - creatorCut;
         }
 
-        GraduationProfile memory profile = profiles[profileId];
-        require(profile.active, "Profile not active");
-
-        uint256 unit = profile.unitPerNFT * 1e18;
-        uint256 maxSupply = nftCount * unit;
-        uint256 liquidityReservePercent = profile.liquidityReserveBps / 100;
-
-        BondingCurveMath.Params memory curveParams = curveComputer.computeCurveParams(
-            nftCount,
-            profile.targetETH,
-            profile.unitPerNFT,
-            profile.liquidityReserveBps
-        );
+        ERC404ZAMMBondingInstance.BondingParams memory bonding = _computeBondingParams(identity.nftCount, identity.profileId);
 
         instance = LibClone.clone(implementation);
 
-        // Factory calls initialize — factory address must equal msg.sender per DN404Mirror link requirement
-        ERC404ZAMMBondingInstance(payable(instance)).initialize(
-            name,
-            symbol,
-            maxSupply,
-            liquidityReservePercent,
-            curveParams,
-            tierConfig,
-            address(this),
-            globalMessageRegistry,
-            vault,
-            instanceCreator,
-            styleUri,
-            protocolTreasury,
-            bondingFeeBps,
-            graduationFeeBps,
-            creatorGraduationFeeBps,
-            creator,
-            unit,
-            address(liquidityDeployer),
-            address(curveComputer),
-            address(masterRegistry)
+        address gatingModuleAddr;
+        if (tiers.passwordHashes.length > 0) {
+            tierGatingModule.configureFor(instance, tiers);
+            gatingModuleAddr = address(tierGatingModule);
+        }
+
+        ERC404ZAMMBondingInstance(payable(instance)).initialize(identity.owner, vault, bonding, gatingModuleAddr);
+        ERC404ZAMMBondingInstance(payable(instance)).initializeProtocol(_buildProtocolParams());
+        _setMetadata(instance, identity);
+        _finalizeInstance(instance, identity, metadataURI, vault);
+    }
+
+    function _computeBondingParams(uint256 nftCount, uint8 profileId) private view
+        returns (ERC404ZAMMBondingInstance.BondingParams memory bonding)
+    {
+        GraduationProfile memory profile = profiles[profileId];
+        require(profile.active, "Profile not active");
+        uint256 unit = profile.unitPerNFT * 1e18;
+        bonding = ERC404ZAMMBondingInstance.BondingParams({
+            maxSupply: nftCount * unit,
+            unit: unit,
+            liquidityReservePercent: profile.liquidityReserveBps / 100,
+            curve: curveComputer.computeCurveParams(
+                nftCount, profile.targetETH, profile.unitPerNFT, profile.liquidityReserveBps
+            )
+        });
+    }
+
+    function _buildProtocolParams() private view returns (ERC404ZAMMBondingInstance.ProtocolParams memory) {
+        return ERC404ZAMMBondingInstance.ProtocolParams({
+            globalMessageRegistry: globalMessageRegistry,
+            protocolTreasury: protocolTreasury,
+            masterRegistry: address(masterRegistry),
+            liquidityDeployer: address(liquidityDeployer),
+            curveComputer: address(curveComputer),
+            bondingFeeBps: bondingFeeBps,
+            graduationFeeBps: graduationFeeBps,
+            creatorGraduationFeeBps: creatorGraduationFeeBps,
+            factoryCreator: creator
+        });
+    }
+
+    function _setMetadata(address instance, IdentityParams calldata identity) private {
+        ERC404ZAMMBondingInstance(payable(instance)).initializeMetadata(
+            identity.name, identity.symbol, identity.styleUri
         );
+    }
 
-        masterRegistry.registerInstance(instance, address(this), instanceCreator, name, metadataURI, vault);
-
+    function _finalizeInstance(
+        address instance,
+        IdentityParams calldata identity,
+        string calldata metadataURI,
+        address vault
+    ) private {
+        masterRegistry.registerInstance(instance, address(this), identity.owner, identity.name, metadataURI, vault);
         if (msg.value > instanceCreationFee) {
             SafeTransferLib.safeTransferETH(msg.sender, msg.value - instanceCreationFee);
         }
-
-        emit InstanceCreated(instance, instanceCreator, name, symbol, vault);
+        emit InstanceCreated(instance, identity.owner, identity.name, identity.symbol, vault);
     }
 
     // ── Admin ─────────────────────────────────────────────────────────────────

@@ -22,15 +22,17 @@ import {IFactory} from "../../src/interfaces/IFactory.sol";
 import {Currency} from "v4-core/types/Currency.sol";
 import {PoolKey} from "v4-core/types/PoolKey.sol";
 import {IHooks} from "v4-core/interfaces/IHooks.sol";
+import {IdentityParams} from "../../src/interfaces/IFactoryTypes.sol";
 
 contract MockHookMinimal {
     // Minimal mock for hook address requirement
 }
 
 contract MockVaultMinimal {
-    function supportsCapability(bytes32) external pure returns (bool) {
-        return true;
-    }
+    address private _hook;
+    constructor(address hookAddr) { _hook = hookAddr; }
+    function hook() external view returns (address) { return _hook; }
+    function supportsCapability(bytes32) external pure returns (bool) { return true; }
 }
 
 /**
@@ -122,20 +124,25 @@ contract CreatorFeesSplitTest is Test {
         // Deploy ERC404Factory with creator fee and graduation fee
         ERC404BondingInstance erc404Impl = new ERC404BondingInstance();
         erc404Factory = new ERC404Factory(
-            address(erc404Impl),
-            address(mockRegistry),
-            mockInstanceTemplate,
-            mockV4PoolManager,
-            mockWETH,
-            owner,              // protocol
-            factoryCreator,
-            CREATOR_FEE_BPS,
-            CREATOR_GRAD_FEE_BPS,
-            address(stakingModule),
-            address(0x600),     // mockLiquidityDeployer
-            address(globalMsgRegistry),
-            address(launchManager),
-            address(curveComputer)
+            ERC404Factory.CoreConfig({
+                implementation: address(erc404Impl),
+                masterRegistry: address(mockRegistry),
+                instanceTemplate: mockInstanceTemplate,
+                v4PoolManager: mockV4PoolManager,
+                weth: mockWETH,
+                protocol: owner,
+                creator: factoryCreator,
+                creatorFeeBps: CREATOR_FEE_BPS,
+                creatorGraduationFeeBps: CREATOR_GRAD_FEE_BPS
+            }),
+            ERC404Factory.ModuleConfig({
+                stakingModule: address(stakingModule),
+                liquidityDeployer: address(0x600),
+                globalMessageRegistry: address(globalMsgRegistry),
+                launchManager: address(launchManager),
+                curveComputer: address(curveComputer),
+                tierGatingModule: address(0)
+            })
         );
         erc404Factory.setProtocolTreasury(treasury);
     }
@@ -237,35 +244,24 @@ contract CreatorFeesSplitTest is Test {
 
     function test_ERC404_CreationFeeSplit() public {
         MockHookMinimal hook = new MockHookMinimal();
-        MockVaultMinimal mockVault = new MockVaultMinimal();
+        MockVaultMinimal mockVault = new MockVaultMinimal(address(hook));
 
         _setupERC404Profile();
-
-        bytes32[] memory passwordHashes = new bytes32[](1);
-        passwordHashes[0] = keccak256("password");
-        uint256[] memory volumeCaps = new uint256[](1);
-        volumeCaps[0] = 1000000 ether;
-
-        ERC404BondingInstance.TierConfig memory tierConfig = ERC404BondingInstance.TierConfig({
-            tierType: ERC404BondingInstance.TierType.VOLUME_CAP,
-            passwordHashes: passwordHashes,
-            volumeCaps: volumeCaps,
-            tierUnlockTimes: new uint256[](0)
-        });
 
         vm.deal(instanceCreator, 1 ether);
         vm.prank(instanceCreator);
         erc404Factory.createInstance{value: CREATION_FEE}(
-            "ERC404-Fee-Test",
-            "FEE",
+            IdentityParams({
+                owner: instanceCreator,
+                nftCount: 10,
+                profileId: 1,
+                vault: address(mockVault),
+                name: "ERC404-Fee-Test",
+                symbol: "FEE",
+                styleUri: ""
+            }),
             "ipfs://test",
-            10,
-            1,
-            tierConfig,
-            instanceCreator,
-            address(mockVault),
-            address(hook),
-            ""
+            ERC404Factory.CreationTier.STANDARD
         );
 
         // 20% creator = 0.002 ETH, 80% protocol = 0.008 ETH
@@ -275,35 +271,24 @@ contract CreatorFeesSplitTest is Test {
 
     function test_ERC404_CreatorWithdrawal() public {
         MockHookMinimal hook = new MockHookMinimal();
-        MockVaultMinimal mockVault = new MockVaultMinimal();
+        MockVaultMinimal mockVault = new MockVaultMinimal(address(hook));
 
         _setupERC404Profile();
-
-        bytes32[] memory passwordHashes = new bytes32[](1);
-        passwordHashes[0] = keccak256("password2");
-        uint256[] memory volumeCaps = new uint256[](1);
-        volumeCaps[0] = 1000000 ether;
-
-        ERC404BondingInstance.TierConfig memory tierConfig = ERC404BondingInstance.TierConfig({
-            tierType: ERC404BondingInstance.TierType.VOLUME_CAP,
-            passwordHashes: passwordHashes,
-            volumeCaps: volumeCaps,
-            tierUnlockTimes: new uint256[](0)
-        });
 
         vm.deal(instanceCreator, 1 ether);
         vm.prank(instanceCreator);
         erc404Factory.createInstance{value: CREATION_FEE}(
-            "ERC404-Creator-Withdraw",
-            "CRW",
+            IdentityParams({
+                owner: instanceCreator,
+                nftCount: 10,
+                profileId: 1,
+                vault: address(mockVault),
+                name: "ERC404-Creator-Withdraw",
+                symbol: "CRW",
+                styleUri: ""
+            }),
             "ipfs://test",
-            10,
-            1,
-            tierConfig,
-            instanceCreator,
-            address(mockVault),
-            address(hook),
-            ""
+            ERC404Factory.CreationTier.STANDARD
         );
 
         uint256 creatorBalanceBefore = factoryCreator.balance;

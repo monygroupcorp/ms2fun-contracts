@@ -36,19 +36,6 @@ contract ERC404ZAMMBondingInstanceTest is Test {
         ERC404ZAMMBondingInstance impl = new ERC404ZAMMBondingInstance();
         instance = ERC404ZAMMBondingInstance(payable(LibClone.clone(address(impl))));
 
-        // Minimal tier config: one tier with a simple hash
-        bytes32[] memory hashes = new bytes32[](1);
-        hashes[0] = keccak256("open");
-        uint256[] memory caps = new uint256[](1);
-        caps[0] = type(uint256).max;
-
-        ERC404ZAMMBondingInstance.TierConfig memory tierConfig = ERC404ZAMMBondingInstance.TierConfig({
-            tierType: ERC404ZAMMBondingInstance.TierType.VOLUME_CAP,
-            passwordHashes: hashes,
-            volumeCaps: caps,
-            tierUnlockTimes: new uint256[](0)
-        });
-
         BondingCurveMath.Params memory curve = BondingCurveMath.Params({
             initialPrice: 1e9,
             quarticCoeff: 0,
@@ -58,29 +45,33 @@ contract ERC404ZAMMBondingInstanceTest is Test {
         });
 
         // factory must match msg.sender of initialize for DN404Mirror linking
-        vm.prank(factory);
+        vm.startPrank(factory);
         instance.initialize(
-            "TestToken",
-            "TEST",
-            10_000 ether,       // maxSupply
-            20,                  // 20% liquidity reserve
-            curve,
-            tierConfig,
-            factory,
-            globalMsgRegistry,
-            vault,
             owner,
-            "",                  // styleUri
-            treasury,
-            100,                 // bondingFeeBps (1%)
-            200,                 // graduationFeeBps (2%)
-            50,                  // creatorGraduationFeeBps (0.5%)
-            factoryCreator,
-            1e18,                // tokenUnit
-            address(realDeployer),
-            address(realCurveComputer),
-            address(masterRegistry)
+            vault,
+            ERC404ZAMMBondingInstance.BondingParams({
+                maxSupply: 10_000 ether,
+                unit: 1e18,
+                liquidityReservePercent: 20,
+                curve: curve
+            }),
+            address(0) // no gating module
         );
+
+        instance.initializeProtocol(ERC404ZAMMBondingInstance.ProtocolParams({
+            globalMessageRegistry: globalMsgRegistry,
+            protocolTreasury: treasury,
+            masterRegistry: address(masterRegistry),
+            liquidityDeployer: address(realDeployer),
+            curveComputer: address(realCurveComputer),
+            bondingFeeBps: 100,
+            graduationFeeBps: 200,
+            creatorGraduationFeeBps: 50,
+            factoryCreator: factoryCreator
+        }));
+
+        instance.initializeMetadata("TestToken", "TEST", "");
+        vm.stopPrank();
     }
 
     function test_initialize_setsState() public view {

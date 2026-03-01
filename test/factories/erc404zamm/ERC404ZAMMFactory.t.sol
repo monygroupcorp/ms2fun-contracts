@@ -6,11 +6,12 @@ import {ERC404ZAMMFactory} from "../../../src/factories/erc404zamm/ERC404ZAMMFac
 import {ERC404ZAMMBondingInstance} from "../../../src/factories/erc404zamm/ERC404ZAMMBondingInstance.sol";
 import {ZAMMLiquidityDeployerModule} from "../../../src/factories/erc404zamm/ZAMMLiquidityDeployerModule.sol";
 import {CurveParamsComputer} from "../../../src/factories/erc404/CurveParamsComputer.sol";
+import {PasswordTierGatingModule} from "../../../src/gating/PasswordTierGatingModule.sol";
 import {MockZAMM} from "../../mocks/MockZAMM.sol";
-import {BondingCurveMath} from "../../../src/factories/erc404/libraries/BondingCurveMath.sol";
+import {IdentityParams} from "../../../src/interfaces/IFactoryTypes.sol";
 
 // Minimal mock MasterRegistry
-contract MockMasterRegistry {
+contract MockMasterRegistryZ {
     mapping(bytes32 => bool) public takenHashes;
 
     function isNameTaken(string memory name) external view returns (bool) {
@@ -32,38 +33,46 @@ contract MockMasterRegistry {
 contract ERC404ZAMMFactoryTest is Test {
     ERC404ZAMMFactory factory;
     MockZAMM zamm;
-    MockMasterRegistry masterRegistry;
+    MockMasterRegistryZ masterRegistry;
     ZAMMLiquidityDeployerModule deployer;
     ERC404ZAMMBondingInstance implementation;
     CurveParamsComputer curveComputer;
+    PasswordTierGatingModule tierGatingModule;
 
     address protocol = makeAddr("protocol");
     address creator = makeAddr("creator");
     address treasury = makeAddr("treasury");
     address globalMsgRegistry = makeAddr("globalMsgRegistry");
     address vault = makeAddr("vault");
+    address instanceOwner = makeAddr("instanceOwner");
 
     function setUp() public {
         zamm = new MockZAMM();
-        masterRegistry = new MockMasterRegistry();
+        masterRegistry = new MockMasterRegistryZ();
         deployer = new ZAMMLiquidityDeployerModule();
         implementation = new ERC404ZAMMBondingInstance();
         curveComputer = new CurveParamsComputer(protocol);
+        tierGatingModule = new PasswordTierGatingModule();
 
         factory = new ERC404ZAMMFactory(
-            address(implementation),
-            address(masterRegistry),
-            address(zamm),
-            address(0), // zRouter (unused in basic tests)
-            30,         // feeOrHook
-            100,        // taxBps (1%)
-            protocol,
-            creator,
-            0,          // creatorFeeBps
-            50,         // creatorGraduationFeeBps
-            address(deployer),
-            globalMsgRegistry,
-            address(curveComputer)
+            ERC404ZAMMFactory.CoreConfig({
+                implementation: address(implementation),
+                masterRegistry: address(masterRegistry),
+                zamm: address(zamm),
+                zRouter: address(0), // zRouter (unused in basic tests)
+                feeOrHook: 30,
+                taxBps: 100,
+                protocol: protocol
+            }),
+            ERC404ZAMMFactory.ModuleConfig({
+                creator: creator,
+                creatorFeeBps: 0,
+                creatorGraduationFeeBps: 50,
+                globalMessageRegistry: globalMsgRegistry,
+                curveComputer: address(curveComputer),
+                liquidityDeployer: address(deployer),
+                tierGatingModule: address(tierGatingModule)
+            })
         );
 
         vm.prank(protocol);
@@ -82,24 +91,24 @@ contract ERC404ZAMMFactoryTest is Test {
         vm.etch(vault, hex"00");
     }
 
-    function _defaultTierConfig() internal pure returns (ERC404ZAMMBondingInstance.TierConfig memory) {
-        bytes32[] memory hashes = new bytes32[](1);
-        hashes[0] = keccak256("open");
-        uint256[] memory caps = new uint256[](1);
-        caps[0] = type(uint256).max;
-
-        return ERC404ZAMMBondingInstance.TierConfig({
-            tierType: ERC404ZAMMBondingInstance.TierType.VOLUME_CAP,
-            passwordHashes: hashes,
-            volumeCaps: caps,
-            tierUnlockTimes: new uint256[](0)
+    function _identity(string memory name_, string memory symbol_) internal view returns (IdentityParams memory) {
+        return IdentityParams({
+            name: name_,
+            symbol: symbol_,
+            styleUri: "",
+            owner: instanceOwner,
+            vault: address(0), // vault passed separately
+            nftCount: 100,
+            profileId: 0
         });
     }
 
     function test_createInstance_deploysAndRegisters() public {
         vm.deal(address(this), 0.01 ether);
         address instance = factory.createInstance{value: 0.01 ether}(
-            "TestToken", "TST", "", 100, 0, _defaultTierConfig(), address(this), vault, ""
+            _identity("TestToken", "TST"),
+            "",
+            vault
         );
 
         assertNotEq(instance, address(0));
@@ -110,27 +119,40 @@ contract ERC404ZAMMFactoryTest is Test {
         vm.deal(address(this), 0.005 ether);
         vm.expectRevert();
         factory.createInstance{value: 0.005 ether}(
-            "TestToken", "TST", "", 100, 0, _defaultTierConfig(), address(this), vault, ""
+            _identity("TestToken", "TST"),
+            "",
+            vault
         );
     }
 
     function test_createInstance_revertsOnInactiveProfile() public {
         vm.deal(address(this), 0.01 ether);
+        IdentityParams memory id = IdentityParams({
+            name: "TestToken",
+            symbol: "TST",
+            styleUri: "",
+            owner: instanceOwner,
+            vault: address(0),
+            nftCount: 100,
+            profileId: 99 // inactive profile
+        });
         vm.expectRevert();
-        factory.createInstance{value: 0.01 ether}(
-            "TestToken", "TST", "", 100, 99, _defaultTierConfig(), address(this), vault, ""
-        );
+        factory.createInstance{value: 0.01 ether}(id, "", vault);
     }
 
     function test_createInstance_revertsOnDuplicateName() public {
         vm.deal(address(this), 0.02 ether);
         factory.createInstance{value: 0.01 ether}(
-            "Taken", "TST", "", 100, 0, _defaultTierConfig(), address(this), vault, ""
+            _identity("Taken", "TST"),
+            "",
+            vault
         );
 
         vm.expectRevert();
         factory.createInstance{value: 0.01 ether}(
-            "Taken", "TST2", "", 100, 0, _defaultTierConfig(), address(this), vault, ""
+            _identity("Taken", "TST2"),
+            "",
+            vault
         );
     }
 
@@ -148,7 +170,9 @@ contract ERC404ZAMMFactoryTest is Test {
         // Create an instance to accumulate fees
         vm.deal(address(this), 0.01 ether);
         factory.createInstance{value: 0.01 ether}(
-            "FeeTest", "FT", "", 100, 0, _defaultTierConfig(), address(this), vault, ""
+            _identity("FeeTest", "FT"),
+            "",
+            vault
         );
 
         uint256 treasuryBefore = treasury.balance;

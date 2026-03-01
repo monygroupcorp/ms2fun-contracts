@@ -32,6 +32,19 @@ contract ERC721AuctionFactory is Ownable, ReentrancyGuard, IFactory {
     // Tiered creation
     enum CreationTier { STANDARD, PREMIUM, LAUNCH }
 
+    /// @dev Packs all per-instance creation params to avoid stack-too-deep in _createInstanceInternal.
+    struct CreateArgs {
+        string name;
+        string metadataURI;
+        address creator;
+        address vault;
+        string symbol;
+        uint8 lines;
+        uint40 baseDuration;
+        uint40 timeBuffer;
+        uint256 bidIncrement;
+    }
+
     struct TierConfig {
         uint256 fee;
         uint256 featuredDuration;
@@ -89,11 +102,11 @@ contract ERC721AuctionFactory is Ownable, ReentrancyGuard, IFactory {
         uint40 _timeBuffer,
         uint256 _bidIncrement
     ) external payable nonReentrant returns (address instance) {
-        return _createInstanceInternal(
-            _name, metadataURI, _creator, _vault, _symbol,
-            _lines, _baseDuration, _timeBuffer, _bidIncrement,
-            CreationTier.STANDARD
-        );
+        return _createInstanceInternal(CreateArgs({
+            name: _name, metadataURI: metadataURI, creator: _creator, vault: _vault,
+            symbol: _symbol, lines: _lines, baseDuration: _baseDuration,
+            timeBuffer: _timeBuffer, bidIncrement: _bidIncrement
+        }), CreationTier.STANDARD);
     }
 
     /**
@@ -111,112 +124,95 @@ contract ERC721AuctionFactory is Ownable, ReentrancyGuard, IFactory {
         uint256 _bidIncrement,
         CreationTier creationTier
     ) external payable nonReentrant returns (address instance) {
-        return _createInstanceInternal(
-            _name, metadataURI, _creator, _vault, _symbol,
-            _lines, _baseDuration, _timeBuffer, _bidIncrement,
-            creationTier
-        );
+        return _createInstanceInternal(CreateArgs({
+            name: _name, metadataURI: metadataURI, creator: _creator, vault: _vault,
+            symbol: _symbol, lines: _lines, baseDuration: _baseDuration,
+            timeBuffer: _timeBuffer, bidIncrement: _bidIncrement
+        }), creationTier);
     }
 
-    function _createInstanceInternal(
-        string memory _name,
-        string memory metadataURI,
-        address _creator,
-        address _vault,
-        string memory _symbol,
-        uint8 _lines,
-        uint40 _baseDuration,
-        uint40 _timeBuffer,
-        uint256 _bidIncrement,
-        CreationTier creationTier
-    ) internal returns (address instance) {
-        // Determine fee based on tier
+    function _createInstanceInternal(CreateArgs memory args, CreationTier creationTier)
+        internal returns (address instance)
+    {
         TierConfig memory config = tierConfigs[creationTier];
-        uint256 fee;
-        if (config.fee > 0) {
-            fee = config.fee;
-        } else if (creationTier == CreationTier.STANDARD) {
-            fee = instanceCreationFee;
-        } else {
-            revert("Tier not configured");
-        }
-
+        (uint256 fee, uint256 featuredCost) = _computeTierFee(config, creationTier);
         require(msg.value >= fee, "Insufficient fee");
+        _accumulateFees(fee, featuredCost);
 
-        // Compute featured cost upfront so it can be forwarded (not accumulated)
-        uint256 featuredCost = 0;
-        if (config.featuredDuration > 0 && address(featuredQueueManager) != address(0)) {
-            featuredCost = featuredQueueManager.quoteDurationCost(config.featuredDuration) + config.featuredRankBoost;
-        }
-
-        // Split the non-featured portion of the fee between protocol and creator
-        uint256 creatorCut = ((fee - featuredCost) * creatorFeeBps) / 10000;
-        uint256 protocolCut = fee - featuredCost - creatorCut;
-        accumulatedCreatorFees += creatorCut;
-        accumulatedProtocolFees += protocolCut;
-
-        require(bytes(_name).length > 0, "Invalid name");
-        require(_creator != address(0), "Invalid creator");
-        require(_vault != address(0), "Invalid vault");
-        require(_vault.code.length > 0, "Vault must be a contract");
+        require(bytes(args.name).length > 0, "Invalid name");
+        require(args.creator != address(0), "Invalid creator");
+        require(args.vault != address(0), "Invalid vault");
+        require(args.vault.code.length > 0, "Vault must be a contract");
 
         // Soft capability checks
-        try IAlignmentVault(payable(_vault)).supportsCapability(keccak256("YIELD_GENERATION")) returns (bool supported) {
+        try IAlignmentVault(payable(args.vault)).supportsCapability(keccak256("YIELD_GENERATION")) returns (bool supported) {
             if (!supported) {
-                emit VaultCapabilityWarning(_vault, keccak256("YIELD_GENERATION"));
+                emit VaultCapabilityWarning(args.vault, keccak256("YIELD_GENERATION"));
             }
         } catch {
-            emit VaultCapabilityWarning(_vault, keccak256("YIELD_GENERATION"));
+            emit VaultCapabilityWarning(args.vault, keccak256("YIELD_GENERATION"));
         }
 
-        // Check namespace availability
-        require(!masterRegistry.isNameTaken(_name), "Name already taken");
+        require(!masterRegistry.isNameTaken(args.name), "Name already taken");
 
-        // Deploy new instance
-        instance = address(new ERC721AuctionInstance(
-            _vault,
-            protocolTreasury,
-            _creator,
-            _name,
-            _symbol,
-            _lines,
-            _baseDuration,
-            _timeBuffer,
-            _bidIncrement,
-            globalMessageRegistry,
-            address(masterRegistry)
-        ));
+        instance = _deployInstance(args);
+        masterRegistry.registerInstance(instance, address(this), args.creator, args.name, args.metadataURI, args.vault);
 
-        // Register with master registry
-        masterRegistry.registerInstance(
-            instance,
-            address(this),
-            _creator,
-            _name,
-            metadataURI,
-            _vault
-        );
+        _applyTierPerks(instance, args.creator, config, featuredCost);
 
-        // Apply tier perks
-        if (config.featuredDuration > 0 && address(featuredQueueManager) != address(0) && featuredCost > 0) {
-            featuredQueueManager.rentFeaturedFor{value: featuredCost}(
-                instance, _creator, config.featuredDuration, config.featuredRankBoost
-            );
-        }
-
-        if (config.badge != PromotionBadges.BadgeType.NONE && address(promotionBadges) != address(0)) {
-            promotionBadges.assignBadgeFor(instance, config.badge, config.badgeDuration);
-        }
-
-        // Refund excess
         if (msg.value > fee) {
             SafeTransferLib.safeTransferETH(msg.sender, msg.value - fee);
         }
 
-        emit InstanceCreated(instance, _creator, _name, _vault);
+        emit InstanceCreated(instance, args.creator, args.name, args.vault);
 
         if (creationTier != CreationTier.STANDARD) {
             emit InstanceCreatedWithTier(instance, creationTier, fee);
+        }
+    }
+
+    function _computeTierFee(TierConfig memory config, CreationTier tier)
+        private view returns (uint256 fee, uint256 featuredCost)
+    {
+        if (config.fee > 0) {
+            fee = config.fee;
+        } else if (tier == CreationTier.STANDARD) {
+            fee = instanceCreationFee;
+        } else {
+            revert("Tier not configured");
+        }
+        if (config.featuredDuration > 0 && address(featuredQueueManager) != address(0)) {
+            featuredCost = featuredQueueManager.quoteDurationCost(config.featuredDuration) + config.featuredRankBoost;
+        }
+    }
+
+    function _accumulateFees(uint256 fee, uint256 featuredCost) private {
+        uint256 creatorCut = ((fee - featuredCost) * creatorFeeBps) / 10000;
+        accumulatedCreatorFees += creatorCut;
+        accumulatedProtocolFees += fee - featuredCost - creatorCut;
+    }
+
+    function _deployInstance(CreateArgs memory args) private returns (address) {
+        return address(new ERC721AuctionInstance(
+            args.vault, protocolTreasury, args.creator, args.name, args.symbol,
+            args.lines, args.baseDuration, args.timeBuffer, args.bidIncrement,
+            globalMessageRegistry, address(masterRegistry)
+        ));
+    }
+
+    function _applyTierPerks(
+        address instance,
+        address creator_,
+        TierConfig memory config,
+        uint256 featuredCost
+    ) private {
+        if (config.featuredDuration > 0 && address(featuredQueueManager) != address(0) && featuredCost > 0) {
+            featuredQueueManager.rentFeaturedFor{value: featuredCost}(
+                instance, creator_, config.featuredDuration, config.featuredRankBoost
+            );
+        }
+        if (config.badge != PromotionBadges.BadgeType.NONE && address(promotionBadges) != address(0)) {
+            promotionBadges.assignBadgeFor(instance, config.badge, config.badgeDuration);
         }
     }
 

@@ -304,7 +304,7 @@ contract GrandCentral is IGrandCentral, ReentrancyGuard {
         }
 
         emit ProposalSubmitted(
-            proposalCount, dataHash, targets, values, calldatas,
+            proposalCount, dataHash,
             expiration, selfSponsor, details
         );
 

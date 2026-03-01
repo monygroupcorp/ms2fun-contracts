@@ -58,19 +58,6 @@ contract ERC404CypherBondingInstanceTest is Test {
             address(liquidityDeployer)
         );
 
-        // Minimal tier config
-        bytes32[] memory hashes = new bytes32[](1);
-        hashes[0] = keccak256("open");
-        uint256[] memory caps = new uint256[](1);
-        caps[0] = type(uint256).max;
-
-        ERC404CypherBondingInstance.TierConfig memory tierConfig = ERC404CypherBondingInstance.TierConfig({
-            tierType: ERC404CypherBondingInstance.TierType.VOLUME_CAP,
-            passwordHashes: hashes,
-            volumeCaps: caps,
-            tierUnlockTimes: new uint256[](0)
-        });
-
         BondingCurveMath.Params memory curve = BondingCurveMath.Params({
             initialPrice: 1e9,
             quarticCoeff: 0,
@@ -79,31 +66,36 @@ contract ERC404CypherBondingInstanceTest is Test {
             normalizationFactor: 1
         });
 
-        vm.prank(factory);
+        vm.startPrank(factory);
         instance.initialize(
-            "CypherToken", "CYPH",
-            10_000 ether,    // maxSupply
-            20,              // 20% liquidity reserve
-            curve,
-            tierConfig,
-            factory,
-            globalMsgRegistry,
-            address(vault),
             owner,
-            "",              // styleUri
-            treasury,
-            100,             // bondingFeeBps
-            200,             // graduationFeeBps
-            50,              // creatorGraduationFeeBps
-            factoryCreator,
-            1e18,            // tokenUnit
-            address(liquidityDeployer),
-            address(realCurveComputer),
-            address(masterRegistry),
-            address(weth),
-            address(algebraFactory),
-            address(positionManager)
+            address(vault),
+            ERC404CypherBondingInstance.BondingParams({
+                maxSupply: 10_000 ether,
+                unit: 1e18,
+                liquidityReservePercent: 20,
+                curve: curve
+            }),
+            address(0) // no gating module
         );
+
+        instance.initializeProtocol(ERC404CypherBondingInstance.ProtocolParams({
+            globalMessageRegistry: globalMsgRegistry,
+            protocolTreasury: treasury,
+            masterRegistry: address(masterRegistry),
+            liquidityDeployer: address(liquidityDeployer),
+            curveComputer: address(realCurveComputer),
+            weth: address(weth),
+            algebraFactory: address(algebraFactory),
+            positionManager: address(positionManager),
+            bondingFeeBps: 100,
+            graduationFeeBps: 200,
+            creatorGraduationFeeBps: 50,
+            factoryCreator: factoryCreator
+        }));
+
+        instance.initializeMetadata("CypherToken", "CYPH", "");
+        vm.stopPrank();
     }
 
     function test_initialize_setsState() public view {

@@ -111,6 +111,15 @@ contract QueryAggregator is UUPSUpgradeable, Ownable {
         uint256 claimable;
     }
 
+    /// @dev Internal accumulator for getPortfolioData loop — avoids stack-too-deep.
+    struct PortfolioAccumulator {
+        ERC404Holding[] tempERC404;
+        ERC1155Holding[] tempERC1155;
+        uint256 erc404Count;
+        uint256 erc1155Count;
+        uint256 totalClaimable;
+    }
+
     // ============ State Variables ============
 
     IMasterRegistry public masterRegistry;
@@ -227,52 +236,49 @@ contract QueryAggregator is UUPSUpgradeable, Ownable {
             uint256 totalClaimable
         )
     {
-        // Temporary arrays (we'll trim later)
-        ERC404Holding[] memory tempERC404 = new ERC404Holding[](instances.length);
-        ERC1155Holding[] memory tempERC1155 = new ERC1155Holding[](instances.length);
-        uint256 erc404Count = 0;
-        uint256 erc1155Count = 0;
+        PortfolioAccumulator memory acc;
+        acc.tempERC404 = new ERC404Holding[](instances.length);
+        acc.tempERC1155 = new ERC1155Holding[](instances.length);
 
         for (uint256 i = 0; i < instances.length; i++) {
-            address instance = instances[i];
-
-            // Get instance type and name directly from the instance
-            try IInstanceLifecycle(instance).instanceType() returns (bytes32 typeHash) {
-                try masterRegistry.getInstanceInfo(instance) returns (IMasterRegistry.InstanceInfo memory info) {
-                    if (typeHash == TYPE_ERC404) {
-                        ERC404Holding memory holding = _getERC404Holding(instance, user, info.name);
-                        if (holding.tokenBalance > 0 || holding.stakedBalance > 0) {
-                            tempERC404[erc404Count++] = holding;
-                            totalClaimable += holding.pendingRewards;
-                        }
-                    } else if (typeHash == TYPE_ERC1155) {
-                        ERC1155Holding memory holding = _getERC1155Holding(instance, user, info.name);
-                        if (holding.editionIds.length > 0) {
-                            tempERC1155[erc1155Count++] = holding;
-                        }
-                    }
-                } catch {}
-            } catch {}
+            _processPortfolioInstance(instances[i], user, acc);
         }
 
-        // Trim arrays to actual size
-        erc404Holdings = new ERC404Holding[](erc404Count);
-        for (uint256 i = 0; i < erc404Count; i++) {
-            erc404Holdings[i] = tempERC404[i];
+        erc404Holdings = new ERC404Holding[](acc.erc404Count);
+        for (uint256 i = 0; i < acc.erc404Count; i++) {
+            erc404Holdings[i] = acc.tempERC404[i];
         }
 
-        erc1155Holdings = new ERC1155Holding[](erc1155Count);
-        for (uint256 i = 0; i < erc1155Count; i++) {
-            erc1155Holdings[i] = tempERC1155[i];
+        erc1155Holdings = new ERC1155Holding[](acc.erc1155Count);
+        for (uint256 i = 0; i < acc.erc1155Count; i++) {
+            erc1155Holdings[i] = acc.tempERC1155[i];
         }
 
-        // Get vault positions from provided addresses
         vaultPositions = _getVaultPositions(user, vaultAddrs);
 
-        // Add vault claimable to total
+        totalClaimable = acc.totalClaimable;
         for (uint256 i = 0; i < vaultPositions.length; i++) {
             totalClaimable += vaultPositions[i].claimable;
         }
+    }
+
+    function _processPortfolioInstance(address instance, address user, PortfolioAccumulator memory acc) private view {
+        try IInstanceLifecycle(instance).instanceType() returns (bytes32 typeHash) {
+            try masterRegistry.getInstanceInfo(instance) returns (IMasterRegistry.InstanceInfo memory info) {
+                if (typeHash == TYPE_ERC404) {
+                    ERC404Holding memory holding = _getERC404Holding(instance, user, info.name);
+                    if (holding.tokenBalance > 0 || holding.stakedBalance > 0) {
+                        acc.tempERC404[acc.erc404Count++] = holding;
+                        acc.totalClaimable += holding.pendingRewards;
+                    }
+                } else if (typeHash == TYPE_ERC1155) {
+                    ERC1155Holding memory holding = _getERC1155Holding(instance, user, info.name);
+                    if (holding.editionIds.length > 0) {
+                        acc.tempERC1155[acc.erc1155Count++] = holding;
+                    }
+                }
+            } catch {}
+        } catch {}
     }
 
     // ============ Internal Helpers ============

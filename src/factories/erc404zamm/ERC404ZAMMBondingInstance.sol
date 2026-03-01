@@ -13,6 +13,7 @@ import {IMasterRegistry} from "../../master/interfaces/IMasterRegistry.sol";
 import {IGlobalMessageRegistry} from "../../registry/interfaces/IGlobalMessageRegistry.sol";
 import {IInstanceLifecycle, TYPE_ERC404, STATE_BONDING, STATE_PAUSED, STATE_GRADUATED} from "../../interfaces/IInstanceLifecycle.sol";
 import {ZAMMLiquidityDeployerModule} from "./ZAMMLiquidityDeployerModule.sol";
+import {IGatingModule} from "../../gating/IGatingModule.sol";
 import {Currency} from "v4-core/types/Currency.sol";
 
 // ── Errors ────────────────────────────────────────────────────────────────────
@@ -30,24 +31,18 @@ error InvalidGlobalMessageRegistry();
 error InvalidLiquidityDeployer();
 error InvalidMaxSupply();
 error InvalidOwner();
-error InvalidPasswordHash();
-error InvalidPassword();
 error InvalidReservePercent();
 error InvalidVault();
 error LowETHValue();
 error MaturityMustBeAfterOpenTime();
 error MaxCostExceeded();
 error NoReserve();
-error NoTiers();
 error OnlyOwnerBeforeMaturity();
 error OpenTimeMustBeSetFirst();
 error OpenTimeNotSet();
-error TierConfigMismatch();
-error TierNotAvailableYet();
 error TimeMustBeInFuture();
 error TooEarly();
 error TransactionExpired();
-error VolumeCapExceeded();
 error AmountMustBePositive();
 error InvalidRefund();
 error NotGraduated();
@@ -80,13 +75,29 @@ interface IZAMM_Swap {
  */
 contract ERC404ZAMMBondingInstance is DN404, Ownable, ReentrancyGuard, IInstanceLifecycle {
 
-    enum TierType { VOLUME_CAP, TIME_BASED }
+    // ┌─────────────────────────┐
+    // │         Types           │
+    // └─────────────────────────┘
 
-    struct TierConfig {
-        TierType tierType;
-        bytes32[] passwordHashes;
-        uint256[] volumeCaps;
-        uint256[] tierUnlockTimes;
+    /// @dev Factory-computed from profile + nftCount.
+    struct BondingParams {
+        uint256 maxSupply;
+        uint256 unit;
+        uint256 liquidityReservePercent;
+        BondingCurveMath.Params curve;
+    }
+
+    /// @dev Factory's own config — protocol-controlled.
+    struct ProtocolParams {
+        address globalMessageRegistry;
+        address protocolTreasury;
+        address masterRegistry;
+        address liquidityDeployer;
+        address curveComputer;
+        uint256 bondingFeeBps;
+        uint256 graduationFeeBps;
+        uint256 creatorGraduationFeeBps;
+        address factoryCreator;
     }
 
     // ── State ─────────────────────────────────────────────────────────────────
@@ -100,8 +111,7 @@ contract ERC404ZAMMBondingInstance is DN404, Ownable, ReentrancyGuard, IInstance
     uint256 public UNIT;
 
     BondingCurveMath.Params public curveParams;
-    TierConfig public tierConfig;
-    uint256 public tierCount;
+    IGatingModule public gatingModule;
 
     address public factory;
     IAlignmentVault public vault;
@@ -121,10 +131,6 @@ contract ERC404ZAMMBondingInstance is DN404, Ownable, ReentrancyGuard, IInstance
     bool public bondingActive;
     uint256 public totalBondingSupply;
     uint256 public reserve;
-
-    mapping(bytes32 => uint256) public tierByPasswordHash;
-    mapping(address => uint256) public userTierUnlocked;
-    mapping(address => uint256) public userPurchaseVolume;
 
     ZAMMLiquidityDeployerModule public liquidityDeployer;
     CurveParamsComputer public curveComputer;
@@ -155,76 +161,77 @@ contract ERC404ZAMMBondingInstance is DN404, Ownable, ReentrancyGuard, IInstance
 
     // ── Initialize ────────────────────────────────────────────────────────────
 
+    /**
+     * @notice Initialize bonding params. Called by factory immediately after cloning.
+     * @dev Strings set via initializeMetadata(); protocol config set via initializeProtocol().
+     */
     function initialize(
-        string memory name_,
-        string memory symbol_,
-        uint256 _maxSupply,
-        uint256 _liquidityReservePercent,
-        BondingCurveMath.Params memory _curveParams,
-        TierConfig memory _tierConfig,
-        address _factory,
-        address _globalMessageRegistry,
-        address _vault,
-        address _owner,
-        string memory _styleUri,
-        address _protocolTreasury,
-        uint256 _bondingFeeBps,
-        uint256 _graduationFeeBps,
-        uint256 _creatorGraduationFeeBps,
-        address _factoryCreator,
-        uint256 _tokenUnit,
-        address _liquidityDeployer,
-        address _curveComputer,
-        address _masterRegistry
+        address owner,
+        address vault_,
+        BondingParams calldata bonding,
+        address _gatingModule
     ) external {
         if (_initialized) revert AlreadyInitialized();
         _initialized = true;
 
-        if (_maxSupply == 0) revert InvalidMaxSupply();
-        if (_liquidityReservePercent >= 100) revert InvalidReservePercent();
-        if (_factory == address(0)) revert InvalidFactory();
-        if (_globalMessageRegistry == address(0)) revert InvalidGlobalMessageRegistry();
-        if (_owner == address(0)) revert InvalidOwner();
-        if (_vault == address(0)) revert InvalidVault();
-        if (_tierConfig.passwordHashes.length == 0) revert NoTiers();
-        if (_tierConfig.tierType == TierType.VOLUME_CAP
-            ? _tierConfig.volumeCaps.length != _tierConfig.passwordHashes.length
-            : _tierConfig.tierUnlockTimes.length != _tierConfig.passwordHashes.length
-        ) revert TierConfigMismatch();
-        if (_liquidityDeployer == address(0)) revert InvalidLiquidityDeployer();
-        if (_curveComputer == address(0)) revert InvalidCurveComputer();
+        if (bonding.maxSupply == 0) revert InvalidMaxSupply();
+        if (owner == address(0)) revert InvalidOwner();
+        if (vault_ == address(0)) revert InvalidVault();
 
-        _initializeOwner(_owner);
+        _initializeOwner(owner);
 
+        factory = msg.sender;
+        vault = IAlignmentVault(payable(vault_));
+
+        MAX_SUPPLY = bonding.maxSupply;
+        LIQUIDITY_RESERVE = (bonding.maxSupply * bonding.liquidityReservePercent) / 100;
+        UNIT = bonding.unit;
+        curveParams = bonding.curve;
+
+        gatingModule = IGatingModule(_gatingModule);
+
+        address mirror = address(new DN404Mirror(msg.sender));
+        _initializeDN404(bonding.maxSupply, address(this), mirror);
+    }
+
+    /**
+     * @notice Set protocol params. Called by factory immediately after initialize().
+     * @dev Split from initialize() to avoid Yul headStart stack-too-deep on external call encoding.
+     */
+    function initializeProtocol(ProtocolParams calldata protocol) external {
+        require(msg.sender == factory, "Only factory");
+        require(_initialized, "Not initialized");
+
+        if (protocol.globalMessageRegistry == address(0)) revert InvalidGlobalMessageRegistry();
+        if (protocol.liquidityDeployer == address(0)) revert InvalidLiquidityDeployer();
+        if (protocol.curveComputer == address(0)) revert InvalidCurveComputer();
+
+        masterRegistry = IMasterRegistry(protocol.masterRegistry);
+        globalMessageRegistry = IGlobalMessageRegistry(protocol.globalMessageRegistry);
+        protocolTreasury = protocol.protocolTreasury;
+        bondingFeeBps = protocol.bondingFeeBps;
+        graduationFeeBps = protocol.graduationFeeBps;
+        creatorGraduationFeeBps = protocol.creatorGraduationFeeBps;
+        factoryCreator = protocol.factoryCreator;
+
+        liquidityDeployer = ZAMMLiquidityDeployerModule(payable(protocol.liquidityDeployer));
+        curveComputer = CurveParamsComputer(protocol.curveComputer);
+    }
+
+    /**
+     * @notice Set token name, symbol, and styleUri. Called by factory once after initialize().
+     * @dev Only callable by factory, only before owner has set bondingOpenTime (i.e. during deploy).
+     */
+    function initializeMetadata(
+        string calldata name_,
+        string calldata symbol_,
+        string calldata styleUri_
+    ) external {
+        require(msg.sender == factory, "Only factory");
+        require(bondingOpenTime == 0, "Already open");
         _name = name_;
         _symbol = symbol_;
-        MAX_SUPPLY = _maxSupply;
-        LIQUIDITY_RESERVE = (_maxSupply * _liquidityReservePercent) / 100;
-        UNIT = _tokenUnit;
-        curveParams = _curveParams;
-        tierConfig = _tierConfig;
-        tierCount = _tierConfig.passwordHashes.length;
-
-        factory = _factory;
-        globalMessageRegistry = IGlobalMessageRegistry(_globalMessageRegistry);
-        vault = IAlignmentVault(payable(_vault));
-        masterRegistry = IMasterRegistry(_masterRegistry);
-        styleUri = _styleUri;
-        protocolTreasury = _protocolTreasury;
-        bondingFeeBps = _bondingFeeBps;
-        graduationFeeBps = _graduationFeeBps;
-        creatorGraduationFeeBps = _creatorGraduationFeeBps;
-        factoryCreator = _factoryCreator;
-        liquidityDeployer = ZAMMLiquidityDeployerModule(payable(_liquidityDeployer));
-        curveComputer = CurveParamsComputer(_curveComputer);
-
-        for (uint256 i = 0; i < _tierConfig.passwordHashes.length; i++) {
-            if (_tierConfig.passwordHashes[i] == bytes32(0)) revert InvalidPasswordHash();
-            tierByPasswordHash[_tierConfig.passwordHashes[i]] = i + 1;
-        }
-
-        address mirror = address(new DN404Mirror(_factory));
-        _initializeDN404(_maxSupply, address(this), mirror);
+        styleUri = styleUri_;
     }
 
     // ── Owner functions ───────────────────────────────────────────────────────
@@ -243,7 +250,6 @@ contract ERC404ZAMMBondingInstance is DN404, Ownable, ReentrancyGuard, IInstance
         emit BondingMaturityTimeSet(timestamp);
     }
 
-    /// @notice No hook required — ZAMM factory can activate bonding as soon as open time is set
     function setBondingActive(bool _active) external onlyOwner {
         if (bondingOpenTime == 0) revert OpenTimeNotSet();
         if (_active && graduated) revert CannotActivateAfterLiquidityDeployed();
@@ -256,14 +262,11 @@ contract ERC404ZAMMBondingInstance is DN404, Ownable, ReentrancyGuard, IInstance
         styleUri = uri;
     }
 
-    /// @notice Migrate to a new vault. New vault must share this instance's alignment target.
-    /// @dev Updates local active vault and appends to registry vault array.
     function migrateVault(address newVault) external onlyOwner {
         vault = IAlignmentVault(payable(newVault));
         masterRegistry.migrateVault(address(this), newVault);
     }
 
-    /// @notice Claim accumulated fees from all vault positions (current and historical).
     function claimAllFees() external onlyOwner {
         address[] memory allVaults = masterRegistry.getInstanceVaults(address(this));
         for (uint256 i = 0; i < allVaults.length; i++) {
@@ -286,18 +289,11 @@ contract ERC404ZAMMBondingInstance is DN404, Ownable, ReentrancyGuard, IInstance
         if (graduated) revert BondingEnded();
         if (totalBondingSupply + amount > MAX_SUPPLY - LIQUIDITY_RESERVE) revert ExceedsBonding();
 
-        uint256 tier = passwordHash == bytes32(0) ? 0 : tierByPasswordHash[passwordHash];
-        if (tier == 0 && passwordHash != bytes32(0)) revert InvalidPassword();
-
-        if (tierConfig.tierType == TierType.VOLUME_CAP) {
-            uint256 cap = tier == 0 ? type(uint256).max : tierConfig.volumeCaps[tier - 1];
-            if (userPurchaseVolume[msg.sender] + amount > cap) revert VolumeCapExceeded();
-        } else {
-            if (bondingOpenTime == 0) revert BondingNotConfigured();
-            if (tier > 0) {
-                uint256 tierUnlockTime = bondingOpenTime + tierConfig.tierUnlockTimes[tier - 1];
-                if (block.timestamp < tierUnlockTime) revert TierNotAvailableYet();
-            }
+        // Gating check (delegated to module; address(0) = open)
+        if (address(gatingModule) != address(0)) {
+            bytes memory gatingData = abi.encode(passwordHash, bondingOpenTime);
+            require(gatingModule.canMint(msg.sender, amount, gatingData), "Gating check failed");
+            gatingModule.onMint(msg.sender, amount);
         }
 
         uint256 totalCost = curveComputer.calculateCost(curveParams, totalBondingSupply, amount);
@@ -316,10 +312,6 @@ contract ERC404ZAMMBondingInstance is DN404, Ownable, ReentrancyGuard, IInstance
         if (bondingFee > 0 && protocolTreasury != address(0)) {
             SafeTransferLib.safeTransferETH(protocolTreasury, bondingFee);
             emit BondingFeePaid(msg.sender, bondingFee);
-        }
-
-        if (tierConfig.tierType == TierType.VOLUME_CAP) {
-            userPurchaseVolume[msg.sender] += amount;
         }
 
         if (messageData.length > 0) {
@@ -345,17 +337,7 @@ contract ERC404ZAMMBondingInstance is DN404, Ownable, ReentrancyGuard, IInstance
         if (deadline != 0 && block.timestamp > deadline) revert TransactionExpired();
         if (!bondingActive) revert BondingNotActive();
         if (graduated) revert BondingEnded();
-
-        uint256 tier = passwordHash == bytes32(0) ? 0 : tierByPasswordHash[passwordHash];
-        if (tier == 0 && passwordHash != bytes32(0)) revert InvalidPassword();
-
-        if (tierConfig.tierType == TierType.TIME_BASED) {
-            if (bondingOpenTime == 0) revert BondingNotConfigured();
-            if (tier > 0) {
-                uint256 tierUnlockTime = bondingOpenTime + tierConfig.tierUnlockTimes[tier - 1];
-                if (block.timestamp < tierUnlockTime) revert TierNotAvailableYet();
-            }
-        }
+        // passwordHash param retained for ABI compatibility; gating is buy-only
 
         if (balanceOf(msg.sender) < amount) revert InsufficientBalance();
 

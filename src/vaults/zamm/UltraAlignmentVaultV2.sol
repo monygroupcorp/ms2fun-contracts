@@ -199,6 +199,13 @@ contract UltraAlignmentVaultV2 is IAlignmentVault, Ownable, ReentrancyGuard {
 
     // ── convertAndAddLiquidity ────────────────────────────────────────────
 
+    struct SwapLPResult {
+        uint256 tokenBought;
+        uint256 ethUsed;
+        uint256 tokenUsed;
+        uint256 lp;
+    }
+
     /// @notice Buy alignment token and add ETH+token to ZAMM. Anyone can call (incentivized).
     function convertAndAddLiquidity(
         uint256 minTokenOut,
@@ -208,83 +215,67 @@ contract UltraAlignmentVaultV2 is IAlignmentVault, Ownable, ReentrancyGuard {
         uint256 totalEth = pendingETH;
         if (totalEth == 0) revert NoPendingETH();
 
-        // Snapshot pending state before clearing
         address[] memory benefactors = _pendingBenefactors;
-
-        // Clear pending
         pendingETH = 0;
         delete _pendingBenefactors;
 
-        // Reserve reward from totalEth
         uint256 reward = conversionReward;
         if (reward > totalEth) reward = totalEth;
         uint256 deployETH = totalEth - reward;
 
-        // ── Compute optimal swap proportion from live ZAMM reserves ──
         IZAMM.Pool memory pool = IZAMM(zamm).pools(poolId);
         uint256 ethToSwap;
         if (pool.reserve0 == 0) {
-            // First liquidity — deploy 50/50
             ethToSwap = deployETH / 2;
         } else {
             uint256 r0 = pool.reserve0;
-            // ethToSwap = sqrt(r0^2 + deployETH * r0) - r0
             ethToSwap = FixedPointMathLib.sqrt(r0 * r0 + deployETH * r0) - r0;
         }
         uint256 ethForLP = deployETH - ethToSwap;
 
-        // ── Swap ETH → alignment token via zRouter ──
-        (, uint256 tokenBought) = IzRouterV2(zRouter).swapVZ{value: ethToSwap}(
-            address(this),
-            false,       // exactIn
-            _poolKey.feeOrHook,
-            address(0),  // ETH in
-            alignmentToken,
-            0, 0,
-            ethToSwap,
-            minTokenOut,
-            type(uint256).max
-        );
+        SwapLPResult memory r = _swapAndAddLiquidity(ethToSwap, ethForLP, minTokenOut, minEth, minToken);
 
-        // ── Add ETH + token to ZAMM ──
-        IERC20(alignmentToken).forceApprove(zamm, tokenBought);
-        (uint256 ethUsed, uint256 tokenUsed, uint256 lp) = IZAMM(zamm).addLiquidity{value: ethForLP}(
-            _poolKey,
-            ethForLP,
-            tokenBought,
-            minEth,
-            minToken,
-            address(this),
-            type(uint256).max
-        );
+        lpMinted = r.lp;
+        principalETH += r.ethUsed;
+        principalToken += r.tokenUsed;
 
-        lpMinted = lp;
-        principalETH += ethUsed;
-        principalToken += tokenUsed;
-
-        // ── Update accumulator and settle benefactor contributions ──
         for (uint256 i = 0; i < benefactors.length; i++) {
             address b = benefactors[i];
             uint256 contrib = pendingContribution[b];
             delete pendingContribution[b];
             if (contrib == 0) continue;
 
-            // Scale contribution proportional to deployETH used
             uint256 settled = contrib * deployETH / totalEth;
-
-            // Snapshot debt before changing contribution
             rewardDebt[b] += settled * accRewardPerContribution / 1e18;
             benefactorContribution[b] += settled;
             totalContributions += settled;
         }
 
-        // ── Pay caller reward ──
         if (reward > 0) {
             (bool ok,) = msg.sender.call{value: reward}("");
             require(ok);
         }
 
-        emit LiquidityAdded(ethToSwap, tokenBought, lpMinted, reward);
+        emit LiquidityAdded(ethToSwap, r.tokenBought, lpMinted, reward);
+    }
+
+    function _swapAndAddLiquidity(
+        uint256 ethToSwap,
+        uint256 ethForLP,
+        uint256 minTokenOut,
+        uint256 minEth,
+        uint256 minToken
+    ) private returns (SwapLPResult memory r) {
+        (, r.tokenBought) = IzRouterV2(zRouter).swapVZ{value: ethToSwap}(
+            address(this), false, _poolKey.feeOrHook,
+            address(0), alignmentToken, 0, 0,
+            ethToSwap, minTokenOut, type(uint256).max
+        );
+
+        IERC20(alignmentToken).forceApprove(zamm, r.tokenBought);
+        (r.ethUsed, r.tokenUsed, r.lp) = IZAMM(zamm).addLiquidity{value: ethForLP}(
+            _poolKey, ethForLP, r.tokenBought, minEth, minToken, address(this), type(uint256).max
+        );
     }
 
     function setConversionReward(uint256 amount) external onlyOwner { conversionReward = amount; }
@@ -300,50 +291,19 @@ contract UltraAlignmentVaultV2 is IAlignmentVault, Ownable, ReentrancyGuard {
         uint256 lpHeld = IZAMM(zamm).balanceOf(address(this), poolId);
         if (lpHeld == 0) return 0;
 
-        // ── Read current pool value ──
         IZAMM.Pool memory pool = IZAMM(zamm).pools(poolId);
         uint256 totalSupply = pool.supply;
         if (totalSupply == 0) return 0;
 
         uint256 currentETH = uint256(pool.reserve0) * lpHeld / totalSupply;
-
-        // ── Compute fee growth above principal ──
         uint256 ethFees = currentETH > principalETH ? currentETH - principalETH : 0;
-
         if (ethFees == 0) return 0;
 
-        // ── Remove only the fee slice ──
-        uint256 feeLP = lpHeld * ethFees / currentETH; // approximate fee LP share
+        uint256 feeLP = lpHeld * ethFees / currentETH;
         if (feeLP == 0) return 0;
 
-        (uint256 ethRemoved, uint256 tokRemoved) = IZAMM(zamm).removeLiquidity(
-            _poolKey,
-            feeLP,
-            0, 0,
-            address(this),
-            type(uint256).max
-        );
+        feesCollected = _removeFeeLP(feeLP, minEthOut);
 
-        // ── Swap token fees → ETH via zRouter ──
-        uint256 swappedEth;
-        if (tokRemoved > 0) {
-            IERC20(alignmentToken).forceApprove(zRouter, tokRemoved);
-            (, swappedEth) = IzRouterV2(zRouter).swapVZ(
-                address(this),
-                false,
-                _poolKey.feeOrHook,
-                alignmentToken,
-                address(0),
-                0, 0,
-                tokRemoved,
-                minEthOut,
-                type(uint256).max
-            );
-        }
-
-        feesCollected = ethRemoved + swappedEth;
-
-        // ── Cut protocol / creator ──
         uint256 reward = harvestReward;
         if (reward > feesCollected) reward = feesCollected;
         uint256 afterReward = feesCollected - reward;
@@ -355,16 +315,13 @@ contract UltraAlignmentVaultV2 is IAlignmentVault, Ownable, ReentrancyGuard {
         accumulatedProtocolFees += protocolCut;
         accumulatedCreatorFees += creatorCut;
 
-        // ── Update MasterChef accumulator ──
         if (benefactorFees > 0 && totalContributions > 0) {
             accRewardPerContribution += benefactorFees * 1e18 / totalContributions;
         }
 
-        // ── Update tracked principal to reflect removal ──
         principalETH -= (principalETH * feeLP / lpHeld);
         principalToken -= (principalToken * feeLP / lpHeld);
 
-        // ── Pay caller reward ──
         if (reward > 0) {
             (bool ok,) = msg.sender.call{value: reward}("");
             require(ok);
@@ -372,6 +329,22 @@ contract UltraAlignmentVaultV2 is IAlignmentVault, Ownable, ReentrancyGuard {
 
         emit Harvested(feesCollected, benefactorFees, reward);
         emit FeesAccumulated(benefactorFees);
+    }
+
+    function _removeFeeLP(uint256 feeLP, uint256 minEthOut) private returns (uint256 feesCollected) {
+        (uint256 ethRemoved, uint256 tokRemoved) = IZAMM(zamm).removeLiquidity(
+            _poolKey, feeLP, 0, 0, address(this), type(uint256).max
+        );
+        uint256 swappedEth;
+        if (tokRemoved > 0) {
+            IERC20(alignmentToken).forceApprove(zRouter, tokRemoved);
+            (, swappedEth) = IzRouterV2(zRouter).swapVZ(
+                address(this), false, _poolKey.feeOrHook,
+                alignmentToken, address(0), 0, 0,
+                tokRemoved, minEthOut, type(uint256).max
+            );
+        }
+        feesCollected = ethRemoved + swappedEth;
     }
 
     // ── claimFees + delegation ────────────────────────────────────────────

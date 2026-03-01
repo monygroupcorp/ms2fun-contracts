@@ -14,6 +14,8 @@ import {UltraAlignmentCypherVaultFactory} from "../../vaults/cypher/UltraAlignme
 import {UltraAlignmentCypherVault} from "../../vaults/cypher/UltraAlignmentCypherVault.sol";
 import {CurveParamsComputer} from "../erc404/CurveParamsComputer.sol";
 import {BondingCurveMath} from "../erc404/libraries/BondingCurveMath.sol";
+import {IdentityParams} from "../../interfaces/IFactoryTypes.sol";
+import {PasswordTierGatingModule} from "../../gating/PasswordTierGatingModule.sol";
 
 /**
  * @title ERC404CypherFactory
@@ -23,6 +25,27 @@ import {BondingCurveMath} from "../erc404/libraries/BondingCurveMath.sol";
 contract ERC404CypherFactory is OwnableRoles, ReentrancyGuard, IFactory {
     uint256 public constant PROTOCOL_ROLE = _ROLE_0;
     uint256 public constant CREATOR_ROLE  = _ROLE_1;
+
+    /// @dev Packs constructor params to stay within 16-local Yul stack limit (15 params → 2 structs).
+    struct CoreConfig {
+        address implementation;
+        address masterRegistry;
+        address vaultFactory;
+        address liquidityDeployer;
+        address algebraFactory;
+        address positionManager;
+        address swapRouter;
+        address weth;
+        address protocol;
+    }
+    struct ModuleConfig {
+        address creator;
+        uint256 creatorFeeBps;
+        uint256 creatorGraduationFeeBps;
+        address globalMessageRegistry;
+        address curveComputer;
+        address tierGatingModule;
+    }
 
     // ── Immutables ────────────────────────────────────────────────────────────
     address public immutable globalMessageRegistry;
@@ -48,6 +71,7 @@ contract ERC404CypherFactory is OwnableRoles, ReentrancyGuard, IFactory {
     CypherLiquidityDeployerModule public immutable liquidityDeployer;
     UltraAlignmentCypherVaultFactory public immutable vaultFactory;
     CurveParamsComputer public immutable curveComputer;
+    PasswordTierGatingModule public immutable tierGatingModule;
 
     // Accumulated fees
     uint256 public accumulatedCreatorFees;
@@ -71,51 +95,36 @@ contract ERC404CypherFactory is OwnableRoles, ReentrancyGuard, IFactory {
     event ProtocolTreasuryUpdated(address indexed old, address indexed next);
     event InstanceCreationFeeUpdated(uint256 newFee);
 
-    constructor(
-        address _implementation,
-        address _masterRegistry,
-        address _vaultFactory,
-        address _liquidityDeployer,
-        address _algebraFactory,
-        address _positionManager,
-        address _swapRouter,
-        address _weth,
-        address _protocol,
-        address _creator,
-        uint256 _creatorFeeBps,
-        uint256 _creatorGraduationFeeBps,
-        address _globalMessageRegistry,
-        address _curveComputer
-    ) {
-        require(_implementation != address(0), "Invalid implementation");
-        require(_vaultFactory != address(0), "Invalid vault factory");
-        require(_liquidityDeployer != address(0), "Invalid deployer");
-        require(_weth != address(0), "Invalid weth");
-        // _algebraFactory, _positionManager, _swapRouter may be address(0) for placeholder deployments
-        require(_protocol != address(0), "Invalid protocol");
-        require(_creator != address(0), "Invalid creator");
-        require(_globalMessageRegistry != address(0), "Invalid GMR");
-        require(_curveComputer != address(0), "Invalid curveComputer");
-        require(_creatorFeeBps <= 10000, "Invalid creator fee");
-        require(_creatorGraduationFeeBps <= 10000, "Invalid creator grad fee");
+    constructor(CoreConfig memory core, ModuleConfig memory modules) {
+        require(core.implementation != address(0), "Invalid implementation");
+        require(core.vaultFactory != address(0), "Invalid vault factory");
+        require(core.liquidityDeployer != address(0), "Invalid deployer");
+        require(core.weth != address(0), "Invalid weth");
+        require(core.protocol != address(0), "Invalid protocol");
+        require(modules.creator != address(0), "Invalid creator");
+        require(modules.globalMessageRegistry != address(0), "Invalid GMR");
+        require(modules.curveComputer != address(0), "Invalid curveComputer");
+        require(modules.creatorFeeBps <= 10000, "Invalid creator fee");
+        require(modules.creatorGraduationFeeBps <= 10000, "Invalid creator grad fee");
 
-        _initializeOwner(_protocol);
-        _grantRoles(_protocol, PROTOCOL_ROLE);
-        _grantRoles(_creator, CREATOR_ROLE);
+        _initializeOwner(core.protocol);
+        _grantRoles(core.protocol, PROTOCOL_ROLE);
+        _grantRoles(modules.creator, CREATOR_ROLE);
 
-        implementation = _implementation;
-        masterRegistry = IMasterRegistry(_masterRegistry);
-        creator = _creator;
-        creatorFeeBps = _creatorFeeBps;
-        creatorGraduationFeeBps = _creatorGraduationFeeBps;
-        liquidityDeployer = CypherLiquidityDeployerModule(payable(_liquidityDeployer));
-        vaultFactory = UltraAlignmentCypherVaultFactory(_vaultFactory);
-        globalMessageRegistry = _globalMessageRegistry;
-        curveComputer = CurveParamsComputer(_curveComputer);
-        algebraFactory = _algebraFactory;
-        positionManager = _positionManager;
-        swapRouter = _swapRouter;
-        weth = _weth;
+        implementation = core.implementation;
+        masterRegistry = IMasterRegistry(core.masterRegistry);
+        creator = modules.creator;
+        creatorFeeBps = modules.creatorFeeBps;
+        creatorGraduationFeeBps = modules.creatorGraduationFeeBps;
+        liquidityDeployer = CypherLiquidityDeployerModule(payable(core.liquidityDeployer));
+        vaultFactory = UltraAlignmentCypherVaultFactory(core.vaultFactory);
+        globalMessageRegistry = modules.globalMessageRegistry;
+        curveComputer = CurveParamsComputer(modules.curveComputer);
+        algebraFactory = core.algebraFactory;
+        positionManager = core.positionManager;
+        swapRouter = core.swapRouter;
+        weth = core.weth;
+        tierGatingModule = PasswordTierGatingModule(modules.tierGatingModule);
 
         features.push(FeatureUtils.BONDING_CURVE);
         features.push(FeatureUtils.LIQUIDITY_POOL);
@@ -124,53 +133,68 @@ contract ERC404CypherFactory is OwnableRoles, ReentrancyGuard, IFactory {
     }
 
     /**
-     * @notice Create a new ERC404 Cypher bonding instance with a dedicated vault.
-     * @param alignmentTarget The alignment token address used in the vault.
+     * @notice Create a new ERC404 Cypher bonding instance with open gating (no password tiers).
      */
     function createInstance(
-        string memory name,
-        string memory symbol,
-        string memory metadataURI,
-        uint256 nftCount,
-        uint256 profileId,
-        ERC404CypherBondingInstance.TierConfig memory tierConfig,
-        address instanceCreator,
-        address alignmentTarget,
-        string memory styleUri
+        IdentityParams calldata identity,
+        string calldata metadataURI,
+        address alignmentTarget
     ) external payable nonReentrant returns (address instance) {
-        require(msg.value >= instanceCreationFee, "Insufficient fee");
-        require(nftCount > 0, "Invalid NFT count");
-        require(bytes(name).length > 0, "Invalid name");
-        require(instanceCreator != address(0), "Invalid creator");
-        require(alignmentTarget != address(0), "Invalid alignment target");
-        require(!masterRegistry.isNameTaken(name), "Name taken");
+        PasswordTierGatingModule.TierConfig memory emptyConfig;
+        return _createInstanceInternal(identity, metadataURI, alignmentTarget, emptyConfig);
+    }
 
-        // Fee split
+    /**
+     * @notice Create a new ERC404 Cypher bonding instance with password-tier gating.
+     */
+    function createInstanceWithTiers(
+        IdentityParams calldata identity,
+        string calldata metadataURI,
+        address alignmentTarget,
+        PasswordTierGatingModule.TierConfig calldata tiers
+    ) external payable nonReentrant returns (address instance) {
+        return _createInstanceInternal(identity, metadataURI, alignmentTarget, tiers);
+    }
+
+    function _createInstanceInternal(
+        IdentityParams calldata identity,
+        string calldata metadataURI,
+        address alignmentTarget,
+        PasswordTierGatingModule.TierConfig memory tiers
+    ) internal returns (address instance) {
+        require(msg.value >= instanceCreationFee, "Insufficient fee");
+        require(identity.nftCount > 0, "Invalid NFT count");
+        require(bytes(identity.name).length > 0, "Invalid name");
+        require(identity.owner != address(0), "Invalid creator");
+        require(alignmentTarget != address(0), "Invalid alignment target");
+        require(!masterRegistry.isNameTaken(identity.name), "Name taken");
+
         {
             uint256 creatorCut = (instanceCreationFee * creatorFeeBps) / 10000;
             accumulatedCreatorFees += creatorCut;
             accumulatedProtocolFees += instanceCreationFee - creatorCut;
         }
 
-        GraduationProfile memory profile = profiles[profileId];
-        require(profile.active, "Profile not active");
+        ERC404CypherBondingInstance.BondingParams memory bonding = _computeBondingParams(identity.nftCount, identity.profileId);
 
-        uint256 unit = profile.unitPerNFT * 1e18;
-        uint256 maxSupply = nftCount * unit;
-        uint256 liquidityReservePercent = profile.liquidityReserveBps / 100;
-
-        BondingCurveMath.Params memory curveParams = curveComputer.computeCurveParams(
-            nftCount,
-            profile.targetETH,
-            profile.unitPerNFT,
-            profile.liquidityReserveBps
-        );
-
-        // Clone the instance implementation
         instance = LibClone.clone(implementation);
 
-        // Deploy a dedicated vault for this instance
-        UltraAlignmentCypherVault vault = vaultFactory.createVault(
+        address vault = address(_deployVault(alignmentTarget));
+
+        address gatingModuleAddr;
+        if (tiers.passwordHashes.length > 0) {
+            tierGatingModule.configureFor(instance, tiers);
+            gatingModuleAddr = address(tierGatingModule);
+        }
+
+        ERC404CypherBondingInstance(payable(instance)).initialize(identity.owner, vault, bonding, gatingModuleAddr);
+        ERC404CypherBondingInstance(payable(instance)).initializeProtocol(_buildProtocolParams(vault));
+        _setMetadata(instance, identity);
+        _finalizeInstance(instance, identity, metadataURI, vault);
+    }
+
+    function _deployVault(address alignmentTarget) private returns (UltraAlignmentCypherVault) {
+        return vaultFactory.createVault(
             positionManager,
             swapRouter,
             weth,
@@ -180,41 +204,58 @@ contract ERC404CypherFactory is OwnableRoles, ReentrancyGuard, IFactory {
             protocolTreasury != address(0) ? protocolTreasury : owner(),
             address(liquidityDeployer)
         );
+    }
 
-        // Factory calls initialize — factory address must match for DN404Mirror link
-        ERC404CypherBondingInstance(payable(instance)).initialize(
-            name,
-            symbol,
-            maxSupply,
-            liquidityReservePercent,
-            curveParams,
-            tierConfig,
-            address(this),
-            globalMessageRegistry,
-            address(vault),
-            instanceCreator,
-            styleUri,
-            protocolTreasury,
-            bondingFeeBps,
-            graduationFeeBps,
-            creatorGraduationFeeBps,
-            creator,
-            unit,
-            address(liquidityDeployer),
-            address(curveComputer),
-            address(masterRegistry),
-            weth,
-            algebraFactory,
-            positionManager
-        );
+    function _computeBondingParams(uint256 nftCount, uint8 profileId) private view
+        returns (ERC404CypherBondingInstance.BondingParams memory bonding)
+    {
+        GraduationProfile memory profile = profiles[profileId];
+        require(profile.active, "Profile not active");
+        uint256 unit = profile.unitPerNFT * 1e18;
+        bonding = ERC404CypherBondingInstance.BondingParams({
+            maxSupply: nftCount * unit,
+            unit: unit,
+            liquidityReservePercent: profile.liquidityReserveBps / 100,
+            curve: curveComputer.computeCurveParams(
+                nftCount, profile.targetETH, profile.unitPerNFT, profile.liquidityReserveBps
+            )
+        });
+    }
 
-        masterRegistry.registerInstance(instance, address(this), instanceCreator, name, metadataURI, address(vault));
-
+    function _finalizeInstance(
+        address instance,
+        IdentityParams calldata identity,
+        string calldata metadataURI,
+        address vault
+    ) private {
+        masterRegistry.registerInstance(instance, address(this), identity.owner, identity.name, metadataURI, vault);
         if (msg.value > instanceCreationFee) {
             SafeTransferLib.safeTransferETH(msg.sender, msg.value - instanceCreationFee);
         }
+        emit InstanceCreated(instance, identity.owner, identity.name, identity.symbol, vault);
+    }
 
-        emit InstanceCreated(instance, instanceCreator, name, symbol, address(vault));
+    function _buildProtocolParams(address) private view returns (ERC404CypherBondingInstance.ProtocolParams memory) {
+        return ERC404CypherBondingInstance.ProtocolParams({
+            globalMessageRegistry: globalMessageRegistry,
+            protocolTreasury: protocolTreasury,
+            masterRegistry: address(masterRegistry),
+            liquidityDeployer: address(liquidityDeployer),
+            curveComputer: address(curveComputer),
+            weth: weth,
+            algebraFactory: algebraFactory,
+            positionManager: positionManager,
+            bondingFeeBps: bondingFeeBps,
+            graduationFeeBps: graduationFeeBps,
+            creatorGraduationFeeBps: creatorGraduationFeeBps,
+            factoryCreator: creator
+        });
+    }
+
+    function _setMetadata(address instance, IdentityParams calldata identity) private {
+        ERC404CypherBondingInstance(payable(instance)).initializeMetadata(
+            identity.name, identity.symbol, identity.styleUri
+        );
     }
 
     // ── Admin ─────────────────────────────────────────────────────────────────

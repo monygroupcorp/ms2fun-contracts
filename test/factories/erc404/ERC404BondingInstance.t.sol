@@ -18,33 +18,31 @@ contract MockMasterRegistryForStaking {
 /**
  * @title ERC404BondingInstanceTest
  * @notice Comprehensive test suite for ERC404BondingInstance
- * @dev Tests bonding curve, password-protected tiers, messages, and V4 liquidity
+ * @dev Tests bonding curve, gating module, messages, and V4 liquidity
  */
 contract ERC404BondingInstanceTest is Test {
     ERC404BondingInstance public instance;
     ERC404Factory public factory;
-    
+
     address public owner = address(0x1);
     address public user1 = address(0x2);
     address public user2 = address(0x3);
-    
+
     // Test parameters
     uint256 constant MAX_SUPPLY = 10_000_000 * 1e18;
     uint256 constant LIQUIDITY_RESERVE_PERCENT = 10;
-    
+
     BondingCurveMath.Params curveParams;
-    ERC404BondingInstance.TierConfig tierConfig;
-    
+
     bytes32 public passwordHash1;
-    bytes32 public passwordHash2;
-    
-    // Mock addresses (would need proper mocks in full implementation)
+
+    // Mock addresses
     address public mockV4PoolManager = address(0x100);
     address public mockV4Hook = address(0x200);
     address public mockWETH = address(0x300);
     address public mockMasterRegistry = address(0x400);
-    address public mockHookFactory = address(0x500);
     address public mockLiquidityDeployer = address(0x600);
+    address public mockGlobalMsgRegistry = address(0x700);
 
     MockMasterRegistryForStaking public stakingRegistry;
     ERC404StakingModule public stakingModule;
@@ -57,75 +55,76 @@ contract ERC404BondingInstanceTest is Test {
         curveComputer = new CurveParamsComputer(address(this));
 
         vm.startPrank(owner);
-        
-        // Set up password hashes
+
+        // Set up password hash (used in tier-gating tests)
         passwordHash1 = keccak256("password1");
-        passwordHash2 = keccak256("password2");
-        
+
         // Set up bonding curve parameters (matching CULTEXEC404 defaults)
         curveParams = BondingCurveMath.Params({
             initialPrice: 0.025 ether,
             quarticCoeff: 3 gwei,        // 12/4 * 1 gwei
-            cubicCoeff: 1333333333,       // 4/3 * 1 gwei  
+            cubicCoeff: 1333333333,       // 4/3 * 1 gwei
             quadraticCoeff: 2 gwei,      // 4/2 * 1 gwei
             normalizationFactor: 1e7     // 10M tokens
         });
-        
-        // Set up tier config (volume cap mode)
-        bytes32[] memory passwordHashes = new bytes32[](2);
-        passwordHashes[0] = passwordHash1;
-        passwordHashes[1] = passwordHash2;
-        
-        uint256[] memory volumeCaps = new uint256[](2);
-        volumeCaps[0] = 1000 * 1e18;  // Tier 1: 1000 tokens
-        volumeCaps[1] = 10000 * 1e18; // Tier 2: 10000 tokens
-        
-        tierConfig = ERC404BondingInstance.TierConfig({
-            tierType: ERC404BondingInstance.TierType.VOLUME_CAP,
-            passwordHashes: passwordHashes,
-            volumeCaps: volumeCaps,
-            tierUnlockTimes: new uint256[](0) // Not used in volume cap mode
-        });
-        
+
         // Deploy instance via clone + initialize pattern
-        // Note: Factory must match msg.sender for DN404Mirror linking to work
-        // Since we're pranked as 'owner', factory must be 'owner'
+        // Note: factory = msg.sender (pranked as owner), so all 3-step init calls
+        // must occur within this prank context
         ERC404BondingInstance impl = new ERC404BondingInstance();
         instance = ERC404BondingInstance(payable(LibClone.clone(address(impl))));
-        instance.initialize(
-            "Test Token",
-            "TEST",
-            MAX_SUPPLY,
-            LIQUIDITY_RESERVE_PERCENT,
-            curveParams,
-            tierConfig,
-            mockV4PoolManager,
-            address(0), // Hook set later
-            mockWETH,
-            owner, // Factory must match msg.sender (pranked as owner)
-            mockMasterRegistry, // MasterRegistry
-            address(0xBEEF), // vault
-            owner,
-            "", // styleUri
-            address(0xFEE), // protocolTreasury
-            100, // bondingFeeBps (1%)
-            200, // graduationFeeBps (2%)
-            100, // polBps (1%)
-            address(0xC1EA), // factoryCreator
-            40, // creatorGraduationFeeBps (0.4%)
-            3000, // poolFee
-            60, // tickSpacing
-            1_000_000 ether, // unit
-            address(stakingModule), // staking module
-            mockLiquidityDeployer, // liquidity deployer module
-            address(curveComputer), // curve computer
-            mockMasterRegistry // master registry
-        );
+        _initInstance(instance, address(0xBEEF), address(0xFEE), 100, 200, 100, address(0));
+        instance.initializeMetadata("Test Token", "TEST", "");
 
         vm.stopPrank();
 
         // Register instance with staking registry so staking module accepts calls from it
         stakingRegistry.setInstance(address(instance), true);
+    }
+
+    // ========================
+    // Internal Helpers
+    // ========================
+
+    /**
+     * @dev 3-step initialize helper. Must be called within vm.startPrank(owner) context
+     *      because factory = msg.sender is captured during initialize().
+     */
+    function _initInstance(
+        ERC404BondingInstance inst,
+        address vault_,
+        address treasury_,
+        uint256 bondingFeeBps_,
+        uint256 graduationFeeBps_,
+        uint256 polBps_,
+        address hook_
+    ) internal {
+        ERC404BondingInstance.BondingParams memory bonding = ERC404BondingInstance.BondingParams({
+            maxSupply: MAX_SUPPLY,
+            unit: 1_000_000 ether,
+            liquidityReservePercent: LIQUIDITY_RESERVE_PERCENT,
+            curve: curveParams,
+            poolFee: 3000,
+            tickSpacing: 60
+        });
+        inst.initialize(owner, vault_, bonding, hook_, address(0));
+
+        ERC404BondingInstance.ProtocolParams memory proto = ERC404BondingInstance.ProtocolParams({
+            globalMessageRegistry: mockGlobalMsgRegistry,
+            protocolTreasury: treasury_,
+            masterRegistry: mockMasterRegistry,
+            stakingModule: address(stakingModule),
+            liquidityDeployer: mockLiquidityDeployer,
+            curveComputer: address(curveComputer),
+            v4PoolManager: mockV4PoolManager,
+            weth: mockWETH,
+            bondingFeeBps: bondingFeeBps_,
+            graduationFeeBps: graduationFeeBps_,
+            polBps: polBps_,
+            factoryCreator: address(0xC1EA),
+            creatorGraduationFeeBps: 40
+        });
+        inst.initializeProtocol(proto);
     }
 
     function test_Deployment() public {
@@ -161,8 +160,8 @@ contract ERC404BondingInstanceTest is Test {
     }
 
     function test_TierPasswordVerification() public {
-        // Test that password verification happens inline during buyBonding
-        // Previously users had to call unlockTier() first, now it's checked at purchase
+        // Test that buyBonding accepts any password hash when no gating module is set
+        // (address(0) gatingModule = open gating — all purchases allowed)
         vm.startPrank(owner);
         uint256 futureTime = block.timestamp + 1 days;
         instance.setBondingOpenTime(futureTime);
@@ -178,7 +177,7 @@ contract ERC404BondingInstanceTest is Test {
         uint256 cost = _getCost(instance, buyAmount);
         uint256 fee = (cost * instance.bondingFeeBps()) / 10000;
         uint256 totalWithFee = cost + fee;
-        // Should succeed with valid password (inlined verification)
+        // Should succeed — open gating (no module set), password hash is ignored
         instance.buyBonding{value: totalWithFee}(buyAmount, totalWithFee, false, passwordHash1, bytes(""), 0);
         vm.stopPrank();
     }
@@ -197,10 +196,10 @@ contract ERC404BondingInstanceTest is Test {
         instance.setV4Hook(mockV4Hook);
         instance.setBondingActive(true);
         vm.stopPrank();
-        
+
         vm.warp(futureTime);
         vm.deal(user1, 10 ether);
-        
+
         vm.startPrank(user1);
         uint256 buyAmount = 1000 * 1e18;
         uint256 cost = _getCost(instance, buyAmount);
@@ -333,35 +332,8 @@ contract ERC404BondingInstanceTest is Test {
         vm.startPrank(owner);
         ERC404BondingInstance zeroFeeImpl = new ERC404BondingInstance();
         ERC404BondingInstance zeroFeeInstance = ERC404BondingInstance(payable(LibClone.clone(address(zeroFeeImpl))));
-        zeroFeeInstance.initialize(
-            "Zero Fee Token",
-            "ZFT",
-            MAX_SUPPLY,
-            LIQUIDITY_RESERVE_PERCENT,
-            curveParams,
-            tierConfig,
-            mockV4PoolManager,
-            address(0),
-            mockWETH,
-            owner,
-            mockMasterRegistry,
-            address(0xBEEF),
-            owner,
-            "",
-            address(0xFEE),
-            0, // 0% bonding fee
-            0, // 0% graduation fee
-            0, // 0% polBps
-            address(0xC1EA), // factoryCreator
-            40, // creatorGraduationFeeBps
-            3000, // poolFee
-            60, // tickSpacing
-            1_000_000 ether, // unit
-            address(stakingModule), // staking module
-            mockLiquidityDeployer, // liquidity deployer module
-            address(curveComputer), // curve computer
-            mockMasterRegistry // master registry
-        );
+        _initInstance(zeroFeeInstance, address(0xBEEF), address(0xFEE), 0, 0, 0, address(0));
+        zeroFeeInstance.initializeMetadata("Zero Fee Token", "ZFT", "");
         uint256 futureTime = block.timestamp + 1 days;
         zeroFeeInstance.setBondingOpenTime(futureTime);
         zeroFeeInstance.setV4Hook(mockV4Hook);
@@ -387,35 +359,8 @@ contract ERC404BondingInstanceTest is Test {
         vm.startPrank(owner);
         ERC404BondingInstance noTreasuryImplInst = new ERC404BondingInstance();
         ERC404BondingInstance noTreasuryInstance = ERC404BondingInstance(payable(LibClone.clone(address(noTreasuryImplInst))));
-        noTreasuryInstance.initialize(
-            "No Treasury Token",
-            "NTT",
-            MAX_SUPPLY,
-            LIQUIDITY_RESERVE_PERCENT,
-            curveParams,
-            tierConfig,
-            mockV4PoolManager,
-            address(0),
-            mockWETH,
-            owner,
-            mockMasterRegistry,
-            address(0xBEEF),
-            owner,
-            "",
-            address(0), // no treasury
-            100, // bondingFeeBps
-            200, // graduationFeeBps
-            100, // polBps
-            address(0xC1EA), // factoryCreator
-            40, // creatorGraduationFeeBps
-            3000, // poolFee
-            60, // tickSpacing
-            1_000_000 ether, // unit
-            address(stakingModule), // staking module
-            mockLiquidityDeployer, // liquidity deployer module
-            address(curveComputer), // curve computer
-            mockMasterRegistry // master registry
-        );
+        _initInstance(noTreasuryInstance, address(0xBEEF), address(0), 100, 200, 100, address(0));
+        noTreasuryInstance.initializeMetadata("No Treasury Token", "NTT", "");
         uint256 futureTime = block.timestamp + 1 days;
         noTreasuryInstance.setBondingOpenTime(futureTime);
         noTreasuryInstance.setV4Hook(mockV4Hook);
@@ -484,35 +429,8 @@ contract ERC404BondingInstanceTest is Test {
         vm.startPrank(owner);
         ERC404BondingInstance customGradImpl = new ERC404BondingInstance();
         ERC404BondingInstance customInstance = ERC404BondingInstance(payable(LibClone.clone(address(customGradImpl))));
-        customInstance.initialize(
-            "Custom Grad Fee",
-            "CGF",
-            MAX_SUPPLY,
-            LIQUIDITY_RESERVE_PERCENT,
-            curveParams,
-            tierConfig,
-            mockV4PoolManager,
-            address(0),
-            mockWETH,
-            owner,
-            mockMasterRegistry,
-            address(0xBEEF),
-            owner,
-            "",
-            address(0xFEE),
-            100, // bondingFeeBps
-            450, // graduationFeeBps (4.5%)
-            100, // polBps
-            address(0xC1EA), // factoryCreator
-            40, // creatorGraduationFeeBps
-            3000, // poolFee
-            60, // tickSpacing
-            1_000_000 ether, // unit
-            address(stakingModule), // staking module
-            mockLiquidityDeployer, // liquidity deployer module
-            address(curveComputer), // curve computer
-            mockMasterRegistry // master registry
-        );
+        _initInstance(customInstance, address(0xBEEF), address(0xFEE), 100, 450, 100, address(0));
+        customInstance.initializeMetadata("Custom Grad Fee", "CGF", "");
         vm.stopPrank();
 
         assertEq(customInstance.graduationFeeBps(), 450, "Custom graduation fee should be stored");
@@ -522,35 +440,8 @@ contract ERC404BondingInstanceTest is Test {
         vm.startPrank(owner);
         ERC404BondingInstance zeroGradImpl = new ERC404BondingInstance();
         ERC404BondingInstance zeroGradInstance = ERC404BondingInstance(payable(LibClone.clone(address(zeroGradImpl))));
-        zeroGradInstance.initialize(
-            "Zero Grad Fee",
-            "ZGF",
-            MAX_SUPPLY,
-            LIQUIDITY_RESERVE_PERCENT,
-            curveParams,
-            tierConfig,
-            mockV4PoolManager,
-            address(0),
-            mockWETH,
-            owner,
-            mockMasterRegistry,
-            address(0xBEEF),
-            owner,
-            "",
-            address(0xFEE),
-            100, // bondingFeeBps
-            0, // 0% graduation fee
-            100, // polBps
-            address(0xC1EA), // factoryCreator
-            40, // creatorGraduationFeeBps
-            3000, // poolFee
-            60, // tickSpacing
-            1_000_000 ether, // unit
-            address(stakingModule), // staking module
-            mockLiquidityDeployer, // liquidity deployer module
-            address(curveComputer), // curve computer
-            mockMasterRegistry // master registry
-        );
+        _initInstance(zeroGradInstance, address(0xBEEF), address(0xFEE), 100, 0, 100, address(0));
+        zeroGradInstance.initializeMetadata("Zero Grad Fee", "ZGF", "");
         vm.stopPrank();
 
         assertEq(zeroGradInstance.graduationFeeBps(), 0, "Zero graduation fee should be allowed");
@@ -609,35 +500,8 @@ contract ERC404BondingInstanceTest is Test {
         vm.startPrank(owner);
         ERC404BondingInstance customPolImpl = new ERC404BondingInstance();
         ERC404BondingInstance customInstance = ERC404BondingInstance(payable(LibClone.clone(address(customPolImpl))));
-        customInstance.initialize(
-            "Custom POL",
-            "CPOL",
-            MAX_SUPPLY,
-            LIQUIDITY_RESERVE_PERCENT,
-            curveParams,
-            tierConfig,
-            mockV4PoolManager,
-            address(0),
-            mockWETH,
-            owner,
-            mockMasterRegistry,
-            address(0xBEEF),
-            owner,
-            "",
-            address(0xFEE),
-            100, // bondingFeeBps
-            200, // graduationFeeBps
-            250, // polBps (2.5%)
-            address(0xC1EA), // factoryCreator
-            40, // creatorGraduationFeeBps
-            3000, // poolFee
-            60, // tickSpacing
-            1_000_000 ether, // unit
-            address(stakingModule), // staking module
-            mockLiquidityDeployer, // liquidity deployer module
-            address(curveComputer), // curve computer
-            mockMasterRegistry // master registry
-        );
+        _initInstance(customInstance, address(0xBEEF), address(0xFEE), 100, 200, 250, address(0));
+        customInstance.initializeMetadata("Custom POL", "CPOL", "");
         vm.stopPrank();
 
         assertEq(customInstance.polBps(), 250, "Custom POL bps should be stored");
@@ -672,35 +536,8 @@ contract ERC404BondingInstanceTest is Test {
         vm.startPrank(owner);
         ERC404BondingInstance zeroPOLImpl = new ERC404BondingInstance();
         ERC404BondingInstance zeroPOL = ERC404BondingInstance(payable(LibClone.clone(address(zeroPOLImpl))));
-        zeroPOL.initialize(
-            "Zero POL",
-            "ZPOL",
-            MAX_SUPPLY,
-            LIQUIDITY_RESERVE_PERCENT,
-            curveParams,
-            tierConfig,
-            mockV4PoolManager,
-            address(0),
-            mockWETH,
-            owner,
-            mockMasterRegistry,
-            address(0xBEEF),
-            owner,
-            "",
-            address(0xFEE),
-            100,
-            200,
-            0, // 0% polBps
-            address(0xC1EA), // factoryCreator
-            40, // creatorGraduationFeeBps
-            3000, // poolFee
-            60, // tickSpacing
-            1_000_000 ether, // unit
-            address(stakingModule), // staking module
-            mockLiquidityDeployer, // liquidity deployer module
-            address(curveComputer), // curve computer
-            mockMasterRegistry // master registry
-        );
+        _initInstance(zeroPOL, address(0xBEEF), address(0xFEE), 100, 200, 0, address(0));
+        zeroPOL.initializeMetadata("Zero POL", "ZPOL", "");
         vm.stopPrank();
 
         assertEq(zeroPOL.polBps(), 0, "Zero POL bps should be allowed");
@@ -715,35 +552,8 @@ contract ERC404BondingInstanceTest is Test {
         vm.startPrank(owner);
         ERC404BondingInstance noTreasuryPOLImpl = new ERC404BondingInstance();
         ERC404BondingInstance noTreasuryPOL = ERC404BondingInstance(payable(LibClone.clone(address(noTreasuryPOLImpl))));
-        noTreasuryPOL.initialize(
-            "No Treasury POL",
-            "NTPOL",
-            MAX_SUPPLY,
-            LIQUIDITY_RESERVE_PERCENT,
-            curveParams,
-            tierConfig,
-            mockV4PoolManager,
-            address(0),
-            mockWETH,
-            owner,
-            mockMasterRegistry,
-            address(0xBEEF),
-            owner,
-            "",
-            address(0), // no treasury
-            100,
-            200,
-            100, // polBps
-            address(0xC1EA), // factoryCreator
-            40, // creatorGraduationFeeBps
-            3000, // poolFee
-            60, // tickSpacing
-            1_000_000 ether, // unit
-            address(stakingModule), // staking module
-            mockLiquidityDeployer, // liquidity deployer module
-            address(curveComputer), // curve computer
-            mockMasterRegistry // master registry
-        );
+        _initInstance(noTreasuryPOL, address(0xBEEF), address(0), 100, 200, 100, address(0));
+        noTreasuryPOL.initializeMetadata("No Treasury POL", "NTPOL", "");
         vm.stopPrank();
 
         assertEq(noTreasuryPOL.polBps(), 100, "POL bps stored even without treasury");
@@ -784,35 +594,8 @@ contract ERC404BondingInstanceTest is Test {
         vm.startPrank(owner);
         ERC404BondingInstance noHookImpl = new ERC404BondingInstance();
         ERC404BondingInstance noHookInstance = ERC404BondingInstance(payable(LibClone.clone(address(noHookImpl))));
-        noHookInstance.initialize(
-            "No Hook",
-            "NH",
-            MAX_SUPPLY,
-            LIQUIDITY_RESERVE_PERCENT,
-            curveParams,
-            tierConfig,
-            mockV4PoolManager,
-            address(0), // no hook
-            mockWETH,
-            owner,
-            mockMasterRegistry,
-            address(0xBEEF),
-            owner,
-            "",
-            address(0xFEE),
-            100,
-            200,
-            100,
-            address(0xC1EA),
-            40,
-            3000,
-            60,
-            1_000_000 ether, // unit
-            address(stakingModule), // staking module
-            mockLiquidityDeployer, // liquidity deployer module
-            address(curveComputer), // curve computer
-            mockMasterRegistry // master registry
-        );
+        _initInstance(noHookInstance, address(0xBEEF), address(0xFEE), 100, 200, 100, address(0));
+        noHookInstance.initializeMetadata("No Hook", "NH", "");
         uint256 futureTime = block.timestamp + 1 days;
         noHookInstance.setBondingOpenTime(futureTime);
         // Note: cannot setBondingActive without hook, but deployLiquidity
@@ -875,4 +658,3 @@ contract ERC404BondingInstanceTest is Test {
         instance.migrateVault(makeAddr("newVault"));
     }
 }
-

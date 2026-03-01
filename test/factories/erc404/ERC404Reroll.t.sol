@@ -68,47 +68,38 @@ contract ERC404RerollTest is Test {
             normalizationFactor: 1e18
         });
 
-        ERC404BondingInstance.TierConfig memory tierConfig = ERC404BondingInstance.TierConfig({
-            tierType: ERC404BondingInstance.TierType.VOLUME_CAP,
-            passwordHashes: new bytes32[](1),
-            volumeCaps: new uint256[](1),
-            tierUnlockTimes: new uint256[](0)
-        });
-        tierConfig.passwordHashes[0] = keccak256(abi.encodePacked("password1"));
-        tierConfig.volumeCaps[0] = 100_000_000 ether;
-
-        // Note: Factory must match msg.sender for DN404Mirror linking to work
+        // Note: factory = msg.sender (address(this)) is set during initialize()
+        // All 3 init calls must come from the same address (address(this))
         ERC404BondingInstance impl2 = new ERC404BondingInstance();
         token = ERC404BondingInstance(payable(LibClone.clone(address(impl2))));
-        token.initialize(
-            "TestToken",
-            "TEST",
-            MAX_SUPPLY,
-            LIQUIDITY_RESERVE_PERCENT,
-            curveParams,
-            tierConfig,
-            mockPoolManager,
-            mockHook,
-            mockWETH,
-            address(this), // Factory must match msg.sender (deployer)
-            mockMasterRegistry,
-            address(0xBEEF), // vault
-            owner,
-            "", // styleUri
-            address(0xFEE), // protocolTreasury
-            100, // bondingFeeBps (1%)
-            200, // graduationFeeBps (2%)
-            100, // polBps (1%)
-            address(0xC1EA), // factoryCreator
-            40, // creatorGraduationFeeBps (0.4%)
-            3000, // poolFee
-            60, // tickSpacing
-            1_000_000 ether, // unit
-            address(stakingModule), // staking module
-            address(0x600), // mockLiquidityDeployer
-            address(curveComputer), // curve computer
-            address(0x1234) // master registry (mock)
-        );
+
+        ERC404BondingInstance.BondingParams memory bonding = ERC404BondingInstance.BondingParams({
+            maxSupply: MAX_SUPPLY,
+            unit: UNIT,
+            liquidityReservePercent: LIQUIDITY_RESERVE_PERCENT,
+            curve: curveParams,
+            poolFee: 3000,
+            tickSpacing: 60
+        });
+        token.initialize(owner, address(0xBEEF), bonding, mockHook, address(0));
+
+        token.initializeProtocol(ERC404BondingInstance.ProtocolParams({
+            globalMessageRegistry: address(0x700),
+            protocolTreasury: address(0xFEE),
+            masterRegistry: mockMasterRegistry,
+            stakingModule: address(stakingModule),
+            liquidityDeployer: address(0x600),
+            curveComputer: address(curveComputer),
+            v4PoolManager: mockPoolManager,
+            weth: mockWETH,
+            bondingFeeBps: 100,
+            graduationFeeBps: 200,
+            polBps: 100,
+            factoryCreator: address(0xC1EA),
+            creatorGraduationFeeBps: 40
+        }));
+
+        token.initializeMetadata("TestToken", "TEST", "");
 
         // Fund users with ETH
         vm.deal(user1, 10 ether);
