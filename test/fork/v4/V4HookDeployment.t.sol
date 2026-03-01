@@ -4,9 +4,9 @@ pragma solidity ^0.8.20;
 import {Test, console2} from "forge-std/Test.sol";
 import {ForkTestBase} from "../helpers/ForkTestBase.sol";
 import {HookAddressMiner} from "../helpers/HookAddressMiner.sol";
-import {UltraAlignmentHookFactory} from "../../../src/factories/erc404/hooks/UltraAlignmentHookFactory.sol";
-import {UltraAlignmentV4Hook} from "../../../src/factories/erc404/hooks/UltraAlignmentV4Hook.sol";
-import {UltraAlignmentVault} from "../../../src/vaults/uni/UltraAlignmentVault.sol";
+import {UniAlignmentHookFactory} from "../../../src/factories/erc404/hooks/UniAlignmentHookFactory.sol";
+import {UniAlignmentV4Hook} from "../../../src/factories/erc404/hooks/UniAlignmentV4Hook.sol";
+import {UniAlignmentVault} from "../../../src/vaults/uni/UniAlignmentVault.sol";
 import {MockZRouter} from "../../mocks/MockZRouter.sol";
 import {MockVaultPriceValidator} from "../../mocks/MockVaultPriceValidator.sol";
 import {IVaultPriceValidator} from "../../../src/interfaces/IVaultPriceValidator.sol";
@@ -24,7 +24,7 @@ import {IERC20} from "forge-std/interfaces/IERC20.sol";
 
 /**
  * @title V4HookDeployment
- * @notice Integration tests for UltraAlignmentV4Hook deployment through factories
+ * @notice Integration tests for UniAlignmentV4Hook deployment through factories
  * @dev These tests verify the ACTUAL deployment path that failed in production.
  *
  * CRITICAL: This test suite exists because our previous tests used mock hooks that
@@ -35,7 +35,7 @@ import {IERC20} from "forge-std/interfaces/IERC20.sol";
  *
  * What this suite tests:
  * 1. CREATE2 salt mining produces valid hook addresses
- * 2. UltraAlignmentHookFactory.createHook() deploys real hooks
+ * 2. UniAlignmentHookFactory.createHook() deploys real hooks
  * 3. Deployed hooks pass Hooks.validateHookPermissions()
  * 4. End-to-end: Factory → Hook → Pool → Swap → Tax collection
  */
@@ -47,15 +47,15 @@ contract V4HookDeploymentTest is ForkTestBase {
 
     // ========== State ==========
 
-    UltraAlignmentHookFactory public hookFactory;
-    UltraAlignmentVault public vault;
+    UniAlignmentHookFactory public hookFactory;
+    UniAlignmentVault public vault;
     IPoolManager public poolManager;
 
     bool public v4Available;
 
     uint256 constant HOOK_CREATION_FEE = 0.001 ether;
 
-    // Required flags for UltraAlignmentV4Hook (must be set)
+    // Required flags for UniAlignmentV4Hook (must be set)
     uint160 constant REQUIRED_FLAGS = uint160(
         Hooks.BEFORE_SWAP_FLAG | Hooks.AFTER_SWAP_FLAG | Hooks.AFTER_SWAP_RETURNS_DELTA_FLAG
     ); // = 0xC4
@@ -82,7 +82,7 @@ contract V4HookDeploymentTest is ForkTestBase {
         Hooks.AFTER_REMOVE_LIQUIDITY_RETURNS_DELTA_FLAG
     ); // = 0x3FFF
 
-    // Flags that must NOT be set for UltraAlignmentV4Hook
+    // Flags that must NOT be set for UniAlignmentV4Hook
     uint160 constant FORBIDDEN_FLAGS = ALL_HOOK_FLAGS ^ REQUIRED_FLAGS;
 
     // ========== Events ==========
@@ -108,8 +108,8 @@ contract V4HookDeploymentTest is ForkTestBase {
 
         // Deploy real vault (clone pattern)
         {
-            UltraAlignmentVault _impl = new UltraAlignmentVault();
-            vault = UltraAlignmentVault(payable(LibClone.clone(address(_impl))));
+            UniAlignmentVault _impl = new UniAlignmentVault();
+            vault = UniAlignmentVault(payable(LibClone.clone(address(_impl))));
             vault.initialize(
                 WETH,
                 UNISWAP_V4_POOL_MANAGER,
@@ -124,7 +124,7 @@ contract V4HookDeploymentTest is ForkTestBase {
         }
 
         // Deploy real hook factory
-        hookFactory = new UltraAlignmentHookFactory(address(0)); // hookTemplate
+        hookFactory = new UniAlignmentHookFactory(address(0)); // hookTemplate
 
         // Fund test contract
         vm.deal(address(this), 100 ether);
@@ -157,7 +157,7 @@ contract V4HookDeploymentTest is ForkTestBase {
         emit log_named_bytes32("Init code hash", initCodeHash);
 
         // Mine a valid salt
-        (bytes32 salt, address predictedAddress) = HookAddressMiner.mineSaltForUltraAlignmentHook(
+        (bytes32 salt, address predictedAddress) = HookAddressMiner.mineSaltForUniAlignmentHook(
             address(hookFactory),
             initCodeHash
         );
@@ -173,7 +173,7 @@ contract V4HookDeploymentTest is ForkTestBase {
 
         // Verify the predicted address has EXACTLY the correct flags
         assertTrue(
-            HookAddressMiner.isValidUltraAlignmentHookAddress(predictedAddress),
+            HookAddressMiner.isValidUniAlignmentHookAddress(predictedAddress),
             "Predicted address should have exactly the required permission flags"
         );
 
@@ -224,7 +224,7 @@ contract V4HookDeploymentTest is ForkTestBase {
 
         uint256 validCount = 0;
         for (uint256 i = 0; i < arbitraryAddresses.length; i++) {
-            bool isValid = HookAddressMiner.isValidUltraAlignmentHookAddress(arbitraryAddresses[i]);
+            bool isValid = HookAddressMiner.isValidUniAlignmentHookAddress(arbitraryAddresses[i]);
             emit log_named_address("Address", arbitraryAddresses[i]);
             emit log_named_string("Valid for hook?", isValid ? "YES" : "NO");
 
@@ -269,7 +269,7 @@ contract V4HookDeploymentTest is ForkTestBase {
         );
 
         // Step 2: Mine a valid salt
-        (bytes32 salt, address predictedAddress) = HookAddressMiner.mineSaltForUltraAlignmentHook(
+        (bytes32 salt, address predictedAddress) = HookAddressMiner.mineSaltForUniAlignmentHook(
             address(hookFactory),
             initCodeHash
         );
@@ -300,12 +300,12 @@ contract V4HookDeploymentTest is ForkTestBase {
 
         // Step 5: Verify the hook has correct permission flags
         assertTrue(
-            HookAddressMiner.isValidUltraAlignmentHookAddress(deployedHook),
+            HookAddressMiner.isValidUniAlignmentHookAddress(deployedHook),
             "Deployed hook should have valid permission flags"
         );
 
         // Step 6: Verify hook state
-        UltraAlignmentV4Hook hook = UltraAlignmentV4Hook(payable(deployedHook));
+        UniAlignmentV4Hook hook = UniAlignmentV4Hook(payable(deployedHook));
         assertEq(address(hook.poolManager()), address(poolManager), "PoolManager should be set");
         assertEq(address(hook.vault()), address(vault), "Vault should be set");
         assertEq(hook.weth(), WETH, "WETH should be set");
@@ -505,7 +505,7 @@ contract V4HookDeploymentTest is ForkTestBase {
             DEFAULT_LP_FEE_RATE
         );
 
-        (bytes32 salt, ) = HookAddressMiner.mineSaltForUltraAlignmentHook(
+        (bytes32 salt, ) = HookAddressMiner.mineSaltForUniAlignmentHook(
             address(hookFactory),
             initCodeHash
         );
@@ -523,7 +523,7 @@ contract V4HookDeploymentTest is ForkTestBase {
     }
 
     /**
-     * @notice Compute the init code hash for UltraAlignmentV4Hook
+     * @notice Compute the init code hash for UniAlignmentV4Hook
      */
     function _computeHookInitCodeHash(
         address _poolManager,
@@ -534,7 +534,7 @@ contract V4HookDeploymentTest is ForkTestBase {
         uint24 _initialLpFeeRate
     ) internal pure returns (bytes32) {
         bytes memory initCode = abi.encodePacked(
-            type(UltraAlignmentV4Hook).creationCode,
+            type(UniAlignmentV4Hook).creationCode,
             abi.encode(_poolManager, _vault, _weth, _owner, _hookFeeBips, _initialLpFeeRate)
         );
         return keccak256(initCode);

@@ -3,7 +3,7 @@
 pragma solidity ^0.8.20;
 import "forge-std/Test.sol";
 import "../../../src/factories/erc404cypher/CypherLiquidityDeployerModule.sol";
-import "../../../src/vaults/cypher/UltraAlignmentCypherVault.sol";
+import "../../../src/vaults/cypher/CypherAlignmentVault.sol";
 import {LibClone} from "solady/utils/LibClone.sol";
 import {MockERC20} from "../../mocks/MockERC20.sol";
 import {MockWETH} from "../../mocks/MockWETH.sol";
@@ -11,7 +11,7 @@ import {MockAlgebraFactory, MockAlgebraPositionManager, MockAlgebraSwapRouter} f
 
 contract CypherLiquidityDeployerModuleTest is Test {
     CypherLiquidityDeployerModule deployer;
-    UltraAlignmentCypherVault vault;
+    CypherAlignmentVault vault;
     MockAlgebraFactory algebraFactory;
     MockAlgebraPositionManager positionManager;
     MockAlgebraSwapRouter swapRouter;
@@ -31,8 +31,8 @@ contract CypherLiquidityDeployerModuleTest is Test {
 
         deployer = new CypherLiquidityDeployerModule();
 
-        UltraAlignmentCypherVault impl = new UltraAlignmentCypherVault();
-        vault = UltraAlignmentCypherVault(payable(LibClone.clone(address(impl))));
+        CypherAlignmentVault impl = new CypherAlignmentVault();
+        vault = CypherAlignmentVault(payable(LibClone.clone(address(impl))));
         vault.initialize(
             address(positionManager), address(swapRouter), address(weth),
             address(token), factoryCreator, 100, protocolTreasury,

@@ -4,7 +4,7 @@
 
 ## Context
 
-Vault shares are currently internal accounting — `mapping(address => uint256) public benefactorShares` in `UltraAlignmentVault.sol`. Shares are issued proportionally when `convertAndAddLiquidity()` runs and are used solely to calculate fee claim entitlement: `(accumulatedFees * benefactorShares[caller]) / totalShares`. There is no mechanism to transfer, delegate, or trade shares.
+Vault shares are currently internal accounting — `mapping(address => uint256) public benefactorShares` in `UniAlignmentVault.sol`. Shares are issued proportionally when `convertAndAddLiquidity()` runs and are used solely to calculate fee claim entitlement: `(accumulatedFees * benefactorShares[caller]) / totalShares`. There is no mechanism to transfer, delegate, or trade shares.
 
 Benefactors are project instances (contract addresses), not individual users. An ERC404BondingInstance or ERC1155Instance is the benefactor, and it internally redistributes fees to its owner or stakers.
 
@@ -52,7 +52,7 @@ Add a lightweight transfer function to `IAlignmentVault`. No separate token.
 
 Leave shares non-transferable by default. Vaults that need transferability implement an ERC20 internally and expose it via a `sharesToken()` getter on the interface.
 
-- `sharesToken()` returns `address(0)` for non-transferable vaults (UltraAlignmentVault, MockVault)
+- `sharesToken()` returns `address(0)` for non-transferable vaults (UniAlignmentVault, MockVault)
 - `sharesToken()` returns the ERC20 address for transferable vaults (future DAO vault)
 - The ERC20 is the source of truth for share balances in transferable vaults
 - Non-transferable vaults continue using internal mappings unchanged
@@ -71,7 +71,7 @@ Leave shares non-transferable by default. Vaults that need transferability imple
 
 **Option C: Optional via sharesToken()**
 
-This is the right balance. The current vault (UltraAlignmentVault) doesn't need transferability — its benefactors are contract addresses, not humans. Forcing ERC20 overhead on every vault is wasteful. But DAO vaults absolutely need it, and building a custom transfer system (Option B) when ERC20 already exists is foolish.
+This is the right balance. The current vault (UniAlignmentVault) doesn't need transferability — its benefactors are contract addresses, not humans. Forcing ERC20 overhead on every vault is wasteful. But DAO vaults absolutely need it, and building a custom transfer system (Option B) when ERC20 already exists is foolish.
 
 The `supportsCapability(keccak256("SHARE_TRANSFER"))` flag already exists to signal this. The `sharesToken()` getter provides the concrete token address.
 
@@ -91,6 +91,6 @@ function sharesToken() external view returns (address);
 
 ## Impact on Existing Contracts
 
-- **UltraAlignmentVault:** Add `function sharesToken() returns (address) { return address(0); }` — no behavior change
+- **UniAlignmentVault:** Add `function sharesToken() returns (address) { return address(0); }` — no behavior change
 - **MockVault:** Same — return `address(0)`
 - **Future DAO Vault:** Deploy an ERC20Votes token, mint on share issuance, return its address from `sharesToken()`

@@ -28,7 +28,7 @@ import { IERC20 } from "forge-std/interfaces/IERC20.sol";
  * Key insight: In V4, fees are collected by calling modifyLiquidity with liquidityDelta = 0
  * This burns 0 liquidity but settles any accrued fees
  *
- * These tests help us implement fee collection in UltraAlignmentVault.sol
+ * These tests help us implement fee collection in UniAlignmentVault.sol
  */
 contract V4FeeCollectionTest is ForkTestBase, IUnlockCallback {
     using PoolIdLibrary for PoolKey;

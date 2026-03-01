@@ -3,7 +3,7 @@ pragma solidity ^0.8.24;
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
-/// @notice Mock ZAMM for unit testing UltraAlignmentVaultV2
+/// @notice Mock ZAMM for unit testing ZAMMAlignmentVault
 /// Simulates addLiquidity/removeLiquidity/balanceOf/pools() without real math.
 contract MockZAMM {
     struct PoolKey {

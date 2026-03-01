@@ -1,12 +1,12 @@
-// test/vaults/UltraAlignmentCypherVaultFactory.t.sol
+// test/vaults/CypherAlignmentVaultFactory.t.sol
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 import "forge-std/Test.sol";
-import "../../src/vaults/cypher/UltraAlignmentCypherVaultFactory.sol";
-import "../../src/vaults/cypher/UltraAlignmentCypherVault.sol";
+import "../../src/vaults/cypher/CypherAlignmentVaultFactory.sol";
+import "../../src/vaults/cypher/CypherAlignmentVault.sol";
 
-contract UltraAlignmentCypherVaultFactoryTest is Test {
-    UltraAlignmentCypherVaultFactory factory;
+contract CypherAlignmentVaultFactoryTest is Test {
+    CypherAlignmentVaultFactory factory;
 
     address positionManager = makeAddr("positionManager");
     address swapRouter = makeAddr("swapRouter");
@@ -17,12 +17,12 @@ contract UltraAlignmentCypherVaultFactoryTest is Test {
     address liquidityDeployer = makeAddr("deployer");
 
     function setUp() public {
-        UltraAlignmentCypherVault impl = new UltraAlignmentCypherVault();
-        factory = new UltraAlignmentCypherVaultFactory(address(impl));
+        CypherAlignmentVault impl = new CypherAlignmentVault();
+        factory = new CypherAlignmentVaultFactory(address(impl));
     }
 
     function test_createVault_deploysClone() public {
-        UltraAlignmentCypherVault vault = factory.createVault(
+        CypherAlignmentVault vault = factory.createVault(
             positionManager, swapRouter, weth, alignmentToken,
             creator, 100, treasury, liquidityDeployer
         );
@@ -33,11 +33,11 @@ contract UltraAlignmentCypherVaultFactoryTest is Test {
     }
 
     function test_createVault_multipleVaultsDifferentAddresses() public {
-        UltraAlignmentCypherVault v1 = factory.createVault(
+        CypherAlignmentVault v1 = factory.createVault(
             positionManager, swapRouter, weth, alignmentToken,
             creator, 100, treasury, liquidityDeployer
         );
-        UltraAlignmentCypherVault v2 = factory.createVault(
+        CypherAlignmentVault v2 = factory.createVault(
             positionManager, swapRouter, weth, alignmentToken,
             creator, 200, treasury, liquidityDeployer
         );

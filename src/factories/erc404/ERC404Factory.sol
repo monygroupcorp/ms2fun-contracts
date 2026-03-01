@@ -20,14 +20,14 @@ import {IdentityParams} from "../../interfaces/IFactoryTypes.sol";
 import {PasswordTierGatingModule} from "../../gating/PasswordTierGatingModule.sol";
 import {IGatingModule} from "../../gating/IGatingModule.sol";
 
-interface IUltraAlignmentVaultV1 {
+interface IUniAlignmentVaultV1 {
     function hook() external view returns (address);
 }
 
 /**
  * @title ERC404Factory
  * @notice Factory contract for deploying ERC404 token instances with ultraalignment
- * @dev Requires vault to have its hook pre-configured (created via UltraAlignmentHookFactory.createVaultWithHook)
+ * @dev Requires vault to have its hook pre-configured (created via UniAlignmentHookFactory.createVaultWithHook)
  */
 contract ERC404Factory is OwnableRoles, ReentrancyGuard, IFactory {
     uint256 public constant PROTOCOL_ROLE = _ROLE_0;  // 1 << 0 = 1
@@ -204,7 +204,7 @@ contract ERC404Factory is OwnableRoles, ReentrancyGuard, IFactory {
 
         // Resolve hook from vault
         address hook;
-        try IUltraAlignmentVaultV1(payable(identity.vault)).hook() returns (address h) {
+        try IUniAlignmentVaultV1(payable(identity.vault)).hook() returns (address h) {
             hook = h;
         } catch {}
         require(hook != address(0) && hook.code.length > 0, "Vault hook required");

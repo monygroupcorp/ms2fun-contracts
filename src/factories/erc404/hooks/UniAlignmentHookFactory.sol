@@ -4,15 +4,15 @@ pragma solidity ^0.8.20;
 import {Ownable} from "solady/auth/Ownable.sol";
 import {ReentrancyGuard} from "solady/utils/ReentrancyGuard.sol";
 import {IPoolManager} from "v4-core/interfaces/IPoolManager.sol";
-import {UltraAlignmentV4Hook} from "./UltraAlignmentV4Hook.sol";
+import {UniAlignmentV4Hook} from "./UniAlignmentV4Hook.sol";
 import {IAlignmentVault} from "../../../interfaces/IAlignmentVault.sol";
 
 /**
- * @title UltraAlignmentHookFactory
- * @notice Factory for deploying UltraAlignment V4 hooks
+ * @title UniAlignmentHookFactory
+ * @notice Factory for deploying UniAlignment V4 hooks
  * @dev Hooks are deployed via CREATE2 for deterministic addresses required by Uniswap V4
  */
-contract UltraAlignmentHookFactory is Ownable, ReentrancyGuard {
+contract UniAlignmentHookFactory is Ownable, ReentrancyGuard {
     address public hookTemplate;
     uint256 public hookCreationFee;
 
@@ -66,7 +66,7 @@ contract UltraAlignmentHookFactory is Ownable, ReentrancyGuard {
 
         // Deploy new hook instance using CREATE2 for deterministic address
         // Hook owner is always the protocol (hook factory owner), not the artist
-        hook = address(new UltraAlignmentV4Hook{salt: salt}(
+        hook = address(new UniAlignmentV4Hook{salt: salt}(
             IPoolManager(poolManager),
             IAlignmentVault(payable(vault)),
             wethAddr,

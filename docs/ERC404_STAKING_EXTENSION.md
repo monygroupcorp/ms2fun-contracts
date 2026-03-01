@@ -57,7 +57,7 @@ Extend ERC404Instance to support:
 ## Related Files
 
 - `src/factories/erc404/ERC404Instance.sol` - Where staking would be implemented
-- `src/vaults/UltraAlignmentVault.sol` - Vault's `claimBenefactorFees()` method (lines 439+)
+- `src/vaults/UniAlignmentVault.sol` - Vault's `claimBenefactorFees()` method (lines 439+)
 - `src/factories/erc1155/ERC1155Instance.sol` - Reference: `claimVaultFees()` for creator claiming (lines ~366+)
 
 ## Status

@@ -49,7 +49,7 @@ Progress: [██░░░░] 33% (1/3 tasks complete)
 
 ✅ Task 1.1: Create IAlignmentVault.sol
 ✅ Task 1.3: Create MockVault.sol (BONUS - did this ahead of schedule!)
-⏳ Task 1.2: Update UltraAlignmentVault
+⏳ Task 1.2: Update UniAlignmentVault
 ⏳ Task 1.4: Write compliance tests
 ⏳ Task 1.5: Documentation
 ```
@@ -58,9 +58,9 @@ Progress: [██░░░░] 33% (1/3 tasks complete)
 
 ## Next Steps (In Order)
 
-### Step 1: Update UltraAlignmentVault.sol ⏳
+### Step 1: Update UniAlignmentVault.sol ⏳
 
-**File**: `src/vaults/UltraAlignmentVault.sol`
+**File**: `src/vaults/UniAlignmentVault.sol`
 
 **Changes Needed**:
 ```solidity
@@ -68,7 +68,7 @@ Progress: [██░░░░] 33% (1/3 tasks complete)
 import {IAlignmentVault} from "../interfaces/IAlignmentVault.sol";
 
 // 2. Update contract declaration
-contract UltraAlignmentVault is
+contract UniAlignmentVault is
     ReentrancyGuard,
     Ownable,
     IUnlockCallback,
@@ -116,22 +116,22 @@ pragma solidity ^0.8.20;
 
 import "forge-std/Test.sol";
 import {IAlignmentVault} from "../../src/interfaces/IAlignmentVault.sol";
-import {UltraAlignmentVault} from "../../src/vaults/UltraAlignmentVault.sol";
+import {UniAlignmentVault} from "../../src/vaults/UniAlignmentVault.sol";
 import {MockVault} from "../mocks/MockVault.sol";
 import {Currency} from "v4-core/types/Currency.sol";
 
 contract VaultInterfaceComplianceTest is Test {
-    UltraAlignmentVault ultraVault;
+    UniAlignmentVault ultraVault;
     MockVault mockVault;
 
     function setUp() public {
         // Deploy both vaults
-        ultraVault = new UltraAlignmentVault(...);
+        ultraVault = new UniAlignmentVault(...);
         mockVault = new MockVault();
     }
 
     // Test 1: Interface compliance
-    function test_UltraAlignmentVault_ImplementsInterface() public {
+    function test_UniAlignmentVault_ImplementsInterface() public {
         IAlignmentVault vault = IAlignmentVault(address(ultraVault));
         assertEq(vault.vaultType(), "UniswapV4LP");
     }
@@ -209,7 +209,7 @@ contract VaultInterfaceComplianceTest is Test {
 
 Before moving to Phase 2, ensure:
 
-- [ ] UltraAlignmentVault compiles with interface
+- [ ] UniAlignmentVault compiles with interface
 - [ ] `forge build` succeeds
 - [ ] MockVault compiles
 - [ ] VaultInterfaceCompliance tests all pass
@@ -246,7 +246,7 @@ ms2fun-contracts/
 │   ├── interfaces/
 │   │   └── IAlignmentVault.sol ✅ (DONE)
 │   ├── vaults/
-│   │   ├── UltraAlignmentVault.sol ⏳ (UPDATE NEEDED)
+│   │   ├── UniAlignmentVault.sol ⏳ (UPDATE NEEDED)
 │   │   └── VaultRouter.sol (Phase 5)
 │   ├── governance/
 │   │   ├── FactoryApprovalGovernance.sol (existing)
@@ -259,7 +259,7 @@ ms2fun-contracts/
 │   │   └── MockVault.sol ✅ (DONE)
 │   ├── vaults/
 │   │   ├── VaultInterfaceCompliance.t.sol ⏳ (TODO)
-│   │   └── UltraAlignmentVault.t.sol (existing)
+│   │   └── UniAlignmentVault.t.sol (existing)
 │   └── governance/
 │       └── VaultApprovalGovernance.t.sol (Phase 2)
 │
@@ -284,7 +284,7 @@ ms2fun-contracts/
 | `VAULT_EXPANSION_TRACKER.md` | Complete project tracker | ✅ Done |
 | `VAULT_GOVERNANCE_STRATEGY.md` | Technical architecture | ✅ Done |
 | `VAULT_EXPANSION_SUMMARY.md` | Executive overview | ✅ Done |
-| `src/vaults/UltraAlignmentVault.sol` | Production vault (needs update) | ⏳ Next |
+| `src/vaults/UniAlignmentVault.sol` | Production vault (needs update) | ⏳ Next |
 
 ---
 
@@ -366,11 +366,11 @@ forge fmt
 
 ## Questions & Troubleshooting
 
-### Q: Does updating UltraAlignmentVault break existing instances?
+### Q: Does updating UniAlignmentVault break existing instances?
 **A**: No! Adding `implements IAlignmentVault` and `vaultType()` are pure additions. Existing instances continue working exactly as before.
 
 ### Q: Can I use MockVault in production?
-**A**: NO! MockVault is for testing only. It doesn't generate yield, just stores ETH. Use UltraAlignmentVault for production.
+**A**: NO! MockVault is for testing only. It doesn't generate yield, just stores ETH. Use UniAlignmentVault for production.
 
 ### Q: What if I want to test with a different vault type?
 **A**: Create another mock! Clone MockVault, change `vaultType()` return value, and customize behavior.
@@ -386,13 +386,13 @@ forge fmt
 ## Progress Tracking
 
 **Current Week**: Week 1 (Phase 1)
-**Current Task**: Task 1.2 - Update UltraAlignmentVault
+**Current Task**: Task 1.2 - Update UniAlignmentVault
 **Overall Progress**: 4% (1/23 core tasks)
 
 **Phase 1 Progress**: 33% (1/3 tasks)
 - [x] Task 1.1: Create IAlignmentVault.sol
 - [x] Task 1.3: Create MockVault.sol (bonus)
-- [ ] Task 1.2: Update UltraAlignmentVault
+- [ ] Task 1.2: Update UniAlignmentVault
 - [ ] Task 1.4: Write compliance tests
 - [ ] Task 1.5: Documentation
 
@@ -410,7 +410,7 @@ forge fmt
 
 ## Let's Go! 🚀
 
-**Your Next Action**: Update `src/vaults/UltraAlignmentVault.sol`
+**Your Next Action**: Update `src/vaults/UniAlignmentVault.sol`
 
 1. Add `import {IAlignmentVault}`
 2. Add `IAlignmentVault` to contract declaration

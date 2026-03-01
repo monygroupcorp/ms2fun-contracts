@@ -28,7 +28,7 @@ import { IERC20 } from "forge-std/interfaces/IERC20.sol";
  * NOTE: V4 positions are NOT NFTs (unlike V3)
  * Position ID = keccak256(owner, tickLower, tickUpper, salt)
  *
- * These tests help us implement _addToLpPosition() in UltraAlignmentVault.sol
+ * These tests help us implement _addToLpPosition() in UniAlignmentVault.sol
  */
 contract V4PositionCreationTest is ForkTestBase, IUnlockCallback {
     using PoolIdLibrary for PoolKey;

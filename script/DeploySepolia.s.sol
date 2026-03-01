@@ -14,7 +14,7 @@ import {ProtocolTreasuryV1} from "../src/treasury/ProtocolTreasuryV1.sol";
 import {GrandCentral} from "../src/dao/GrandCentral.sol";
 import {ShareOffering} from "../src/dao/conductors/ShareOffering.sol";
 import {StipendConductor} from "../src/dao/conductors/StipendConductor.sol";
-import {UltraAlignmentVault} from "../src/vaults/uni/UltraAlignmentVault.sol";
+import {UniAlignmentVault} from "../src/vaults/uni/UniAlignmentVault.sol";
 import {UniswapVaultPriceValidator} from "../src/peripherals/UniswapVaultPriceValidator.sol";
 import {IVaultPriceValidator} from "../src/interfaces/IVaultPriceValidator.sol";
 import {ERC404Factory} from "../src/factories/erc404/ERC404Factory.sol";
@@ -29,8 +29,8 @@ import {PromotionBadges} from "../src/promotion/PromotionBadges.sol";
 import {ERC404CypherFactory} from "../src/factories/erc404cypher/ERC404CypherFactory.sol";
 import {ERC404CypherBondingInstance} from "../src/factories/erc404cypher/ERC404CypherBondingInstance.sol";
 import {CypherLiquidityDeployerModule} from "../src/factories/erc404cypher/CypherLiquidityDeployerModule.sol";
-import {UltraAlignmentCypherVault} from "../src/vaults/cypher/UltraAlignmentCypherVault.sol";
-import {UltraAlignmentCypherVaultFactory} from "../src/vaults/cypher/UltraAlignmentCypherVaultFactory.sol";
+import {CypherAlignmentVault} from "../src/vaults/cypher/CypherAlignmentVault.sol";
+import {CypherAlignmentVaultFactory} from "../src/vaults/cypher/CypherAlignmentVaultFactory.sol";
 import {MockSafe} from "../test/mocks/MockSafe.sol";
 import {MockERC20} from "../test/mocks/MockERC20.sol";
 
@@ -72,7 +72,7 @@ contract DeploySepolia is Script {
     MockERC20 public testToken;
     uint256 public alignmentTargetId;
 
-    UltraAlignmentVault public vault;
+    UniAlignmentVault public vault;
 
     LaunchManager public launchManager;
     CurveParamsComputer public curveParamsComputer;
@@ -82,7 +82,7 @@ contract DeploySepolia is Script {
     ERC721AuctionFactory public erc721Factory;
     ERC404CypherFactory public erc404CypherFactory;
     CypherLiquidityDeployerModule public cypherLiquidityDeployer;
-    UltraAlignmentCypherVaultFactory public cypherVaultFactory;
+    CypherAlignmentVaultFactory public cypherVaultFactory;
 
     PromotionBadges public promotionBadges;
 
@@ -187,12 +187,12 @@ contract DeploySepolia is Script {
 
         // ============ Phase 4: Vault ============
 
-        // 12. UltraAlignmentVault (peripherals + clone pattern)
+        // 12. UniAlignmentVault (peripherals + clone pattern)
         UniswapVaultPriceValidator priceValidator = new UniswapVaultPriceValidator(
             weth, v2Factory, v3Factory, poolManager, 1000
         );
-        UltraAlignmentVault vaultImpl = new UltraAlignmentVault();
-        vault = UltraAlignmentVault(payable(LibClone.clone(address(vaultImpl))));
+        UniAlignmentVault vaultImpl = new UniAlignmentVault();
+        vault = UniAlignmentVault(payable(LibClone.clone(address(vaultImpl))));
         vault.initialize(
             weth,
             poolManager,
@@ -311,8 +311,8 @@ contract DeploySepolia is Script {
     }
 
     function _deployCypherFactory(address deployer, address weth) private {
-        UltraAlignmentCypherVault cypherVaultImpl = new UltraAlignmentCypherVault();
-        cypherVaultFactory = new UltraAlignmentCypherVaultFactory(address(cypherVaultImpl));
+        CypherAlignmentVault cypherVaultImpl = new CypherAlignmentVault();
+        cypherVaultFactory = new CypherAlignmentVaultFactory(address(cypherVaultImpl));
         cypherLiquidityDeployer = new CypherLiquidityDeployerModule();
 
         ERC404CypherBondingInstance erc404CypherImpl = new ERC404CypherBondingInstance();
@@ -363,7 +363,7 @@ contract DeploySepolia is Script {
         console.log("StipendConductor:", address(stipendConductor));
         console.log("MockSafe/Safe:", safe);
         console.log("TestToken (ERC20):", address(testToken));
-        console.log("UltraAlignmentVault:", address(vault));
+        console.log("UniAlignmentVault:", address(vault));
         console.log("ERC404Factory:", address(erc404Factory));
         console.log("ERC1155Factory:", address(erc1155Factory));
         console.log("ERC721AuctionFactory:", address(erc721Factory));

@@ -2,15 +2,15 @@
 pragma solidity ^0.8.20;
 
 import "forge-std/Test.sol";
-import "../../src/vaults/uni/UltraAlignmentVaultFactory.sol";
-import "../../src/vaults/uni/UltraAlignmentVault.sol";
+import "../../src/vaults/uni/UniAlignmentVaultFactory.sol";
+import "../../src/vaults/uni/UniAlignmentVault.sol";
 import {IVaultPriceValidator} from "../../src/interfaces/IVaultPriceValidator.sol";
 import {MockZRouter} from "../mocks/MockZRouter.sol";
 import {MockVaultPriceValidator} from "../mocks/MockVaultPriceValidator.sol";
 import {MockEXECToken} from "../mocks/MockEXECToken.sol";
 
-contract UltraAlignmentVaultFactoryTest is Test {
-    UltraAlignmentVaultFactory public factory;
+contract UniAlignmentVaultFactoryTest is Test {
+    UniAlignmentVaultFactory public factory;
     MockEXECToken public alignmentToken;
 
     address public owner;
@@ -32,7 +32,7 @@ contract UltraAlignmentVaultFactoryTest is Test {
         mockZRouter = new MockZRouter();
         mockPriceValidator = new MockVaultPriceValidator();
 
-        factory = new UltraAlignmentVaultFactory(
+        factory = new UniAlignmentVaultFactory(
             mockWeth,
             mockPoolManager,
             address(mockZRouter),
@@ -50,7 +50,7 @@ contract UltraAlignmentVaultFactoryTest is Test {
             IVaultPriceValidator(address(0))
         );
 
-        assertEq(UltraAlignmentVault(payable(vault)).alignmentToken(), address(alignmentToken));
+        assertEq(UniAlignmentVault(payable(vault)).alignmentToken(), address(alignmentToken));
     }
 
     function test_deployVault_usesFactoryZRouterConfig() public {
@@ -61,11 +61,11 @@ contract UltraAlignmentVaultFactoryTest is Test {
             IVaultPriceValidator(address(0))
         );
 
-        assertEq(UltraAlignmentVault(payable(vault)).zRouter(), factory.zRouter(), "Should use factory zRouter");
-        assertEq(UltraAlignmentVault(payable(vault)).zRouterFee(), factory.zRouterFee(), "Should use factory fee");
-        assertEq(UltraAlignmentVault(payable(vault)).zRouterTickSpacing(), factory.zRouterTickSpacing(), "Should use factory tickSpacing");
+        assertEq(UniAlignmentVault(payable(vault)).zRouter(), factory.zRouter(), "Should use factory zRouter");
+        assertEq(UniAlignmentVault(payable(vault)).zRouterFee(), factory.zRouterFee(), "Should use factory fee");
+        assertEq(UniAlignmentVault(payable(vault)).zRouterTickSpacing(), factory.zRouterTickSpacing(), "Should use factory tickSpacing");
         assertEq(
-            address(UltraAlignmentVault(payable(vault)).priceValidator()),
+            address(UniAlignmentVault(payable(vault)).priceValidator()),
             address(factory.defaultPriceValidator()),
             "Should use default price validator"
         );
@@ -82,7 +82,7 @@ contract UltraAlignmentVaultFactoryTest is Test {
         );
 
         assertEq(
-            address(UltraAlignmentVault(payable(vault)).priceValidator()),
+            address(UniAlignmentVault(payable(vault)).priceValidator()),
             address(customValidator),
             "Should use custom price validator"
         );
@@ -106,10 +106,10 @@ contract UltraAlignmentVaultFactoryTest is Test {
         );
 
         assertTrue(vault1 != vault2, "Vaults should be different addresses");
-        assertEq(UltraAlignmentVault(payable(vault1)).alignmentToken(), address(alignmentToken));
-        assertEq(UltraAlignmentVault(payable(vault2)).alignmentToken(), address(token2));
-        assertEq(UltraAlignmentVault(payable(vault1)).creatorYieldCutBps(), 100);
-        assertEq(UltraAlignmentVault(payable(vault2)).creatorYieldCutBps(), 200);
+        assertEq(UniAlignmentVault(payable(vault1)).alignmentToken(), address(alignmentToken));
+        assertEq(UniAlignmentVault(payable(vault2)).alignmentToken(), address(token2));
+        assertEq(UniAlignmentVault(payable(vault1)).creatorYieldCutBps(), 100);
+        assertEq(UniAlignmentVault(payable(vault2)).creatorYieldCutBps(), 200);
     }
 
     function test_deployVault_emitsVaultDeployed() public {

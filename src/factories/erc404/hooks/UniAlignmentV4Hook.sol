@@ -16,14 +16,14 @@ import {IAlignmentVault} from "../../../interfaces/IAlignmentVault.sol";
 import {IERC20} from "../../../shared/interfaces/IERC20.sol";
 
 /**
- * @title UltraAlignmentV4Hook
+ * @title UniAlignmentV4Hook
  * @notice Uniswap v4 hook that collects alignment fees on swaps and sends them to the vault
  * @dev Fees are sent directly to vault with project instance tracking for contribution metrics.
  *      Uses beforeSwap for dynamic LP fee override and afterSwap for ETH-side fee collection.
  *      Hook fee (hookFeeBips) is immutable — set once at deploy, no governance risk.
  *      LP fee (lpFeeRate) is owner-adjustable via setLpFeeRate().
  */
-contract UltraAlignmentV4Hook is IHooks, ReentrancyGuard, Ownable {
+contract UniAlignmentV4Hook is IHooks, ReentrancyGuard, Ownable {
     using Hooks for IHooks;
     using SafeCast for uint256;
     using SafeCast for int128;

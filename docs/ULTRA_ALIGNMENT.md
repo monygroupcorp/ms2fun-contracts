@@ -19,7 +19,7 @@ Benefactors can claim fees multiple times by tracking the value of their shares 
 
 ### Ultra-Alignment Vault V2 (Core)
 
-The UltraAlignmentVaultV2 contract is the central hub for collecting contributions and managing fee distribution.
+The ZAMMAlignmentVault contract is the central hub for collecting contributions and managing fee distribution.
 
 **Contribution Sources:**
 - **Direct ETH**: Anyone can send ETH directly to the vault (via `receive()`)
@@ -65,7 +65,7 @@ V4 hooks collect taxes from DEX swaps and direct them to the vault with explicit
 
 ## Data Model
 
-### Storage Variables (UltraAlignmentVaultV2)
+### Storage Variables (ZAMMAlignmentVault)
 
 ```solidity
 // Contribution tracking (per-benefactor)

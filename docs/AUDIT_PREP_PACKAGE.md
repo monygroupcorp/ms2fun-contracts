@@ -19,10 +19,10 @@
 
 ### Primary Concern: Fund Drainage
 The worst-case scenario is an attacker draining vault funds or manipulating fee distribution to steal ETH. Key attack surfaces:
-1. `UltraAlignmentVault.claimFees()` - ETH distribution to benefactors
-2. `UltraAlignmentVault.convertAndAddLiquidity()` - ETH-to-LP conversion with share issuance
+1. `UniAlignmentVault.claimFees()` - ETH distribution to benefactors
+2. `UniAlignmentVault.convertAndAddLiquidity()` - ETH-to-LP conversion with share issuance
 3. `ERC404BondingInstance.claimStakerRewards()` - Staking reward claims
-4. `UltraAlignmentV4Hook._processTax()` - Hook tax forwarding to vault
+4. `UniAlignmentV4Hook._processTax()` - Hook tax forwarding to vault
 
 ### Areas of Concern (All Four Pillars)
 1. **Vault/Fee Distribution** - Share math, O(1) claims, delta tracking, multi-DEX fee routing
@@ -46,7 +46,7 @@ The worst-case scenario is an attacker draining vault funds or manipulating fee 
 **Date:** 2026-02-09
 
 ### Parsing Limitations
-Slither could not parse 3 functions in `UltraAlignmentVault.sol` due to Solidity 0.8.24 via-IR incompatibility:
+Slither could not parse 3 functions in `UniAlignmentVault.sol` due to Solidity 0.8.24 via-IR incompatibility:
 - `_convertVaultFeesToEth()` (lines 539-591)
 - `_swapViaV4()` (lines 913-976)
 - `_getV4PriceAndLiquidity()` (lines 1450-1496)
@@ -97,9 +97,9 @@ All flagged functions have `nonReentrant` modifiers. Cross-function reentrancy r
 
 | Suite | Tests | Pass | Fail |
 |-------|-------|------|------|
-| UltraAlignmentVaultTest | 70 | 70 | 0 |
-| UltraAlignmentV4HookTest | 32 | 32 | 0 |
-| UltraAlignmentHookFactoryTest | 41 | 41 | 0 |
+| UniAlignmentVaultTest | 70 | 70 | 0 |
+| UniAlignmentV4HookTest | 32 | 32 | 0 |
+| UniAlignmentHookFactoryTest | 41 | 41 | 0 |
 | VaultApprovalGovernanceTest | 28 | 28 | 0 |
 | VaultInterfaceComplianceTest | 19 | 19 | 0 |
 | VaultRegistryTest | 49 | 49 | 0 |
@@ -150,7 +150,7 @@ Additional fork test suites exist under `test/fork/` covering:
 
 ### RESOLVED: All Test Stubs Removed
 
-All 5 TEST STUB markers and 2 mock stubs have been **removed** from `src/vaults/UltraAlignmentVault.sol`. Test behavior has been moved to `test/helpers/TestableUltraAlignmentVault.sol` which overrides `_swapETHForTarget()` and `_addToLpPosition()` via virtual dispatch.
+All 5 TEST STUB markers and 2 mock stubs have been **removed** from `src/vaults/UniAlignmentVault.sol`. Test behavior has been moved to `test/helpers/TestableUniAlignmentVault.sol` which overrides `_swapETHForTarget()` and `_addToLpPosition()` via virtual dispatch.
 
 **Verification:** `grep -rn "TEST STUB" src/` returns 0 results.
 
@@ -158,7 +158,7 @@ All 5 TEST STUB markers and 2 mock stubs have been **removed** from `src/vaults/
 
 | Item | Status | Action Taken |
 |------|--------|--------------|
-| `_transferCurrency()` | REMOVED | Deleted from UltraAlignmentVault.sol |
+| `_transferCurrency()` | REMOVED | Deleted from UniAlignmentVault.sol |
 | `analyticsModule` + `setAnalyticsModule()` + event | REMOVED | Deleted from VaultRegistry.sol |
 | `ERC404Instance` stub contract | REMOVED | Deleted from ERC404Factory.sol |
 | `HookRegistered` event | NOT DEAD CODE | Event IS emitted in `registerHook()` - false positive in original analysis |
@@ -172,7 +172,7 @@ All 5 TEST STUB markers and 2 mock stubs have been **removed** from `src/vaults/
 **Core Contracts (highest priority):**
 | File | LOC | Description |
 |------|-----|-------------|
-| `src/vaults/UltraAlignmentVault.sol` | 2,034 | Share-based fee vault (LARGEST) |
+| `src/vaults/UniAlignmentVault.sol` | 2,034 | Share-based fee vault (LARGEST) |
 | `src/factories/erc404/ERC404BondingInstance.sol` | 1,440 | Bonding curve + staking |
 | `src/governance/FactoryApprovalGovernance.sol` | 831 | Factory approval voting |
 | `src/governance/VaultApprovalGovernance.sol` | 837 | Vault approval voting |
@@ -184,8 +184,8 @@ All 5 TEST STUB markers and 2 mock stubs have been **removed** from `src/vaults/
 | File | LOC | Description |
 |------|-----|-------------|
 | `src/factories/erc1155/ERC1155Instance.sol` | 933 | Open-edition ERC1155 |
-| `src/factories/erc404/hooks/UltraAlignmentV4Hook.sol` | 266 | V4 hook |
-| `src/factories/erc404/hooks/UltraAlignmentHookFactory.sol` | 126 | Hook factory |
+| `src/factories/erc404/hooks/UniAlignmentV4Hook.sol` | 266 | V4 hook |
+| `src/factories/erc404/hooks/UniAlignmentHookFactory.sol` | 126 | Hook factory |
 | `src/factories/erc404/ERC404Factory.sol` | 205 | ERC404 factory |
 | `src/factories/erc1155/ERC1155Factory.sol` | 162 | ERC1155 factory |
 | `src/registry/VaultRegistry.sol` | 234 | Vault tracking |
@@ -300,15 +300,15 @@ A comprehensive pre-audit review identified 17 findings:
 | Actor | Contracts | Powers |
 |-------|-----------|--------|
 | **Protocol Owner** | MasterRegistryV1, VaultRegistry | UUPS upgrades, parameter changes, factory/vault registration, abdication |
-| **Vault Owner** | UltraAlignmentVault | Set alignment token, pool keys, conversion rewards, dust threshold |
+| **Vault Owner** | UniAlignmentVault | Set alignment token, pool keys, conversion rewards, dust threshold |
 | **Factory Owner** | ERC404Factory, ERC1155Factory | Set creation fees, withdraw fees |
 | **Instance Creator** | ERC404BondingInstance, ERC1155Instance | Bonding config, liquidity deployment, staking enable, edition creation |
 | **EXEC Token Holders** | Governance contracts | Vote on factory/vault applications via deposit-weighted voting |
-| **Benefactors** | UltraAlignmentVault | Claim proportional fees based on shares |
+| **Benefactors** | UniAlignmentVault | Claim proportional fees based on shares |
 | **Stakers** | ERC404BondingInstance | Stake tokens, claim staking rewards |
 | **Queue Renters** | FeaturedQueueManager | Rent featured positions, renew, bump |
 | **Cleanup Callers** | FeaturedQueueManager, MasterRegistryV1 | Trigger cleanup of expired items for gas-based rewards |
-| **Uniswap V4 PoolManager** | UltraAlignmentV4Hook | Invoke `afterSwap` callback for tax collection |
+| **Uniswap V4 PoolManager** | UniAlignmentV4Hook | Invoke `afterSwap` callback for tax collection |
 
 ### Owner Privileges (Centralization Risks)
 - `setAlignmentToken()` - Can change target token after contributions
@@ -363,7 +363,7 @@ A comprehensive pre-audit review identified 17 findings:
 
 ### Known Issues (Not Bugs)
 - Coverage tooling fails due to via-IR/stack-depth in ERC404Factory constructor
-- Slither cannot parse 3 functions in UltraAlignmentVault (via-IR issue)
+- Slither cannot parse 3 functions in UniAlignmentVault (via-IR issue)
 - Bonding sells are intentionally locked when curve reaches capacity
 - No slippage protection on fee conversions (reliability prioritized)
 
@@ -394,7 +394,7 @@ A comprehensive pre-audit review identified 17 findings:
 - [x] Unused functions **REMOVED** (`_transferCurrency`)
 - [x] Unused state variables **REMOVED** (`analyticsModule`, `setAnalyticsModule()`)
 - [x] Dead stub contract **REMOVED** (`ERC404Instance`)
-- [x] Test behavior moved to `test/helpers/TestableUltraAlignmentVault.sol` (virtual override pattern)
+- [x] Test behavior moved to `test/helpers/TestableUniAlignmentVault.sol` (virtual override pattern)
 
 ### Code Accessibility
 - [x] Full file list with scope markings
@@ -418,7 +418,7 @@ A comprehensive pre-audit review identified 17 findings:
 ## 12. Recommended Actions Before Audit
 
 ### Must Do
-1. ~~**Remove TEST STUB code**~~ **DONE** - All 7 stubs removed, test behavior in `TestableUltraAlignmentVault`
+1. ~~**Remove TEST STUB code**~~ **DONE** - All 7 stubs removed, test behavior in `TestableUniAlignmentVault`
 2. **Create audit branch** - `git checkout -b audit-2026-02 && git tag v1.0.0-audit`
 3. ~~**Decide on `_transferCurrency()`**~~ **DONE** - Removed (was unused)
 4. ~~**Document execToken requirements**~~ **DONE** - NatSpec added to both governance contracts

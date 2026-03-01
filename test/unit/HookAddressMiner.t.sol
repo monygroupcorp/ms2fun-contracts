@@ -17,7 +17,7 @@ contract HookAddressMinerTest is Test {
     // Mock init code hash (doesn't matter for logic testing)
     bytes32 constant MOCK_INIT_CODE_HASH = keccak256("mock init code");
 
-    // Required flags for UltraAlignmentV4Hook
+    // Required flags for UniAlignmentV4Hook
     uint160 constant REQUIRED_FLAGS = uint160(
         Hooks.BEFORE_SWAP_FLAG | Hooks.AFTER_SWAP_FLAG | Hooks.AFTER_SWAP_RETURNS_DELTA_FLAG
     ); // = 0xC4
@@ -103,7 +103,7 @@ contract HookAddressMinerTest is Test {
         );
     }
 
-    function test_isValidUltraAlignmentHookAddress_valid() public pure {
+    function test_isValidUniAlignmentHookAddress_valid() public pure {
         // Test addresses that end in exactly 0xC4 (bits 0-13 = 0x00C4)
         // Generate addresses with various upper bits but last 14 bits exactly 0xC4
         address[] memory validAddrs = new address[](3);
@@ -115,13 +115,13 @@ contract HookAddressMinerTest is Test {
 
         for (uint i = 0; i < validAddrs.length; i++) {
             assertTrue(
-                HookAddressMiner.isValidUltraAlignmentHookAddress(validAddrs[i]),
+                HookAddressMiner.isValidUniAlignmentHookAddress(validAddrs[i]),
                 "Should be valid"
             );
         }
     }
 
-    function test_isValidUltraAlignmentHookAddress_invalid() public pure {
+    function test_isValidUniAlignmentHookAddress_invalid() public pure {
         // Test various invalid addresses
         address[] memory invalidAddrs = new address[](5);
         invalidAddrs[0] = address(uint160(0x0000)); // No flags
@@ -132,7 +132,7 @@ contract HookAddressMinerTest is Test {
 
         for (uint i = 0; i < invalidAddrs.length; i++) {
             assertFalse(
-                HookAddressMiner.isValidUltraAlignmentHookAddress(invalidAddrs[i]),
+                HookAddressMiner.isValidUniAlignmentHookAddress(invalidAddrs[i]),
                 "Should be invalid"
             );
         }
@@ -180,7 +180,7 @@ contract HookAddressMinerTest is Test {
         bytes32 initCodeHash = keccak256("test init code for mining");
 
         // Mine a salt
-        (bytes32 salt, address predictedAddr) = HookAddressMiner.mineSaltForUltraAlignmentHook(
+        (bytes32 salt, address predictedAddr) = HookAddressMiner.mineSaltForUniAlignmentHook(
             MOCK_DEPLOYER,
             initCodeHash
         );
@@ -191,7 +191,7 @@ contract HookAddressMinerTest is Test {
 
         // Verify the address has exactly the right flags
         assertTrue(
-            HookAddressMiner.isValidUltraAlignmentHookAddress(predictedAddr),
+            HookAddressMiner.isValidUniAlignmentHookAddress(predictedAddr),
             "Mined address should be valid"
         );
 
@@ -218,12 +218,12 @@ contract HookAddressMinerTest is Test {
         bytes32 initCodeHash1 = keccak256("init code 1");
         bytes32 initCodeHash2 = keccak256("init code 2");
 
-        (bytes32 salt1, address addr1) = HookAddressMiner.mineSaltForUltraAlignmentHook(
+        (bytes32 salt1, address addr1) = HookAddressMiner.mineSaltForUniAlignmentHook(
             MOCK_DEPLOYER,
             initCodeHash1
         );
 
-        (bytes32 salt2, address addr2) = HookAddressMiner.mineSaltForUltraAlignmentHook(
+        (bytes32 salt2, address addr2) = HookAddressMiner.mineSaltForUniAlignmentHook(
             MOCK_DEPLOYER,
             initCodeHash2
         );
@@ -234,8 +234,8 @@ contract HookAddressMinerTest is Test {
         emit log_named_address("Address 2", addr2);
 
         // Both should be valid
-        assertTrue(HookAddressMiner.isValidUltraAlignmentHookAddress(addr1), "addr1 should be valid");
-        assertTrue(HookAddressMiner.isValidUltraAlignmentHookAddress(addr2), "addr2 should be valid");
+        assertTrue(HookAddressMiner.isValidUniAlignmentHookAddress(addr1), "addr1 should be valid");
+        assertTrue(HookAddressMiner.isValidUniAlignmentHookAddress(addr2), "addr2 should be valid");
 
         // Addresses should be different (different init codes)
         assertTrue(addr1 != addr2, "Different init codes should produce different addresses");

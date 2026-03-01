@@ -16,11 +16,11 @@ import { BeforeSwapDelta, BeforeSwapDeltaLibrary } from "v4-core/types/BeforeSwa
 import { TickMath } from "v4-core/libraries/TickMath.sol";
 import { CurrencySettler } from "../../../lib/v4-core/test/utils/CurrencySettler.sol";
 import { IERC20 } from "forge-std/interfaces/IERC20.sol";
-import { UltraAlignmentV4Hook } from "../../../src/factories/erc404/hooks/UltraAlignmentV4Hook.sol";
+import { UniAlignmentV4Hook } from "../../../src/factories/erc404/hooks/UniAlignmentV4Hook.sol";
 
 /**
  * @title V4HookTaxation
- * @notice Fork tests for UltraAlignmentV4Hook fee collection mechanics
+ * @notice Fork tests for UniAlignmentV4Hook fee collection mechanics
  * @dev Run with: forge test --mp test/fork/v4/V4HookTaxation.t.sol --fork-url $ETH_RPC_URL -vvv
  *
  * Tests the alignment fee system:
@@ -61,7 +61,7 @@ contract V4HookTaxationTest is ForkTestBase, IUnlockCallback {
     // ========== State ==========
 
     IPoolManager poolManager;
-    UltraAlignmentV4Hook hook;
+    UniAlignmentV4Hook hook;
     MockVault mockVault;
     bool v4Available;
 
@@ -94,7 +94,7 @@ contract V4HookTaxationTest is ForkTestBase, IUnlockCallback {
 
             // Copy bytecode to hook address with correct flags
             vm.etch(HOOK_ADDRESS, address(implementation).code);
-            hook = UltraAlignmentV4Hook(payable(HOOK_ADDRESS));
+            hook = UniAlignmentV4Hook(payable(HOOK_ADDRESS));
 
             // Initialize owner using Solady's Ownable pattern
             vm.prank(HOOK_ADDRESS);
@@ -325,7 +325,7 @@ contract V4HookTaxationTest is ForkTestBase, IUnlockCallback {
         );
 
         vm.etch(HOOK_ADDRESS, address(zeroFeeImpl).code);
-        hook = UltraAlignmentV4Hook(payable(HOOK_ADDRESS));
+        hook = UniAlignmentV4Hook(payable(HOOK_ADDRESS));
 
         vm.prank(HOOK_ADDRESS);
         MockFeeHook(payable(HOOK_ADDRESS)).initOwner(address(this));
@@ -674,6 +674,6 @@ contract MockFeeHook is BaseTestHooks {
 /**
  * @notice Imports for types
  */
-import { UltraAlignmentVault } from "../../../src/vaults/uni/UltraAlignmentVault.sol";
+import { UniAlignmentVault } from "../../../src/vaults/uni/UniAlignmentVault.sol";
 import { BaseTestHooks } from "v4-core/test/BaseTestHooks.sol";
 import { SafeCast } from "v4-core/libraries/SafeCast.sol";

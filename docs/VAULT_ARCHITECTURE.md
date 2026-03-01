@@ -236,7 +236,7 @@ event FeesAccumulated(uint256 amount);
 
 ### V4 Hook Integration
 ```solidity
-// In UltraAlignmentV4Hook.afterSwap()
+// In UniAlignmentV4Hook.afterSwap()
 if (taxAmount > 0) {
     vault.receiveHookTax(taxCurrency, taxAmount, msg.sender);  // msg.sender = project hook
 }

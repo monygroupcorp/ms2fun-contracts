@@ -17,7 +17,7 @@ import { UniswapHelpers } from "../helpers/UniswapHelpers.sol";
  * - Tick spacing validation
  *
  * These tests help us implement _checkTargetAssetPriceAndPurchasePower() for V3 pools
- * and _quoteV3Swap() in UltraAlignmentVault.sol
+ * and _quoteV3Swap() in UniAlignmentVault.sol
  */
 contract V3PoolQueryTest is ForkTestBase {
     function setUp() public {

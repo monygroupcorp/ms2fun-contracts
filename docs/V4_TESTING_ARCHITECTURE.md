@@ -338,7 +338,7 @@ function executeAddLiquidity(
 ### Phase 2C: Hook Integration Tests
 1. ❌ Swap through pool with hook
 2. ❌ Verify hook taxation
-3. ❌ Test UltraAlignmentV4Hook integration
+3. ❌ Test UniAlignmentV4Hook integration
 
 ---
 
@@ -475,7 +475,7 @@ Focus on critical paths only:
 **Cons**: Incomplete coverage
 
 ### Option 3: Document & Defer
-Document what's needed, implement when building UltraAlignmentVault:
+Document what's needed, implement when building UniAlignmentVault:
 1. Update V4_POOLS_DISCOVERED.md with liquidity findings
 2. Create this architecture doc
 3. Implement V4 helpers when actually needed for vault
@@ -493,7 +493,7 @@ Document what's needed, implement when building UltraAlignmentVault:
 1. We've proven V4 pools exist and are queryable ✅
 2. We understand the architecture needed for swaps/positions ✅
 3. Building full infrastructure now is premature - we don't know exact vault requirements yet
-4. Better to implement V4 helpers when building UltraAlignmentVault with real use cases
+4. Better to implement V4 helpers when building UniAlignmentVault with real use cases
 
 **Immediate Action:**
 1. ✅ Update V4_POOLS_DISCOVERED.md with liquidity data
@@ -501,7 +501,7 @@ Document what's needed, implement when building UltraAlignmentVault:
 3. Update todos to reflect deferred work
 4. Move to other priorities (governance tests, vault implementation, etc.)
 
-When we implement UltraAlignmentVault's `_executeV4Swap()` and `_createV4Position()`, we'll:
+When we implement UniAlignmentVault's `_executeV4Swap()` and `_createV4Position()`, we'll:
 - Build V4UnlockHelper with real requirements
 - Test against our actual hook implementation
 - Have concrete use cases for position management

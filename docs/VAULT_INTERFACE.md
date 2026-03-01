@@ -547,7 +547,7 @@ benefactorShares[benefactor] += uint256(liquidityUnits);
 totalShares += uint256(liquidityUnits);
 ```
 
-**Use Case**: UltraAlignmentVault (Uniswap V4)
+**Use Case**: UniAlignmentVault (Uniswap V4)
 
 ---
 
@@ -693,9 +693,9 @@ test/mocks/MockVault.sol
 - 1:1 share issuance
 - Perfect for testing
 
-### UltraAlignmentVault (Production, V4 LP)
+### UniAlignmentVault (Production, V4 LP)
 ```
-src/vaults/UltraAlignmentVault.sol
+src/vaults/UniAlignmentVault.sol
 ```
 - Uniswap V4 liquidity provision
 - Full-range LP positions
@@ -736,7 +736,7 @@ src/vaults/UltraAlignmentVault.sol
 
 - **Interface Source**: `src/interfaces/IAlignmentVault.sol`
 - **Test Suite**: `test/vaults/VaultInterfaceCompliance.t.sol`
-- **Reference Implementation**: `src/vaults/UltraAlignmentVault.sol`
+- **Reference Implementation**: `src/vaults/UniAlignmentVault.sol`
 - **Mock Implementation**: `test/mocks/MockVault.sol`
 - **Governance**: See `VAULT_GOVERNANCE_STRATEGY.md`
 - **Project Tracker**: `VAULT_EXPANSION_TRACKER.md`

@@ -10,8 +10,8 @@ import {IFactory} from "../../interfaces/IFactory.sol";
 import {FeatureUtils} from "../../master/libraries/FeatureUtils.sol";
 import {ERC404CypherBondingInstance} from "./ERC404CypherBondingInstance.sol";
 import {CypherLiquidityDeployerModule} from "./CypherLiquidityDeployerModule.sol";
-import {UltraAlignmentCypherVaultFactory} from "../../vaults/cypher/UltraAlignmentCypherVaultFactory.sol";
-import {UltraAlignmentCypherVault} from "../../vaults/cypher/UltraAlignmentCypherVault.sol";
+import {CypherAlignmentVaultFactory} from "../../vaults/cypher/CypherAlignmentVaultFactory.sol";
+import {CypherAlignmentVault} from "../../vaults/cypher/CypherAlignmentVault.sol";
 import {CurveParamsComputer} from "../erc404/CurveParamsComputer.sol";
 import {BondingCurveMath} from "../erc404/libraries/BondingCurveMath.sol";
 import {IdentityParams} from "../../interfaces/IFactoryTypes.sol";
@@ -69,7 +69,7 @@ contract ERC404CypherFactory is OwnableRoles, ReentrancyGuard, IFactory {
     uint256 public graduationFeeBps = 200;   // 2%
 
     CypherLiquidityDeployerModule public immutable liquidityDeployer;
-    UltraAlignmentCypherVaultFactory public immutable vaultFactory;
+    CypherAlignmentVaultFactory public immutable vaultFactory;
     CurveParamsComputer public immutable curveComputer;
     PasswordTierGatingModule public immutable tierGatingModule;
 
@@ -117,7 +117,7 @@ contract ERC404CypherFactory is OwnableRoles, ReentrancyGuard, IFactory {
         creatorFeeBps = modules.creatorFeeBps;
         creatorGraduationFeeBps = modules.creatorGraduationFeeBps;
         liquidityDeployer = CypherLiquidityDeployerModule(payable(core.liquidityDeployer));
-        vaultFactory = UltraAlignmentCypherVaultFactory(core.vaultFactory);
+        vaultFactory = CypherAlignmentVaultFactory(core.vaultFactory);
         globalMessageRegistry = modules.globalMessageRegistry;
         curveComputer = CurveParamsComputer(modules.curveComputer);
         algebraFactory = core.algebraFactory;
@@ -193,7 +193,7 @@ contract ERC404CypherFactory is OwnableRoles, ReentrancyGuard, IFactory {
         _finalizeInstance(instance, identity, metadataURI, vault);
     }
 
-    function _deployVault(address alignmentTarget) private returns (UltraAlignmentCypherVault) {
+    function _deployVault(address alignmentTarget) private returns (CypherAlignmentVault) {
         return vaultFactory.createVault(
             positionManager,
             swapRouter,

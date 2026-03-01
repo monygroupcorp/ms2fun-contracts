@@ -290,7 +290,7 @@ While waiting for RPC, we can:
    - LP position creation (Phase 3)
    - Fee collection (Phase 4)
 
-2. **Update UltraAlignmentVault.sol** with:
+2. **Update UniAlignmentVault.sol** with:
    - V4 swap function signatures
    - V4 LP position management
    - UnlockCallback interface implementation

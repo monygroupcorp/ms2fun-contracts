@@ -1,4 +1,4 @@
-// test/vaults/UltraAlignmentCypherVault.t.sol
+// test/vaults/CypherAlignmentVault.t.sol
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 import "forge-std/Test.sol";
@@ -6,12 +6,12 @@ import {LibClone} from "solady/utils/LibClone.sol";
 import {MockERC20} from "../mocks/MockERC20.sol";
 import {MockAlgebraPositionManager, MockAlgebraSwapRouter} from "../mocks/MockCypherAlgebra.sol";
 import {MockWETH} from "../mocks/MockWETH.sol";
-import {TestableUltraAlignmentCypherVault} from "../helpers/TestableUltraAlignmentCypherVault.sol";
-import {UltraAlignmentCypherVault} from "../../src/vaults/cypher/UltraAlignmentCypherVault.sol";
+import {TestableCypherAlignmentVault} from "../helpers/TestableCypherAlignmentVault.sol";
+import {CypherAlignmentVault} from "../../src/vaults/cypher/CypherAlignmentVault.sol";
 import {Currency} from "v4-core/types/Currency.sol";
 
-contract UltraAlignmentCypherVaultTest is Test {
-    TestableUltraAlignmentCypherVault vault;
+contract CypherAlignmentVaultTest is Test {
+    TestableCypherAlignmentVault vault;
     MockERC20 alignmentToken;
     MockWETH weth;
     MockAlgebraPositionManager positionManager;
@@ -31,8 +31,8 @@ contract UltraAlignmentCypherVaultTest is Test {
         positionManager = new MockAlgebraPositionManager();
         swapRouter = new MockAlgebraSwapRouter();
 
-        TestableUltraAlignmentCypherVault impl = new TestableUltraAlignmentCypherVault();
-        vault = TestableUltraAlignmentCypherVault(payable(LibClone.clone(address(impl))));
+        TestableCypherAlignmentVault impl = new TestableCypherAlignmentVault();
+        vault = TestableCypherAlignmentVault(payable(LibClone.clone(address(impl))));
         vault.initialize(
             address(positionManager),
             address(swapRouter),
@@ -94,8 +94,8 @@ contract UltraAlignmentCypherVaultTest is Test {
     }
 
     function test_initialize_revertsIfCreatorCutTooHigh() public {
-        TestableUltraAlignmentCypherVault impl2 = new TestableUltraAlignmentCypherVault();
-        TestableUltraAlignmentCypherVault newVault = TestableUltraAlignmentCypherVault(
+        TestableCypherAlignmentVault impl2 = new TestableCypherAlignmentVault();
+        TestableCypherAlignmentVault newVault = TestableCypherAlignmentVault(
             payable(LibClone.clone(address(impl2)))
         );
         vm.expectRevert();

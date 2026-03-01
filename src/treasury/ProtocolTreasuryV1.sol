@@ -88,7 +88,7 @@ contract ProtocolTreasuryV1 is UUPSUpgradeable, Ownable, IUnlockCallback {
     mapping(address => POLPosition) internal _polPositions; // instance => position
     address[] public polInstances;
 
-    // Callback routing (mirrors UltraAlignmentVault pattern)
+    // Callback routing (mirrors UniAlignmentVault pattern)
     enum CallbackOperation { DEPLOY_POL, COLLECT_FEES }
 
     struct CallbackData {

@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import {UltraAlignmentVault} from "../../src/vaults/uni/UltraAlignmentVault.sol";
+import {UniAlignmentVault} from "../../src/vaults/uni/UniAlignmentVault.sol";
 import {IVaultPriceValidator} from "../../src/interfaces/IVaultPriceValidator.sol";
 
 /// @notice Test-only vault that overrides LP with mock behavior.
 /// @dev Swap behavior is handled by MockZRouter injected at initialize().
 ///      Only _addToLpPosition is overridden here since it requires a real V4 pool.
-contract TestableUltraAlignmentVault is UltraAlignmentVault {
+contract TestableUniAlignmentVault is UniAlignmentVault {
     function _addToLpPosition(
         uint256 amount0,
         uint256 amount1,

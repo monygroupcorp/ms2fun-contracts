@@ -6,7 +6,7 @@ import {Test} from "forge-std/Test.sol";
 import {LibClone} from "solady/utils/LibClone.sol";
 import {ERC404CypherBondingInstance} from "../../../src/factories/erc404cypher/ERC404CypherBondingInstance.sol";
 import {CypherLiquidityDeployerModule} from "../../../src/factories/erc404cypher/CypherLiquidityDeployerModule.sol";
-import {UltraAlignmentCypherVault} from "../../../src/vaults/cypher/UltraAlignmentCypherVault.sol";
+import {CypherAlignmentVault} from "../../../src/vaults/cypher/CypherAlignmentVault.sol";
 import {BondingCurveMath} from "../../../src/factories/erc404/libraries/BondingCurveMath.sol";
 import {CurveParamsComputer} from "../../../src/factories/erc404/CurveParamsComputer.sol";
 import {MockAlgebraFactory, MockAlgebraPositionManager, MockAlgebraSwapRouter} from "../../mocks/MockCypherAlgebra.sol";
@@ -16,7 +16,7 @@ import {MockMasterRegistry} from "../../mocks/MockMasterRegistry.sol";
 contract ERC404CypherBondingInstanceTest is Test {
     ERC404CypherBondingInstance instance;
     CypherLiquidityDeployerModule liquidityDeployer;
-    UltraAlignmentCypherVault vault;
+    CypherAlignmentVault vault;
     CurveParamsComputer realCurveComputer;
     MockAlgebraFactory algebraFactory;
     MockAlgebraPositionManager positionManager;
@@ -44,8 +44,8 @@ contract ERC404CypherBondingInstanceTest is Test {
         masterRegistry = new MockMasterRegistry();
 
         // Deploy vault with deployer as liquidityDeployer
-        UltraAlignmentCypherVault vaultImpl = new UltraAlignmentCypherVault();
-        vault = UltraAlignmentCypherVault(payable(LibClone.clone(address(vaultImpl))));
+        CypherAlignmentVault vaultImpl = new CypherAlignmentVault();
+        vault = CypherAlignmentVault(payable(LibClone.clone(address(vaultImpl))));
 
         // Deploy instance
         ERC404CypherBondingInstance impl = new ERC404CypherBondingInstance();

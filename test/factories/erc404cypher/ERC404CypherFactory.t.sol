@@ -6,8 +6,8 @@ import {Test} from "forge-std/Test.sol";
 import {ERC404CypherFactory} from "../../../src/factories/erc404cypher/ERC404CypherFactory.sol";
 import {ERC404CypherBondingInstance} from "../../../src/factories/erc404cypher/ERC404CypherBondingInstance.sol";
 import {CypherLiquidityDeployerModule} from "../../../src/factories/erc404cypher/CypherLiquidityDeployerModule.sol";
-import {UltraAlignmentCypherVault} from "../../../src/vaults/cypher/UltraAlignmentCypherVault.sol";
-import {UltraAlignmentCypherVaultFactory} from "../../../src/vaults/cypher/UltraAlignmentCypherVaultFactory.sol";
+import {CypherAlignmentVault} from "../../../src/vaults/cypher/CypherAlignmentVault.sol";
+import {CypherAlignmentVaultFactory} from "../../../src/vaults/cypher/CypherAlignmentVaultFactory.sol";
 import {CurveParamsComputer} from "../../../src/factories/erc404/CurveParamsComputer.sol";
 import {PasswordTierGatingModule} from "../../../src/gating/PasswordTierGatingModule.sol";
 import {MockAlgebraFactory, MockAlgebraPositionManager, MockAlgebraSwapRouter} from "../../mocks/MockCypherAlgebra.sol";
@@ -20,7 +20,7 @@ contract ERC404CypherFactoryTest is Test {
     MockMasterRegistry masterRegistry;
     CypherLiquidityDeployerModule deployer;
     ERC404CypherBondingInstance implementation;
-    UltraAlignmentCypherVaultFactory vaultFactory;
+    CypherAlignmentVaultFactory vaultFactory;
     CurveParamsComputer curveComputer;
     PasswordTierGatingModule tierGatingModule;
     MockAlgebraFactory algebraFactory;
@@ -46,8 +46,8 @@ contract ERC404CypherFactoryTest is Test {
         swapRouter = new MockAlgebraSwapRouter();
         weth = new MockWETH();
 
-        UltraAlignmentCypherVault vaultImpl = new UltraAlignmentCypherVault();
-        vaultFactory = new UltraAlignmentCypherVaultFactory(address(vaultImpl));
+        CypherAlignmentVault vaultImpl = new CypherAlignmentVault();
+        vaultFactory = new CypherAlignmentVaultFactory(address(vaultImpl));
 
         factory = new ERC404CypherFactory(
             ERC404CypherFactory.CoreConfig({

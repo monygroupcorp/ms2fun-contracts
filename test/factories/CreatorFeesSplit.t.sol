@@ -9,7 +9,7 @@ import {ERC404BondingInstance} from "../../src/factories/erc404/ERC404BondingIns
 import {ERC404StakingModule} from "../../src/factories/erc404/ERC404StakingModule.sol";
 import {LaunchManager} from "../../src/factories/erc404/LaunchManager.sol";
 import {CurveParamsComputer} from "../../src/factories/erc404/CurveParamsComputer.sol";
-import {UltraAlignmentVault} from "../../src/vaults/uni/UltraAlignmentVault.sol";
+import {UniAlignmentVault} from "../../src/vaults/uni/UniAlignmentVault.sol";
 import {MockEXECToken} from "../mocks/MockEXECToken.sol";
 import {MockMasterRegistry} from "../mocks/MockMasterRegistry.sol";
 import {MockZRouter} from "../mocks/MockZRouter.sol";
@@ -48,7 +48,7 @@ contract MockMasterRegistryForStakingC {
 contract CreatorFeesSplitTest is Test {
     ERC1155Factory public erc1155Factory;
     ERC404Factory public erc404Factory;
-    UltraAlignmentVault public vault;
+    UniAlignmentVault public vault;
     MockEXECToken public token;
     MockMasterRegistry public mockRegistry;
     MockMasterRegistryForStakingC public stakingRegistry;
@@ -75,8 +75,8 @@ contract CreatorFeesSplitTest is Test {
 
         // Deploy vault with creator (clone pattern)
         {
-            UltraAlignmentVault _impl = new UltraAlignmentVault();
-            vault = UltraAlignmentVault(payable(LibClone.clone(address(_impl))));
+            UniAlignmentVault _impl = new UniAlignmentVault();
+            vault = UniAlignmentVault(payable(LibClone.clone(address(_impl))));
             vault.initialize(
                 mockWETH,
                 mockV4PoolManager,
@@ -369,8 +369,8 @@ contract CreatorFeesSplitTest is Test {
 
     function test_FactoryCreator_YieldCutBounds() public {
         // Creator yield cut cannot exceed protocol yield cut (500 bps = 5%)
-        UltraAlignmentVault _impl = new UltraAlignmentVault();
-        UltraAlignmentVault badClone = UltraAlignmentVault(payable(LibClone.clone(address(_impl))));
+        UniAlignmentVault _impl = new UniAlignmentVault();
+        UniAlignmentVault badClone = UniAlignmentVault(payable(LibClone.clone(address(_impl))));
         vm.expectRevert("Creator cut exceeds protocol yield cut");
         badClone.initialize(
             mockWETH,

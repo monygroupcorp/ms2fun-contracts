@@ -19,7 +19,7 @@ Analysis of ms2fun-contracts architecture to support multiple vault implementati
    - `vaultList` array for enumeration
    - `registerVault()`, `isVaultRegistered()`, `deactivateVault()` functions
 
-2. **Benefactor Model** (UltraAlignmentVault.sol)
+2. **Benefactor Model** (UniAlignmentVault.sol)
    - Generic fee reception via `receiveHookTax()` and `receive()`
    - Share-based distribution: `benefactorShares[address]`
    - Proportional claiming: `claimFees()` returns ETH
@@ -61,7 +61,7 @@ Analysis of ms2fun-contracts architecture to support multiple vault implementati
    - Revert if vault not approved by governance
 
 5. **Instance Interface Updates**
-   - Change `UltraAlignmentVault public vault` → `IAlignmentVault public vault`
+   - Change `UniAlignmentVault public vault` → `IAlignmentVault public vault`
    - Remove V4-specific assumptions
    - Add vault migration support (optional, advanced feature)
 
@@ -153,13 +153,13 @@ Vault Claiming:
 **Status**: ✅ COMPLETE
 
 - [x] Create IAlignmentVault.sol interface
-- [ ] Update UltraAlignmentVault to implement IAlignmentVault
+- [ ] Update UniAlignmentVault to implement IAlignmentVault
 - [ ] Add `vaultType()` method returning "UniswapV4LP"
 - [ ] Write interface compliance tests
 
 **Files Changed:**
 - `src/interfaces/IAlignmentVault.sol` (new)
-- `src/vaults/UltraAlignmentVault.sol` (update)
+- `src/vaults/UniAlignmentVault.sol` (update)
 - `test/vaults/VaultInterfaceCompliance.t.sol` (new)
 
 ### Phase 2: Governance Module (Week 2-3)
@@ -208,7 +208,7 @@ Vault Claiming:
 ### Phase 4: Instance Interface Updates (Week 5)
 
 - [ ] Update ERC404BondingInstance.sol
-  - Change `UltraAlignmentVault public vault` → `IAlignmentVault public vault`
+  - Change `UniAlignmentVault public vault` → `IAlignmentVault public vault`
   - Update imports to use interface
   - Update `setVault()` to validate interface compliance
   - Test staking rewards with interface
@@ -259,7 +259,7 @@ Vault Claiming:
 **Phase 1: Interface Compliance**
 ```solidity
 // test/vaults/VaultInterfaceCompliance.t.sol
-test_UltraAlignmentVault_ImplementsInterface()
+test_UniAlignmentVault_ImplementsInterface()
 test_VaultType_ReturnsCorrectString()
 test_AllInterfaceMethods_Callable()
 ```
@@ -316,17 +316,17 @@ test_RealAave_Integration()
 1. Deploy IAlignmentVault interface ✅
 2. Deploy VaultApprovalGovernance
 3. Update MasterRegistryV1 with governance module
-4. Update UltraAlignmentVault to implement interface
-5. Submit UltraAlignmentVault to governance
+4. Update UniAlignmentVault to implement interface
+5. Submit UniAlignmentVault to governance
 6. After approval, create new instances using approved vault
 
 **Impact**: Zero breaking changes, clean start
 
-### Scenario 2: Existing Instances with UltraAlignmentVault
+### Scenario 2: Existing Instances with UniAlignmentVault
 1. Deploy IAlignmentVault interface ✅
-2. Update UltraAlignmentVault to implement interface (backward compatible)
+2. Update UniAlignmentVault to implement interface (backward compatible)
 3. Deploy VaultApprovalGovernance
-4. Grandfather UltraAlignmentVault as pre-approved
+4. Grandfather UniAlignmentVault as pre-approved
 5. New instances must use approved vaults
 6. Existing instances continue working (no changes needed)
 
@@ -356,7 +356,7 @@ test_RealAave_Integration()
 
 **Medium Risk ⚠️**
 - Vault migration (requires testing edge cases)
-- Instance type changes (UltraAlignmentVault → IAlignmentVault)
+- Instance type changes (UniAlignmentVault → IAlignmentVault)
 - Multi-vault router (complex fee distribution)
 
 **High Risk ⚠️⚠️**
@@ -367,7 +367,7 @@ test_RealAave_Integration()
 ### Mitigation Strategies
 
 1. **Backward Compatibility First**
-   - Keep UltraAlignmentVault working as-is
+   - Keep UniAlignmentVault working as-is
    - Add interface implementation without breaking changes
    - Grandfather existing vault as approved
 
@@ -441,11 +441,11 @@ contract BalancerWeightedVault is IAlignmentVault {
 
 1. **Review IAlignmentVault Interface** ✅
    - Interface created at `src/interfaces/IAlignmentVault.sol`
-   - Confirm all methods match UltraAlignmentVault capabilities
+   - Confirm all methods match UniAlignmentVault capabilities
 
-2. **Update UltraAlignmentVault to Implement Interface**
+2. **Update UniAlignmentVault to Implement Interface**
    ```solidity
-   contract UltraAlignmentVault is
+   contract UniAlignmentVault is
        ReentrancyGuard,
        Ownable,
        IUnlockCallback,
@@ -459,7 +459,7 @@ contract BalancerWeightedVault is IAlignmentVault {
    ```
 
 3. **Write Compliance Tests**
-   - Test that UltraAlignmentVault implements all interface methods
+   - Test that UniAlignmentVault implements all interface methods
    - Verify `vaultType()` returns correct string
    - Ensure interface-based calls work (no concrete type needed)
 

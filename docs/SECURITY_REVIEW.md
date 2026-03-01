@@ -9,7 +9,7 @@
 
 ## Executive Summary
 
-This report documents findings from a security-focused review of the ms2fun smart contract suite ahead of formal audit. The protocol implements a multi-token launchpad with ERC404 bonding curves, ERC1155 open editions, share-based fee distribution via UltraAlignmentVault, and Uniswap V4 integration.
+This report documents findings from a security-focused review of the ms2fun smart contract suite ahead of formal audit. The protocol implements a multi-token launchpad with ERC404 bonding curves, ERC1155 open editions, share-based fee distribution via UniAlignmentVault, and Uniswap V4 integration.
 
 **Findings Summary:**
 | Severity | Count | Fixed | Pending | No Action (By Design) |
@@ -74,7 +74,7 @@ This section documents the specific changes made to address each finding.
 - Commit: Pending
 
 **M-03 (Fee Conversion Slippage):**
-- File: `src/vaults/UltraAlignmentVault.sol:581-584`
+- File: `src/vaults/UniAlignmentVault.sol:581-584`
 - Action: Added @dev comment explaining accepted slippage risk for conversion reliability
 - Commit: Pending
 
@@ -86,7 +86,7 @@ This section documents the specific changes made to address each finding.
 ### High Severity Fixes Implemented (2026-01-05)
 
 **H-01 (Remove BaseTestHooks Inheritance):**
-- File: `src/factories/erc404/hooks/UltraAlignmentV4Hook.sol`
+- File: `src/factories/erc404/hooks/UniAlignmentV4Hook.sol`
 - Actions taken:
   1. Removed import of `BaseTestHooks` from `v4-core/test/BaseTestHooks.sol` (line 13)
   2. Changed contract inheritance from `BaseTestHooks` to `IHooks` (line 21)
@@ -104,7 +104,7 @@ This section documents the specific changes made to address each finding.
 - Commit: Pending
 
 **H-02 (Restrict Hook to Native ETH Only):**
-- File: `src/factories/erc404/hooks/UltraAlignmentV4Hook.sol:142-149`
+- File: `src/factories/erc404/hooks/UniAlignmentV4Hook.sol:142-149`
 - Actions taken:
   1. Changed require check from `token == weth || token == address(0)` to `token == address(0)`
   2. Updated error message: "Hook only accepts native ETH taxes - pool must be native ETH paired"
@@ -148,7 +148,7 @@ This section documents the specific changes made to address each finding.
 **M-04 (Incentivized Functions Balance Protection - 2026-01-05):**
 
 **Scope:** Reviewed all incentivized public functions (functions that pay ETH rewards to callers):
-1. ✅ `UltraAlignmentVault::convertAndAddLiquidity()` - Fixed
+1. ✅ `UniAlignmentVault::convertAndAddLiquidity()` - Fixed
 2. ✅ `MasterRegistryV1::cleanupExpiredRentals()` - Fixed
 3. ❌ `collectAndDistributeVaultFees()` - Does not exist in codebase (outdated documentation)
 
@@ -157,7 +157,7 @@ This section documents the specific changes made to address each finding.
 2. **Missing balance checks** - No verification of sufficient ETH before reward payment
 3. **Percentage-based rewards** - Replaced with gas-based reimbursement for fairness
 
-**File: `src/vaults/UltraAlignmentVault.sol`**
+**File: `src/vaults/UniAlignmentVault.sol`**
 - Actions taken:
   1. Replaced percentage-based reward system (lines 174-177):
      - Old: `conversionRewardBps = 5` (0.05% of pending ETH)
@@ -205,7 +205,7 @@ This section documents the specific changes made to address each finding.
 **Test Updates:**
 - Updated all tests referencing `conversionRewardBps` to use `standardConversionReward`
 - Files modified:
-  - `test/vaults/UltraAlignmentVault.t.sol` (lines 96, 855-886)
+  - `test/vaults/UniAlignmentVault.t.sol` (lines 96, 855-886)
   - `test/fork/VaultUniswapIntegration.t.sol` (lines 127, 169-176)
 
 **Security Benefits:**
@@ -249,7 +249,7 @@ This section documents the specific changes made to address each finding.
 - Commit: Pending
 
 **L-03 (Add Pool Key Validation Helper):**
-- File: `src/vaults/UltraAlignmentVault.sol:1759-1803`
+- File: `src/vaults/UniAlignmentVault.sol:1759-1803`
 - Actions taken:
   1. Added `validateCurrentPoolKey()` public view function
   2. Function performs all validation checks on currently set pool key:
@@ -267,7 +267,7 @@ This section documents the specific changes made to address each finding.
 - Commit: Pending
 
 **L-04 (Implement Dust Accumulation Mechanism):**
-- File: `src/vaults/UltraAlignmentVault.sol`
+- File: `src/vaults/UniAlignmentVault.sol`
 - Actions taken:
   1. Added state variables (lines 155-157):
      - `accumulatedDustShares`: Tracks shares lost to rounding
@@ -298,7 +298,7 @@ This section documents the specific changes made to address each finding.
 - Commit: Pending
 
 **L-02 (Fix receive() Reentrancy Protection - Dual-Mode Implementation):**
-- File: `src/vaults/UltraAlignmentVault.sol`
+- File: `src/vaults/UniAlignmentVault.sol`
 - **Problem Identified:** Initial attempt to add `nonReentrant` to `receive()` would break WETH unwrapping:
   - Modifiers execute BEFORE function body
   - `if (msg.sender == weth)` check would never execute
@@ -372,7 +372,7 @@ Initial investigation revealed critical conflict between `nonReentrant` modifier
 
 ### H-01: Hook Inherits from Test Contract
 
-**File:** `src/factories/erc404/hooks/UltraAlignmentV4Hook.sol:13`
+**File:** `src/factories/erc404/hooks/UniAlignmentV4Hook.sol:13`
 
 **Description:**
 ```solidity
@@ -393,7 +393,7 @@ The production hook contract imports and extends `BaseTestHooks` from the v4-cor
 
 ### H-02: Hook Tax Transfer Fails for WETH-Paired Pools
 
-**File:** `src/factories/erc404/hooks/UltraAlignmentV4Hook.sol:141-153`
+**File:** `src/factories/erc404/hooks/UniAlignmentV4Hook.sol:141-153`
 
 **Description:**
 ```solidity
@@ -524,7 +524,7 @@ require(success, "Refund failed");
 
 ### M-03: No Slippage Protection on Fee Conversion
 
-**File:** `src/vaults/UltraAlignmentVault.sol:581-590`
+**File:** `src/vaults/UniAlignmentVault.sol:581-590`
 
 **Description:**
 ```solidity
@@ -627,7 +627,7 @@ if (to.code.length > 0) {
 
 ### L-02: Inconsistent Reentrancy Protection on receive()
 
-**File:** `src/vaults/UltraAlignmentVault.sol:227-237`
+**File:** `src/vaults/UniAlignmentVault.sol:227-237`
 
 **Description:**
 ```solidity
@@ -661,7 +661,7 @@ The `receive()` function lacks `nonReentrant` while `receiveHookTax()` has it. T
 
 ### L-03: V4 Pool Key Validation Deferred
 
-**File:** `src/vaults/UltraAlignmentVault.sol:1749-1751`
+**File:** `src/vaults/UniAlignmentVault.sol:1749-1751`
 
 **Description:**
 ```solidity
@@ -681,7 +681,7 @@ Pool existence isn't validated when `setV4PoolKey()` is called - only during fir
 
 ### L-04: Share Calculation Precision Loss
 
-**File:** `src/vaults/UltraAlignmentVault.sol:336-341`
+**File:** `src/vaults/UniAlignmentVault.sol:336-341`
 
 **Description:**
 ```solidity
@@ -728,7 +728,7 @@ require(nextEditionId <= type(uint32).max, "Edition limit reached");
 
 ### I-01: Stub Code in Production Contracts
 
-**File:** `src/vaults/UltraAlignmentVault.sol:719-724`
+**File:** `src/vaults/UniAlignmentVault.sol:719-724`
 
 **Description:**
 Multiple stub patterns bypass real logic when mock addresses are detected:
@@ -823,7 +823,7 @@ Before audit submission, verify:
 
 ### 🔴 REQUIRED: Remove Test Stubs
 
-**File: `src/vaults/UltraAlignmentVault.sol`**
+**File: `src/vaults/UniAlignmentVault.sol`**
 
 1. **Remove WETH bypass from receive() (lines 245-247):**
    ```solidity
@@ -873,7 +873,7 @@ Before audit submission, verify:
 
 **Search command to verify all stubs removed:**
 ```bash
-grep -n "TEST STUB" src/vaults/UltraAlignmentVault.sol
+grep -n "TEST STUB" src/vaults/UniAlignmentVault.sol
 # Should return: NO MATCHES
 ```
 
@@ -929,9 +929,9 @@ After deployment to production:
 
 | File | Lines | Notes |
 |------|-------|-------|
-| `src/vaults/UltraAlignmentVault.sol` | 1849 | Core vault, most complex |
+| `src/vaults/UniAlignmentVault.sol` | 1849 | Core vault, most complex |
 | `src/factories/erc404/ERC404BondingInstance.sol` | 1413 | Bonding curve + staking |
-| `src/factories/erc404/hooks/UltraAlignmentV4Hook.sol` | 181 | V4 swap tax hook |
+| `src/factories/erc404/hooks/UniAlignmentV4Hook.sol` | 181 | V4 swap tax hook |
 | `src/factories/erc1155/ERC1155Instance.sol` | 773 | Open editions |
 | `src/master/MasterRegistryV1.sol` | 1107 | Registry + queue system |
 | `src/governance/FactoryApprovalGovernance.sol` | 828 | Deposit-based voting |

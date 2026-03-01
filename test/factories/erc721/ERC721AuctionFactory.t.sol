@@ -4,7 +4,7 @@ pragma solidity ^0.8.24;
 import {Test, console} from "forge-std/Test.sol";
 import {ERC721AuctionFactory} from "../../../src/factories/erc721/ERC721AuctionFactory.sol";
 import {ERC721AuctionInstance} from "../../../src/factories/erc721/ERC721AuctionInstance.sol";
-import {UltraAlignmentVault} from "../../../src/vaults/uni/UltraAlignmentVault.sol";
+import {UniAlignmentVault} from "../../../src/vaults/uni/UniAlignmentVault.sol";
 import {MockEXECToken} from "../../mocks/MockEXECToken.sol";
 import {MockMasterRegistry} from "../../mocks/MockMasterRegistry.sol";
 import {MockZRouter} from "../../mocks/MockZRouter.sol";
@@ -18,7 +18,7 @@ import {IHooks} from "v4-core/interfaces/IHooks.sol";
 
 contract ERC721AuctionFactoryTest is Test {
     ERC721AuctionFactory public factory;
-    UltraAlignmentVault public vault;
+    UniAlignmentVault public vault;
     MockEXECToken public token;
     MockMasterRegistry public mockRegistry;
 
@@ -38,8 +38,8 @@ contract ERC721AuctionFactoryTest is Test {
         token = new MockEXECToken(1000000e18);
 
         {
-            UltraAlignmentVault _impl = new UltraAlignmentVault();
-            vault = UltraAlignmentVault(payable(LibClone.clone(address(_impl))));
+            UniAlignmentVault _impl = new UniAlignmentVault();
+            vault = UniAlignmentVault(payable(LibClone.clone(address(_impl))));
             vault.initialize(
                 address(0x2222222222222222222222222222222222222222),
                 address(0x4444444444444444444444444444444444444444),

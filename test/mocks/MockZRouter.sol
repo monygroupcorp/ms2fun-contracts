@@ -3,7 +3,7 @@ pragma solidity ^0.8.24;
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
-/// @notice Mock zRouter for unit testing UltraAlignmentVaultV2
+/// @notice Mock zRouter for unit testing ZAMMAlignmentVault
 /// Handles both swap directions:
 ///   ETH  → token: receives ETH as msg.value, sends tokenOut to `to`
 ///   token → ETH:  pulls tokenIn from caller, sends ETH to `to`

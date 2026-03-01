@@ -24,7 +24,7 @@ import { IERC20 } from "forge-std/interfaces/IERC20.sol";
  * 1. Swap source - purchase tokens via V4 pools
  * 2. LP destination - create positions in V4 pools
  *
- * These tests help us implement _executeV4Swap() in UltraAlignmentVault.sol
+ * These tests help us implement _executeV4Swap() in UniAlignmentVault.sol
  */
 contract V4SwapRoutingTest is ForkTestBase, IUnlockCallback {
     using PoolIdLibrary for PoolKey;
@@ -390,7 +390,7 @@ contract V4SwapRoutingTest is ForkTestBase, IUnlockCallback {
      *   * Use hookless V4 for buying external tokens
      *   * Use hooked V4 only for vault's own alignment token pools
      *
-     * See test/hooks/UltraAlignmentV4Hook.t.sol for hook taxation tests
+     * See test/hooks/UniAlignmentV4Hook.t.sol for hook taxation tests
      */
     function test_swapWithHookTaxation_reducesOutput() public {
         if (!v4Available) {
@@ -401,7 +401,7 @@ contract V4SwapRoutingTest is ForkTestBase, IUnlockCallback {
         emit log_string("=== Hook Taxation Test ===");
         emit log_string("");
         emit log_string("[DEFERRED] Hook taxation tested in unit tests:");
-        emit log_string("  See: test/hooks/UltraAlignmentV4Hook.t.sol");
+        emit log_string("  See: test/hooks/UniAlignmentV4Hook.t.sol");
         emit log_string("");
         emit log_string("Key insight from test_compareV4SwapToV2V3_success:");
         emit log_string("  Hookless V4 = Competitive with V2/V3");

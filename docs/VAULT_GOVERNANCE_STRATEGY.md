@@ -19,7 +19,7 @@ Factory Creation Flow:
            │
            ▼
 ┌─────────────────────────────┐         ┌──────────────────────────┐
-│  Instance                   │────────→│  UltraAlignmentVault     │
+│  Instance                   │────────→│  UniAlignmentVault     │
 │  - stores vault reference   │         │  - benefactor tracking   │
 │  - calls receiveHookTax()   │         │  - share distribution    │
 │  - calls claimFees()        │         │  - V4 LP management      │
@@ -322,12 +322,12 @@ interface IAlignmentVault {
 }
 ```
 
-### 2.2 UltraAlignmentVault Implements IAlignmentVault
+### 2.2 UniAlignmentVault Implements IAlignmentVault
 
-**Changes to `UltraAlignmentVault.sol`:**
+**Changes to `UniAlignmentVault.sol`:**
 
 ```solidity
-contract UltraAlignmentVault is
+contract UniAlignmentVault is
     ReentrancyGuard,
     Ownable,
     IUnlockCallback,
@@ -419,14 +419,14 @@ function createInstance(..., address vault) external payable returns (address in
 
 ```solidity
 // ERC404BondingInstance.sol
-UltraAlignmentVault public vault;  // ← Type-specific reference
+UniAlignmentVault public vault;  // ← Type-specific reference
 
 // Should be:
 IAlignmentVault public vault;  // ← Interface reference
 ```
 
 **Changes needed:**
-1. Replace `UltraAlignmentVault` type with `IAlignmentVault` interface
+1. Replace `UniAlignmentVault` type with `IAlignmentVault` interface
 2. Remove any V4-specific assumptions in instance code
 3. Use interface methods only
 
@@ -604,7 +604,7 @@ contract ERC404BondingInstance {
 
 ### Phase 1: Foundation (Week 1-2)
 - [ ] Create `IAlignmentVault.sol` interface
-- [ ] Update `UltraAlignmentVault.sol` to implement interface
+- [ ] Update `UniAlignmentVault.sol` to implement interface
 - [ ] Add `vaultType()` method to existing vault
 - [ ] Write vault interface compliance tests
 
@@ -660,7 +660,7 @@ contract ERC404BondingInstance {
 - ⚠️ Missing vault validation (governance check)
 - ⚠️ Missing interface compliance check
 
-**UltraAlignmentVault.sol**
+**UniAlignmentVault.sol**
 - ✅ Already implements required interface methods
 - ✅ Uses benefactor pattern (works with any instance)
 - ✅ Generic fee reception and claiming
@@ -670,13 +670,13 @@ contract ERC404BondingInstance {
 ### Contracts Needing Updates ⚠️
 
 **ERC404BondingInstance.sol**
-- ⚠️ Uses concrete `UltraAlignmentVault` type instead of interface
+- ⚠️ Uses concrete `UniAlignmentVault` type instead of interface
 - ⚠️ Assumes vault has specific V4 methods
 - ⚠️ No vault migration support
 - ✅ Otherwise vault-agnostic (uses generic claim methods)
 
 **ERC1155Instance.sol**
-- ⚠️ Uses concrete `UltraAlignmentVault` type instead of interface
+- ⚠️ Uses concrete `UniAlignmentVault` type instead of interface
 - ⚠️ No vault migration support
 - ✅ Otherwise vault-agnostic (uses receive() and claimFees())
 
@@ -700,7 +700,7 @@ contract ERC404BondingInstance {
 
 ### Medium Risk ⚠️
 - Vault migration (requires careful testing)
-- Instance type changes (UltraAlignmentVault → IAlignmentVault)
+- Instance type changes (UniAlignmentVault → IAlignmentVault)
 - Multi-vault routing (complex fee distribution)
 
 ### High Risk ⚠️⚠️
@@ -710,7 +710,7 @@ contract ERC404BondingInstance {
 
 ### Mitigation Strategies
 
-1. **Backward Compatibility**: Keep existing `UltraAlignmentVault` working
+1. **Backward Compatibility**: Keep existing `UniAlignmentVault` working
 2. **Gradual Rollout**: Phase 1-4 = no breaking changes, Phase 5-6 = opt-in features
 3. **Timelock Protection**: 7-day migration timelock for safety
 4. **Interface Versioning**: `IAlignmentVault_v1`, `IAlignmentVault_v2`, etc.
@@ -769,7 +769,7 @@ The ms2fun architecture is **80% ready** for multi-vault governance:
 
 ✅ **Already Built:**
 - Vault registry in MasterRegistryV1
-- Benefactor model in UltraAlignmentVault
+- Benefactor model in UniAlignmentVault
 - Factory vault parameterization
 - Instance vault integration
 

@@ -10,7 +10,7 @@ Vault references across the codebase have different mutability:
 |---|---|---|
 | ERC404BondingInstance | `IAlignmentVault public vault` | Yes — `setVault()` exists |
 | ERC1155Instance | `IAlignmentVault public vault` | No — set once in constructor |
-| UltraAlignmentV4Hook | `IAlignmentVault public immutable vault` | No — immutable |
+| UniAlignmentV4Hook | `IAlignmentVault public immutable vault` | No — immutable |
 
 When a vault is set, the vault begins tracking the instance as a benefactor. The vault holds:
 - `benefactorTotalETH[instance]` — lifetime contribution

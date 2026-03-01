@@ -2,8 +2,8 @@
 pragma solidity ^0.8.20;
 
 import "forge-std/Test.sol";
-import "../../src/vaults/uni/UltraAlignmentVault.sol";
-import {TestableUltraAlignmentVault} from "../helpers/TestableUltraAlignmentVault.sol";
+import "../../src/vaults/uni/UniAlignmentVault.sol";
+import {TestableUniAlignmentVault} from "../helpers/TestableUniAlignmentVault.sol";
 import "../../src/master/MasterRegistryV1.sol";
 import {MockZRouter} from "../mocks/MockZRouter.sol";
 import {MockVaultPriceValidator} from "../mocks/MockVaultPriceValidator.sol";
@@ -21,9 +21,9 @@ import "../mocks/MockEXECToken.sol";
  * @dev This is the griefing attack vector - revert to block operation
  */
 contract GrieferAlwaysReverts {
-    UltraAlignmentVault public vault;
+    UniAlignmentVault public vault;
 
-    constructor(UltraAlignmentVault _vault) {
+    constructor(UniAlignmentVault _vault) {
         vault = _vault;
     }
 
@@ -42,10 +42,10 @@ contract GrieferAlwaysReverts {
  * @notice Contract that conditionally reverts (griefs only sometimes)
  */
 contract GrieferConditional {
-    UltraAlignmentVault public vault;
+    UniAlignmentVault public vault;
     bool public shouldGrief;
 
-    constructor(UltraAlignmentVault _vault) {
+    constructor(UniAlignmentVault _vault) {
         vault = _vault;
     }
 
@@ -69,9 +69,9 @@ contract GrieferConditional {
  * @notice Contract that runs out of gas when receiving (accidental griefing)
  */
 contract GrieferOutOfGas {
-    UltraAlignmentVault public vault;
+    UniAlignmentVault public vault;
 
-    constructor(UltraAlignmentVault _vault) {
+    constructor(UniAlignmentVault _vault) {
         vault = _vault;
     }
 
@@ -89,9 +89,9 @@ contract GrieferOutOfGas {
  * @notice Good caller contract that accepts payments
  */
 contract GoodCaller {
-    UltraAlignmentVault public vault;
+    UniAlignmentVault public vault;
 
-    constructor(UltraAlignmentVault _vault) {
+    constructor(UniAlignmentVault _vault) {
         vault = _vault;
     }
 
@@ -113,10 +113,10 @@ contract GoodCaller {
  *      by rejecting reward payments (pre-fix vulnerability)
  */
 contract M04_GriefingAttackTests is Test {
-    UltraAlignmentVault public vault;
+    UniAlignmentVault public vault;
     MockEXECToken public alignmentToken;
 
-    TestableUltraAlignmentVault public vaultImpl;
+    TestableUniAlignmentVault public vaultImpl;
     MockZRouter public mockZRouter;
     MockVaultPriceValidator public mockValidator;
 
@@ -147,8 +147,8 @@ contract M04_GriefingAttackTests is Test {
         vm.deal(address(mockZRouter), 100 ether);
         alignmentToken.transfer(address(mockZRouter), 100_000e18);
 
-        vaultImpl = new TestableUltraAlignmentVault();
-        vault = TestableUltraAlignmentVault(payable(LibClone.clone(address(vaultImpl))));
+        vaultImpl = new TestableUniAlignmentVault();
+        vault = TestableUniAlignmentVault(payable(LibClone.clone(address(vaultImpl))));
         vault.initialize(
             mockWeth,
             mockPoolManager,
@@ -301,7 +301,7 @@ contract M04_GriefingAttackTests is Test {
         MockVaultPriceValidator poorValidator = new MockVaultPriceValidator();
         alignmentToken.transfer(address(poorZRouter), 100_000e18);
 
-        UltraAlignmentVault poorVault = TestableUltraAlignmentVault(payable(LibClone.clone(address(vaultImpl))));
+        UniAlignmentVault poorVault = TestableUniAlignmentVault(payable(LibClone.clone(address(vaultImpl))));
         poorVault.initialize(
             mockWeth,
             mockPoolManager,

@@ -2,12 +2,12 @@
 pragma solidity ^0.8.20;
 
 import {LibClone} from "solady/utils/LibClone.sol";
-import {UltraAlignmentVault} from "./UltraAlignmentVault.sol";
+import {UniAlignmentVault} from "./UniAlignmentVault.sol";
 import {IVaultPriceValidator} from "../../interfaces/IVaultPriceValidator.sol";
 
-/// @title UltraAlignmentVaultFactory
-/// @notice Deploys UltraAlignmentVault clones; zRouter config is shared across all vaults.
-contract UltraAlignmentVaultFactory {
+/// @title UniAlignmentVaultFactory
+/// @notice Deploys UniAlignmentVault clones; zRouter config is shared across all vaults.
+contract UniAlignmentVaultFactory {
     address public immutable vaultImplementation;
     IVaultPriceValidator public immutable defaultPriceValidator;
 
@@ -33,7 +33,7 @@ contract UltraAlignmentVaultFactory {
         zRouterFee = _zRouterFee;
         zRouterTickSpacing = _zRouterTickSpacing;
         defaultPriceValidator = _defaultPriceValidator;
-        vaultImplementation = address(new UltraAlignmentVault());
+        vaultImplementation = address(new UniAlignmentVault());
     }
 
     /// @notice Deploy a new vault clone
@@ -50,7 +50,7 @@ contract UltraAlignmentVaultFactory {
     ) external returns (address vault) {
         vault = LibClone.clone(vaultImplementation);
 
-        UltraAlignmentVault(payable(vault)).initialize(
+        UniAlignmentVault(payable(vault)).initialize(
             weth,
             poolManager,
             alignmentToken,

@@ -62,7 +62,7 @@ interface IWETH9 {
  * - Multi-hop swaps with encoded path
  * - Deadline enforcement
  *
- * These tests help us implement _executeV3Swap() in UltraAlignmentVault.sol
+ * These tests help us implement _executeV3Swap() in UniAlignmentVault.sol
  */
 contract V3SwapRoutingTest is ForkTestBase {
     IV3SwapRouter router;

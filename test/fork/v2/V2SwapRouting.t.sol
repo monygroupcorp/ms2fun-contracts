@@ -31,7 +31,7 @@ interface IUniswapV2Router02 {
  * - Multi-hop swaps (ETH → USDC → DAI)
  * - Deadline enforcement
  *
- * These tests help us implement _executeV2Swap() in UltraAlignmentVault.sol
+ * These tests help us implement _executeV2Swap() in UniAlignmentVault.sol
  */
 contract V2SwapRoutingTest is ForkTestBase {
 

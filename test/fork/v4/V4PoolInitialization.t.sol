@@ -21,7 +21,7 @@ import { StateLibrary } from "v4-core/libraries/StateLibrary.sol";
  * - Native ETH vs WETH pool differences
  * - Liquidity distribution across fee tiers
  *
- * These tests help us understand V4 pools before implementing position creation in UltraAlignmentVault.sol
+ * These tests help us understand V4 pools before implementing position creation in UniAlignmentVault.sol
  */
 contract V4PoolInitializationTest is ForkTestBase {
     using PoolIdLibrary for PoolKey;

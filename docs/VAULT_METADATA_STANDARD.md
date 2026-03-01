@@ -579,7 +579,7 @@ Applications MAY be rejected for:
 
 **v1.0.0 (2026-01-07)**
 - Initial standard for Phase 2 vault governance
-- Based on learnings from Phase 1 UltraAlignmentVault deployment
+- Based on learnings from Phase 1 UniAlignmentVault deployment
 - Aligned with IAlignmentVault interface requirements
 
 ## Future Extensions

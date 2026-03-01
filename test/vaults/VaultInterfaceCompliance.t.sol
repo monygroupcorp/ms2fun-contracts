@@ -3,8 +3,8 @@ pragma solidity ^0.8.20;
 
 import "forge-std/Test.sol";
 import {IAlignmentVault} from "../../src/interfaces/IAlignmentVault.sol";
-import {UltraAlignmentVault} from "../../src/vaults/uni/UltraAlignmentVault.sol";
-import {UltraAlignmentVaultV2, IZAMM} from "../../src/vaults/zamm/UltraAlignmentVaultV2.sol";
+import {UniAlignmentVault} from "../../src/vaults/uni/UniAlignmentVault.sol";
+import {ZAMMAlignmentVault, IZAMM} from "../../src/vaults/zamm/ZAMMAlignmentVault.sol";
 import {MockVault} from "../mocks/MockVault.sol";
 import {MockVaultPriceValidator} from "../mocks/MockVaultPriceValidator.sol";
 import {MockZAMM} from "../mocks/MockZAMM.sol";
@@ -17,15 +17,15 @@ import {LibClone} from "solady/utils/LibClone.sol";
 /**
  * @title VaultInterfaceComplianceTest
  * @notice Tests that vault implementations properly implement IAlignmentVault interface
- * @dev Validates both UltraAlignmentVault and MockVault interface compliance
+ * @dev Validates both UniAlignmentVault and MockVault interface compliance
  */
 contract VaultInterfaceComplianceTest is Test {
     // Vault instances
-    UltraAlignmentVault ultraVault;
-    UltraAlignmentVaultV2 ultraVaultV2;
+    UniAlignmentVault ultraVault;
+    ZAMMAlignmentVault ultraVaultV2;
     MockVault mockVault;
 
-    // Mock addresses for UltraAlignmentVault constructor
+    // Mock addresses for UniAlignmentVault constructor
     address constant MOCK_WETH = address(0x1);
     address constant MOCK_POOL_MANAGER = address(0x2);
     address constant MOCK_ALIGNMENT_TOKEN = address(0x7);
@@ -39,9 +39,9 @@ contract VaultInterfaceComplianceTest is Test {
         MockZRouter ultraMockZRouter = new MockZRouter();
         MockVaultPriceValidator mockValidator = new MockVaultPriceValidator();
 
-        // Deploy UltraAlignmentVault via clone+initialize pattern
-        UltraAlignmentVault impl = new UltraAlignmentVault();
-        ultraVault = UltraAlignmentVault(payable(LibClone.clone(address(impl))));
+        // Deploy UniAlignmentVault via clone+initialize pattern
+        UniAlignmentVault impl = new UniAlignmentVault();
+        ultraVault = UniAlignmentVault(payable(LibClone.clone(address(impl))));
         ultraVault.initialize(
             MOCK_WETH,
             MOCK_POOL_MANAGER,
@@ -54,7 +54,7 @@ contract VaultInterfaceComplianceTest is Test {
             IVaultPriceValidator(address(mockValidator))
         );
 
-        // Deploy UltraAlignmentVaultV2 via clone+initialize pattern
+        // Deploy ZAMMAlignmentVault via clone+initialize pattern
         MockZAMM mockZamm = new MockZAMM();
         MockZRouter mockZRouter = new MockZRouter();
         MockEXECToken alignmentToken = new MockEXECToken(1_000_000e18);
@@ -69,8 +69,8 @@ contract VaultInterfaceComplianceTest is Test {
             feeOrHook: 30
         });
 
-        UltraAlignmentVaultV2 implV2 = new UltraAlignmentVaultV2();
-        ultraVaultV2 = UltraAlignmentVaultV2(payable(LibClone.clone(address(implV2))));
+        ZAMMAlignmentVault implV2 = new ZAMMAlignmentVault();
+        ultraVaultV2 = ZAMMAlignmentVault(payable(LibClone.clone(address(implV2))));
         ultraVaultV2.initialize(
             address(mockZamm),
             address(mockZRouter),
@@ -92,9 +92,9 @@ contract VaultInterfaceComplianceTest is Test {
     // ========== Interface Compliance Tests ==========
 
     /**
-     * @notice Test UltraAlignmentVault implements IAlignmentVault
+     * @notice Test UniAlignmentVault implements IAlignmentVault
      */
-    function test_UltraAlignmentVault_ImplementsInterface() public {
+    function test_UniAlignmentVault_ImplementsInterface() public {
         // Cast to interface (payable required for interface with receive())
         IAlignmentVault vault = IAlignmentVault(payable(address(ultraVault)));
 
@@ -276,9 +276,9 @@ contract VaultInterfaceComplianceTest is Test {
     }
 
     /**
-     * @notice Test UltraAlignmentVault has correct interface methods
+     * @notice Test UniAlignmentVault has correct interface methods
      */
-    function test_UltraAlignmentVault_HasInterfaceMethods() public {
+    function test_UniAlignmentVault_HasInterfaceMethods() public {
         // Verify vaultType
         assertEq(ultraVault.vaultType(), "UniswapV4LP");
 
@@ -404,7 +404,7 @@ contract VaultInterfaceComplianceTest is Test {
     function test_UltraVault_CurrentPolicy_Empty() public {
         IAlignmentVault v = IAlignmentVault(payable(address(ultraVault)));
         bytes memory policy = v.currentPolicy();
-        assertEq(policy.length, 0, "UltraAlignmentVault should have empty policy");
+        assertEq(policy.length, 0, "UniAlignmentVault should have empty policy");
     }
 
     function test_MockVault_CurrentPolicy_Empty() public {
@@ -440,7 +440,7 @@ contract VaultInterfaceComplianceTest is Test {
         assertEq(v.getBenefactorDelegate(benefactor1), delegate, "Delegate should be set");
     }
 
-    // ========== UltraAlignmentVaultV2 Compliance Tests ==========
+    // ========== ZAMMAlignmentVault Compliance Tests ==========
 
     function test_V2_ImplementsInterface() public {
         IAlignmentVault v = IAlignmentVault(payable(address(ultraVaultV2)));

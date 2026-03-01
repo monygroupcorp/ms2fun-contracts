@@ -54,7 +54,7 @@ This repo has many contracts and a full build/test is slow. Always use targeted 
 - `src/dao/` — GrandCentral DAO, conductors (StipendConductor, ShareOffering, RevenueConductor)
 - `src/master/` — MasterRegistryV1 (UUPS), AlignmentRegistryV1 (UUPS), FeaturedQueueManager
 - `src/factories/` — ERC404 (factory, instance, staking module, launch manager, curve computer, liquidity deployer), ERC1155, ERC721
-- `src/vaults/` — UltraAlignmentVault
+- `src/vaults/` — UniAlignmentVault (Uni V4), ZAMMAlignmentVault (ZAMM), CypherAlignmentVault (Algebra V2)
 - `src/registry/` — VaultRegistry, GlobalMessageRegistry
 - `src/treasury/` — ProtocolTreasuryV1
 - `docs/ARCHITECTURE.md` — Full system architecture

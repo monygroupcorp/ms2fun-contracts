@@ -16,8 +16,8 @@ function receiveHookTax(
 
 This was well-designed — the interface is already multi-asset ready. However, the implementations are ETH-only:
 
-- **UltraAlignmentV4Hook** (line 148): `require(token == address(0), "Hook only accepts native ETH taxes")`
-- **UltraAlignmentVault.receiveHookTax**: Only processes `msg.value` (native ETH)
+- **UniAlignmentV4Hook** (line 148): `require(token == address(0), "Hook only accepts native ETH taxes")`
+- **UniAlignmentVault.receiveHookTax**: Only processes `msg.value` (native ETH)
 - **ERC1155Instance.withdraw**: Sends ETH via `safeTransferETH` to vault's `receive()` fallback
 
 ## Problem

@@ -2,7 +2,7 @@
 pragma solidity ^0.8.20;
 
 import { ForkTestBase } from "./helpers/ForkTestBase.sol";
-import { UltraAlignmentVault } from "src/vaults/uni/UltraAlignmentVault.sol";
+import { UniAlignmentVault } from "src/vaults/uni/UniAlignmentVault.sol";
 import { UniswapVaultPriceValidator } from "src/peripherals/UniswapVaultPriceValidator.sol";
 import { IVaultPriceValidator } from "src/interfaces/IVaultPriceValidator.sol";
 import { LibClone } from "solady/utils/LibClone.sol";
@@ -12,12 +12,12 @@ import { IHooks } from "v4-core/interfaces/IHooks.sol";
 
 /**
  * @title VaultUniswapIntegration
- * @notice Comprehensive integration tests for UltraAlignmentVault
+ * @notice Comprehensive integration tests for UniAlignmentVault
  * @dev Tests vault logic (shares, fees, conversion rounds) with stubbed swap routing
  *      Run with: forge test --mp test/fork/VaultUniswapIntegration.t.sol --fork-url $ETH_RPC_URL -vvv
  */
 contract VaultUniswapIntegrationTest is ForkTestBase {
-    UltraAlignmentVault vault;
+    UniAlignmentVault vault;
     address owner;
     address alice;
     address bob;
@@ -38,8 +38,8 @@ contract VaultUniswapIntegrationTest is ForkTestBase {
         UniswapVaultPriceValidator priceValidator = new UniswapVaultPriceValidator(
             WETH, UNISWAP_V2_FACTORY, UNISWAP_V3_FACTORY, UNISWAP_V4_POOL_MANAGER, 1000
         );
-        UltraAlignmentVault vaultImpl = new UltraAlignmentVault();
-        vault = UltraAlignmentVault(payable(LibClone.clone(address(vaultImpl))));
+        UniAlignmentVault vaultImpl = new UniAlignmentVault();
+        vault = UniAlignmentVault(payable(LibClone.clone(address(vaultImpl))));
         vm.prank(owner);
         vault.initialize(
             WETH,
@@ -65,7 +65,7 @@ contract VaultUniswapIntegrationTest is ForkTestBase {
         vault.setV4PoolKey(poolKey);
 
         // Label addresses for better trace output
-        vm.label(address(vault), "UltraAlignmentVault");
+        vm.label(address(vault), "UniAlignmentVault");
         vm.label(owner, "Owner");
         vm.label(alice, "Alice");
         vm.label(bob, "Bob");
@@ -115,8 +115,8 @@ contract VaultUniswapIntegrationTest is ForkTestBase {
 
     function test_deployVault_withValidParameters() public {
         // Deploy fresh vault (clone pattern)
-        UltraAlignmentVault newVaultImpl = new UltraAlignmentVault();
-        UltraAlignmentVault newVault = UltraAlignmentVault(payable(LibClone.clone(address(newVaultImpl))));
+        UniAlignmentVault newVaultImpl = new UniAlignmentVault();
+        UniAlignmentVault newVault = UniAlignmentVault(payable(LibClone.clone(address(newVaultImpl))));
         vm.prank(owner);
         newVault.initialize(
             WETH,

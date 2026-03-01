@@ -4,7 +4,7 @@ pragma solidity ^0.8.24;
 import {SafeTransferLib} from "solady/utils/SafeTransferLib.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IAlgebraFactory, IAlgebraPool, IAlgebraNFTPositionManager} from "../../interfaces/algebra/IAlgebra.sol";
-import {UltraAlignmentCypherVault} from "../../vaults/cypher/UltraAlignmentCypherVault.sol";
+import {CypherAlignmentVault} from "../../vaults/cypher/CypherAlignmentVault.sol";
 
 /// @title CypherLiquidityDeployerModule
 /// @notice Called by ERC404CypherBondingInstance at graduation.
@@ -21,7 +21,7 @@ contract CypherLiquidityDeployerModule {
         address factoryCreator;
         address token;                  // ERC404 token address (bonding instance)
         address weth;                   // WETH address
-        address vault;                  // UltraAlignmentCypherVault address
+        address vault;                  // CypherAlignmentVault address
         address algebraFactory;
         address positionManager;
         address instance;               // bonding instance (benefactor to register)
@@ -112,7 +112,7 @@ contract CypherLiquidityDeployerModule {
     }
 
     function _postMint(DeployParams calldata p, PoolSetupResult memory r) private {
-        UltraAlignmentCypherVault(payable(p.vault)).registerPosition(
+        CypherAlignmentVault(payable(p.vault)).registerPosition(
             r.tokenId, r.pool, r.tokenIsZero, p.instance, r.ethToLP
         );
         if (r.protocolFee > 0) {

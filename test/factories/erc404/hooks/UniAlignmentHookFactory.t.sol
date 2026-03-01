@@ -2,8 +2,8 @@
 pragma solidity ^0.8.20;
 
 import {Test, console, console2} from "forge-std/Test.sol";
-import {UltraAlignmentHookFactory} from "../../../../src/factories/erc404/hooks/UltraAlignmentHookFactory.sol";
-import {UltraAlignmentVault} from "../../../../src/vaults/uni/UltraAlignmentVault.sol";
+import {UniAlignmentHookFactory} from "../../../../src/factories/erc404/hooks/UniAlignmentHookFactory.sol";
+import {UniAlignmentVault} from "../../../../src/vaults/uni/UniAlignmentVault.sol";
 import {MockEXECToken} from "../../../mocks/MockEXECToken.sol";
 import {MockPoolManager} from "../../../mocks/MockPoolManager.sol";
 import {MockZRouter} from "../../../mocks/MockZRouter.sol";
@@ -15,13 +15,13 @@ import {PoolKey} from "v4-core/types/PoolKey.sol";
 import {IHooks} from "v4-core/interfaces/IHooks.sol";
 
 /**
- * @title UltraAlignmentHookFactoryTest
- * @notice Comprehensive test suite for UltraAlignmentHookFactory
+ * @title UniAlignmentHookFactoryTest
+ * @notice Comprehensive test suite for UniAlignmentHookFactory
  * @dev Tests all public functions with success and failure paths
  */
-contract UltraAlignmentHookFactoryTest is Test {
-    UltraAlignmentHookFactory public factory;
-    UltraAlignmentVault public vault;
+contract UniAlignmentHookFactoryTest is Test {
+    UniAlignmentHookFactory public factory;
+    UniAlignmentVault public vault;
     MockEXECToken public token;
     MockPoolManager public poolManager;
 
@@ -56,8 +56,8 @@ contract UltraAlignmentHookFactoryTest is Test {
 
         // Deploy vault (WETH, PoolManager, V3Router, V2Router, V2Factory, V3Factory, AlignmentToken)
         {
-            UltraAlignmentVault _impl = new UltraAlignmentVault();
-            vault = UltraAlignmentVault(payable(LibClone.clone(address(_impl))));
+            UniAlignmentVault _impl = new UniAlignmentVault();
+            vault = UniAlignmentVault(payable(LibClone.clone(address(_impl))));
             vault.initialize(
                 wethAddr,
                 address(poolManager),
@@ -83,7 +83,7 @@ contract UltraAlignmentHookFactoryTest is Test {
         vault.setV4PoolKey(mockPoolKey);
 
         // Deploy factory
-        factory = new UltraAlignmentHookFactory(address(0)); // hookTemplate
+        factory = new UniAlignmentHookFactory(address(0)); // hookTemplate
 
         vm.stopPrank();
 
@@ -422,8 +422,8 @@ contract UltraAlignmentHookFactoryTest is Test {
     }
 
     function test_constructor_validAddresses() public {
-        UltraAlignmentHookFactory newFactory =
-            new UltraAlignmentHookFactory(address(0x888)); // hookTemplate
+        UniAlignmentHookFactory newFactory =
+            new UniAlignmentHookFactory(address(0x888)); // hookTemplate
         assertEq(newFactory.hookTemplate(), address(0x888), "Hook template should be set");
         assertEq(newFactory.hookCreationFee(), 0.001 ether, "Default fee set");
     }

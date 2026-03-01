@@ -2,7 +2,7 @@
 
 ## Overview
 
-The UltraAlignmentVault implements a sophisticated three-pool treasury system combined with async epoch finalization to enable perpetual, scalable operation without gas spikes or forced blocking behavior.
+The UniAlignmentVault implements a sophisticated three-pool treasury system combined with async epoch finalization to enable perpetual, scalable operation without gas spikes or forced blocking behavior.
 
 ## Three-Pool Treasury Design
 
@@ -227,7 +227,7 @@ vault.setMinLiquidityThreshold(0.01 ether);
 Query current pool balances:
 
 ```solidity
-UltraAlignmentVault.Treasury memory treasury = vault.getTreasuryState();
+UniAlignmentVault.Treasury memory treasury = vault.getTreasuryState();
 // Returns: (conversionPool, feeClaimPool, operatorIncentivePool)
 ```
 
@@ -258,7 +258,7 @@ allocated >= withdrawn (always true)
 
 ## Test Coverage
 
-Treasury and epoch functionality is tested in `test/vaults/UltraAlignmentVault.Treasury.t.sol`:
+Treasury and epoch functionality is tested in `test/vaults/UniAlignmentVault.Treasury.t.sol`:
 
 - ✅ Treasury initialization
 - ✅ Pool rebalancing (permission, validation)

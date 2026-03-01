@@ -39,7 +39,7 @@
 
 ### ✅ 1. Complete Stub Function: _checkTargetAssetPriceAndPurchasePower()
 
-**File:** `src/vaults/UltraAlignmentVault.sol:856-898`
+**File:** `src/vaults/UniAlignmentVault.sol:856-898`
 **Status:** ✅ COMPLETE
 **Time Taken:** 1 hour
 **Completed:** 2025-12-17
@@ -68,7 +68,7 @@
 
 ### ✅ 2. Complete Stub Function: _checkCurrentVaultOwnedLpTickValues()
 
-**File:** `src/vaults/UltraAlignmentVault.sol:891-929`
+**File:** `src/vaults/UniAlignmentVault.sol:891-929`
 **Status:** ✅ COMPLETE
 **Time Taken:** 30 minutes
 **Completed:** 2025-12-17
@@ -96,7 +96,7 @@
 
 ### ✅ 3. Complete Stub Function: _calculateProportionOfEthToSwapBasedOnVaultOwnedLpTickValues()
 
-**File:** `src/vaults/UltraAlignmentVault.sol:941-1003`
+**File:** `src/vaults/UniAlignmentVault.sol:941-1003`
 **Status:** ✅ COMPLETE
 **Time Taken:** 30 minutes
 **Completed:** 2025-12-17
@@ -210,7 +210,7 @@
 ### ✅ 8. Replace v4-core/test/ Imports with Production Code
 
 **Files:**
-- `src/vaults/UltraAlignmentVault.sol:11` (CurrencySettler)
+- `src/vaults/UniAlignmentVault.sol:11` (CurrencySettler)
 - `src/factories/erc404/ERC404BondingInstance.sol:17,21` (LiquidityAmounts, CurrencySettler)
 
 **Status:** ✅ COMPLETE
@@ -221,7 +221,7 @@
 **Changes Made:**
 - ✅ Created `src/libraries/v4/CurrencySettler.sol` from v4-core test utilities
 - ✅ Created `src/libraries/v4/LiquidityAmounts.sol` from v4-core test utilities
-- ✅ Updated UltraAlignmentVault.sol import path (line 11)
+- ✅ Updated UniAlignmentVault.sol import path (line 11)
 - ✅ Updated ERC404BondingInstance.sol import paths (lines 17, 21)
 - ✅ Added proper MIT license headers
 - ✅ Documented source in file comments
@@ -235,9 +235,9 @@
 
 ---
 
-### ✅ 9. Add Unit Tests for UltraAlignmentV4Hook.afterSwap()
+### ✅ 9. Add Unit Tests for UniAlignmentV4Hook.afterSwap()
 
-**File:** `test/hooks/UltraAlignmentV4Hook.t.sol`
+**File:** `test/hooks/UniAlignmentV4Hook.t.sol`
 **Status:** ✅ COMPLETE
 **Time Taken:** 1 hour
 **Completed:** 2025-12-17
@@ -335,9 +335,9 @@
 
 ---
 
-### ✅ 12. Add V4 Pool Validation in UltraAlignmentVault
+### ✅ 12. Add V4 Pool Validation in UniAlignmentVault
 
-**File:** `src/vaults/UltraAlignmentVault.sol:1050-1106, 1189-1193`
+**File:** `src/vaults/UniAlignmentVault.sol:1050-1106, 1189-1193`
 **Status:** ✅ COMPLETE
 **Time Taken:** 30 minutes
 **Completed:** 2025-12-17
@@ -365,7 +365,7 @@
 
 ### ✅ 13. Add WETH Balance Checks Before Withdrawals
 
-**File:** `src/vaults/UltraAlignmentVault.sol:626-628, 641-643`
+**File:** `src/vaults/UniAlignmentVault.sol:626-628, 641-643`
 **Status:** ✅ COMPLETE
 **Time Taken:** 15 minutes
 **Completed:** 2025-12-17
@@ -405,9 +405,9 @@
 
 **Verification Results:**
 Systematic NatSpec coverage check performed across all audit-critical contracts:
-- **UltraAlignmentVault.sol**: ✅ Complete (21 public/external functions)
+- **UniAlignmentVault.sol**: ✅ Complete (21 public/external functions)
 - **ERC404BondingInstance.sol**: ✅ Complete (40 public/external functions, 43 NatSpec blocks)
-- **UltraAlignmentV4Hook.sol**: ✅ Complete (3 public/external functions)
+- **UniAlignmentV4Hook.sol**: ✅ Complete (3 public/external functions)
 - **MasterRegistryV1.sol**: ✅ Complete (35 public/external functions)
 - **ERC1155Factory.sol**: ✅ Complete (2 public/external functions)
 - **ERC1155Instance.sol**: ✅ Complete (22 public/external functions)
@@ -506,7 +506,7 @@ forge test --gas-report
 
 **Acceptance Criteria:**
 - 100% test pass rate
-- UltraAlignmentVault: >85% coverage
+- UniAlignmentVault: >85% coverage
 - ERC404BondingInstance: >80% coverage
 - MasterRegistryV1: >75% coverage
 - All critical functions have tests

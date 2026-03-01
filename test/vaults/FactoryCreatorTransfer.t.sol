@@ -4,7 +4,7 @@ pragma solidity ^0.8.20;
 import {Test} from "forge-std/Test.sol";
 
 /// @notice Lightweight mock that isolates the factoryCreator two-step transfer logic.
-/// Avoids pulling in UltraAlignmentVault's full constructor dependency tree
+/// Avoids pulling in UniAlignmentVault's full constructor dependency tree
 /// (PoolManager, V3Router, V2Router, etc.) so the test stays fast and focused.
 contract MockFactoryCreatorVault {
     address public factoryCreator;

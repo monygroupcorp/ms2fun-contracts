@@ -10,22 +10,22 @@ import {Currency, CurrencyLibrary} from "v4-core/types/Currency.sol";
 import {PoolKey} from "v4-core/types/PoolKey.sol";
 import {SafeCast} from "v4-core/libraries/SafeCast.sol";
 import {LPFeeLibrary} from "v4-core/libraries/LPFeeLibrary.sol";
-import {UltraAlignmentVault} from "../../src/vaults/uni/UltraAlignmentVault.sol";
+import {UniAlignmentVault} from "../../src/vaults/uni/UniAlignmentVault.sol";
 import {ReentrancyGuard} from "solady/utils/ReentrancyGuard.sol";
 import {Ownable} from "solady/auth/Ownable.sol";
 
 /**
- * @title UltraAlignmentV4HookTest
- * @notice Unit tests for UltraAlignmentV4Hook fee collection
+ * @title UniAlignmentV4HookTest
+ * @notice Unit tests for UniAlignmentV4Hook fee collection
  * @dev TestableHook mirrors production logic EXACTLY — no divergence allowed.
  *
  * DESIGN RULES (learned the hard way):
- * 1. TestableHook must use IDENTICAL logic to production UltraAlignmentV4Hook
+ * 1. TestableHook must use IDENTICAL logic to production UniAlignmentV4Hook
  * 2. All pools use realistic setup: currency0=address(0), currency1=token
  * 3. Both buy (zeroForOne=true) and sell (zeroForOne=false) are tested
  * 4. No WETH shortcuts — production only accepts address(0) as currency0
  */
-contract UltraAlignmentV4HookTest is Test {
+contract UniAlignmentV4HookTest is Test {
     using SafeCast for uint256;
     using SafeCast for int128;
 
@@ -54,7 +54,7 @@ contract UltraAlignmentV4HookTest is Test {
 
         hook = new TestableHook(
             IPoolManager(address(mockPoolManager)),
-            UltraAlignmentVault(payable(address(mockVault))),
+            UniAlignmentVault(payable(address(mockVault))),
             address(0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2), // WETH (not used in fee logic)
             owner,
             DEFAULT_HOOK_FEE_BIPS,
@@ -340,7 +340,7 @@ contract UltraAlignmentV4HookTest is Test {
         vm.prank(owner);
         TestableHook zeroFeeHook = new TestableHook(
             IPoolManager(address(mockPoolManager)),
-            UltraAlignmentVault(payable(address(mockVault))),
+            UniAlignmentVault(payable(address(mockVault))),
             address(0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2),
             owner,
             0, // hookFeeBips = 0
@@ -514,7 +514,7 @@ contract UltraAlignmentV4HookTest is Test {
         vm.prank(owner);
         TestableHook revertingHook = new TestableHook(
             IPoolManager(address(mockPoolManager)),
-            UltraAlignmentVault(payable(address(revertingVault))),
+            UniAlignmentVault(payable(address(revertingVault))),
             address(0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2),
             owner,
             DEFAULT_HOOK_FEE_BIPS,
@@ -562,7 +562,7 @@ contract UltraAlignmentV4HookTest is Test {
         vm.prank(owner);
         TestableHook maxFeeHook = new TestableHook(
             IPoolManager(address(mockPoolManager)),
-            UltraAlignmentVault(payable(address(mockVault))),
+            UniAlignmentVault(payable(address(mockVault))),
             address(0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2),
             owner,
             10000, // 100% fee
@@ -591,14 +591,14 @@ contract UltraAlignmentV4HookTest is Test {
 }
 
 // ========== TestableHook ==========
-// CRITICAL: This MUST mirror production UltraAlignmentV4Hook logic exactly.
+// CRITICAL: This MUST mirror production UniAlignmentV4Hook logic exactly.
 // If you change production, change this. If they diverge, tests are useless.
 
 contract TestableHook is ReentrancyGuard, Ownable {
     using SafeCast for uint256;
 
     IPoolManager public immutable poolManager;
-    UltraAlignmentVault public immutable vault;
+    UniAlignmentVault public immutable vault;
     address public immutable weth;
     uint256 public immutable hookFeeBips;
     uint24 public lpFeeRate;
@@ -608,7 +608,7 @@ contract TestableHook is ReentrancyGuard, Ownable {
 
     constructor(
         IPoolManager _poolManager,
-        UltraAlignmentVault _vault,
+        UniAlignmentVault _vault,
         address _weth,
         address _owner,
         uint256 _hookFeeBips,

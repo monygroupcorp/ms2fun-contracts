@@ -2,11 +2,11 @@
 pragma solidity ^0.8.24;
 
 import {LibClone} from "solady/utils/LibClone.sol";
-import {IZAMM, UltraAlignmentVaultV2} from "./UltraAlignmentVaultV2.sol";
+import {IZAMM, ZAMMAlignmentVault} from "./ZAMMAlignmentVault.sol";
 
-/// @title UltraAlignmentVaultV2Factory
-/// @notice Deploys UltraAlignmentVaultV2 clones. No peripherals — just zamm + zRouter singletons.
-contract UltraAlignmentVaultV2Factory {
+/// @title ZAMMAlignmentVaultFactory
+/// @notice Deploys ZAMMAlignmentVault clones. No peripherals — just zamm + zRouter singletons.
+contract ZAMMAlignmentVaultFactory {
     address public immutable vaultImplementation;
     address public immutable zamm;
     address public immutable zRouter;
@@ -18,7 +18,7 @@ contract UltraAlignmentVaultV2Factory {
         zamm = _zamm;
         zRouter = _zRouter;
         protocolTreasury = _protocolTreasury;
-        vaultImplementation = address(new UltraAlignmentVaultV2());
+        vaultImplementation = address(new ZAMMAlignmentVault());
     }
 
     /// @notice Deploy a new ZAMM-backed vault clone
@@ -34,7 +34,7 @@ contract UltraAlignmentVaultV2Factory {
         uint256 creatorYieldCutBps
     ) external returns (address vault) {
         vault = LibClone.clone(vaultImplementation);
-        UltraAlignmentVaultV2(payable(vault)).initialize(
+        ZAMMAlignmentVault(payable(vault)).initialize(
             zamm,
             zRouter,
             alignmentToken,

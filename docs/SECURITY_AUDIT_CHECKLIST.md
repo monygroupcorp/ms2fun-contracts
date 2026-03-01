@@ -6,7 +6,7 @@ This document tracks security hardening progress across all ms2.fun protocol fea
 
 - [x] **Master Registry Paid Spots** - Competitive queue system, payment refunds, utilization pricing
 - [x] **Governance System** - FactoryApprovalGovernance voting and proposal mechanisms
-- [x] **UltraAlignmentVault** - Share-based fee distribution, dragnet accumulation, claim calculations
+- [x] **UniAlignmentVault** - Share-based fee distribution, dragnet accumulation, claim calculations
 - [x] **ERC404 Factory Staking** - Holder staking system, reward distribution, vault integration
 
 ## Pending Audits 🔍
@@ -63,7 +63,7 @@ This document tracks security hardening progress across all ms2.fun protocol fea
 
 ### 3. V4 Hook Tax Collection 🔴 HIGH
 **Priority**: HIGH
-**Files**: `src/factories/erc404/hooks/UltraAlignmentV4Hook.sol`
+**Files**: `src/factories/erc404/hooks/UniAlignmentV4Hook.sol`
 
 **Attack Vectors to Review**:
 - [ ] Tax calculation manipulation

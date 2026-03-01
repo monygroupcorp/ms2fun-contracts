@@ -66,9 +66,9 @@ interface IzRouterV2 {
     ) external payable returns (uint256 amountIn, uint256 amountOut);
 }
 
-/// @title UltraAlignmentVaultV2
+/// @title ZAMMAlignmentVault
 /// @notice ZAMM-backed alignment vault. ETH in, ETH out. No peripherals.
-contract UltraAlignmentVaultV2 is IAlignmentVault, Ownable, ReentrancyGuard {
+contract ZAMMAlignmentVault is IAlignmentVault, Ownable, ReentrancyGuard {
     using SafeERC20 for IERC20;
     using FixedPointMathLib for uint256;
 

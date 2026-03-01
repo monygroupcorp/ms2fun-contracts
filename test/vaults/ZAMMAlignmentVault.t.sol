@@ -3,20 +3,20 @@ pragma solidity ^0.8.24;
 
 import {Test, console2} from "forge-std/Test.sol";
 import {LibClone} from "solady/utils/LibClone.sol";
-import {UltraAlignmentVaultV2, IZAMM} from "../../src/vaults/zamm/UltraAlignmentVaultV2.sol";
+import {ZAMMAlignmentVault, IZAMM} from "../../src/vaults/zamm/ZAMMAlignmentVault.sol";
 import {MockZAMM} from "../mocks/MockZAMM.sol";
 import {MockZRouter} from "../mocks/MockZRouter.sol";
 import {MockEXECToken} from "../mocks/MockEXECToken.sol";
 import {Currency} from "v4-core/types/Currency.sol";
 
-contract UltraAlignmentVaultV2Test is Test {
+contract ZAMMAlignmentVaultTest is Test {
     // Mirror events for expectEmit matching
     event ContributionReceived(address indexed benefactor, uint256 amount);
     event Harvested(uint256 totalFees, uint256 benefactorFees, uint256 callerReward);
     event VaultDeployed(address indexed vault, address indexed alignmentToken, address indexed creator);
 
-    UltraAlignmentVaultV2 public vault;
-    UltraAlignmentVaultV2 public impl;
+    ZAMMAlignmentVault public vault;
+    ZAMMAlignmentVault public impl;
     MockZAMM public mockZamm;
     MockZRouter public mockZRouter;
     MockEXECToken public alignmentToken;
@@ -50,9 +50,9 @@ contract UltraAlignmentVaultV2Test is Test {
         });
 
         vm.prank(owner);
-        impl = new UltraAlignmentVaultV2();
+        impl = new ZAMMAlignmentVault();
 
-        vault = UltraAlignmentVaultV2(payable(LibClone.clone(address(impl))));
+        vault = ZAMMAlignmentVault(payable(LibClone.clone(address(impl))));
         vault.initialize(
             address(mockZamm),
             address(mockZRouter),
@@ -101,7 +101,7 @@ contract UltraAlignmentVaultV2Test is Test {
     }
 
     function test_initialize_revertIfCreatorCutExceeds500() public {
-        UltraAlignmentVaultV2 v2 = UltraAlignmentVaultV2(payable(LibClone.clone(address(impl))));
+        ZAMMAlignmentVault v2 = ZAMMAlignmentVault(payable(LibClone.clone(address(impl))));
         vm.expectRevert();
         v2.initialize(
             address(mockZamm),

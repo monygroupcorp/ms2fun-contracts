@@ -38,13 +38,13 @@ interface IERC20Metadata {
 }
 
 /**
- * @title UltraAlignmentVault
+ * @title UniAlignmentVault
  * @notice Share-based vault for collecting and distributing fees from ms2fun ecosystem
  * @dev Clone-compatible (EIP-1167): initialized via initialize() instead of constructor.
  *      Swap and price validation are delegated to peripheral contracts.
  *      Implements IAlignmentVault interface for governance compliance.
  */
-contract UltraAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback, IAlignmentVault {
+contract UniAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback, IAlignmentVault {
     using CurrencyLibrary for Currency;
     using BalanceDeltaLibrary for BalanceDelta;
     using CurrencySettler for Currency;

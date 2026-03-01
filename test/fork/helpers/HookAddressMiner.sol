@@ -30,7 +30,7 @@ import {IHooks} from "v4-core/interfaces/IHooks.sol";
  *   AFTER_ADD_LIQUIDITY_RETURNS_DELTA_FLAG = 1 << 1
  *   AFTER_REMOVE_LIQUIDITY_RETURNS_DELTA_FLAG = 1 << 0
  *
- * For UltraAlignmentV4Hook, we need:
+ * For UniAlignmentV4Hook, we need:
  *   - BEFORE_SWAP_FLAG = 0x80 (1 << 7) — dynamic LP fee override
  *   - AFTER_SWAP_FLAG = 0x40 (1 << 6)
  *   - AFTER_SWAP_RETURNS_DELTA_FLAG = 0x04 (1 << 2)
@@ -56,13 +56,13 @@ library HookAddressMiner {
         Hooks.AFTER_REMOVE_LIQUIDITY_RETURNS_DELTA_FLAG
     ); // = 0x3FFF (bits 0-13)
 
-    /// @notice Hook flags for UltraAlignmentV4Hook
+    /// @notice Hook flags for UniAlignmentV4Hook
     /// beforeSwap (bit 7) + afterSwap (bit 6) + afterSwapReturnDelta (bit 2)
     uint160 constant ULTRA_ALIGNMENT_HOOK_FLAGS = uint160(
         Hooks.BEFORE_SWAP_FLAG | Hooks.AFTER_SWAP_FLAG | Hooks.AFTER_SWAP_RETURNS_DELTA_FLAG
     ); // = 0xC4
 
-    /// @notice Flags that must NOT be set for UltraAlignmentV4Hook
+    /// @notice Flags that must NOT be set for UniAlignmentV4Hook
     uint160 constant ULTRA_ALIGNMENT_FORBIDDEN_FLAGS = ALL_HOOK_FLAGS ^ ULTRA_ALIGNMENT_HOOK_FLAGS;
 
     /// @notice Maximum iterations before giving up on finding a valid salt
@@ -102,14 +102,14 @@ library HookAddressMiner {
     }
 
     /**
-     * @notice Find a salt specifically for UltraAlignmentV4Hook deployment
+     * @notice Find a salt specifically for UniAlignmentV4Hook deployment
      * @dev Ensures address has ONLY beforeSwap, afterSwap, and afterSwapReturnDelta flags set
      * @param deployer The hook factory address
      * @param initCodeHash The keccak256 of hook creation code + constructor args
      * @return salt Valid salt for deployment
      * @return predictedAddress The hook address that will be created
      */
-    function mineSaltForUltraAlignmentHook(
+    function mineSaltForUniAlignmentHook(
         address deployer,
         bytes32 initCodeHash
     ) internal pure returns (bytes32 salt, address predictedAddress) {
@@ -173,20 +173,20 @@ library HookAddressMiner {
     }
 
     /**
-     * @notice Check if an address is valid for UltraAlignmentV4Hook
+     * @notice Check if an address is valid for UniAlignmentV4Hook
      * @dev Checks that ONLY beforeSwap, afterSwap, and afterSwapReturnDelta flags are set
      * @param addr The address to validate
-     * @return True if the address has exactly the right flags for UltraAlignmentV4Hook
+     * @return True if the address has exactly the right flags for UniAlignmentV4Hook
      */
-    function isValidUltraAlignmentHookAddress(address addr) internal pure returns (bool) {
+    function isValidUniAlignmentHookAddress(address addr) internal pure returns (bool) {
         return hasExactFlags(addr, ULTRA_ALIGNMENT_HOOK_FLAGS, ULTRA_ALIGNMENT_FORBIDDEN_FLAGS);
     }
 
     /**
-     * @notice Compute the init code hash for UltraAlignmentV4Hook
-     * @param creationCode The type(UltraAlignmentV4Hook).creationCode
+     * @notice Compute the init code hash for UniAlignmentV4Hook
+     * @param creationCode The type(UniAlignmentV4Hook).creationCode
      * @param poolManager The IPoolManager address
-     * @param vault The UltraAlignmentVault address
+     * @param vault The UniAlignmentVault address
      * @param weth The WETH address
      * @param owner The hook owner address
      * @param hookFeeBips The hook fee in basis points

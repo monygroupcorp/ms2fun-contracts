@@ -2,7 +2,7 @@
 pragma solidity ^0.8.20;
 
 import { ForkTestBase } from "../helpers/ForkTestBase.sol";
-import { UltraAlignmentVault } from "src/vaults/uni/UltraAlignmentVault.sol";
+import { UniAlignmentVault } from "src/vaults/uni/UniAlignmentVault.sol";
 import { UniswapVaultPriceValidator } from "src/peripherals/UniswapVaultPriceValidator.sol";
 import { IVaultPriceValidator } from "src/interfaces/IVaultPriceValidator.sol";
 import { LibClone } from "solady/utils/LibClone.sol";
@@ -21,7 +21,7 @@ import { IHooks } from "v4-core/interfaces/IHooks.sol";
  * - Multi-claim delta calculation
  */
 contract VaultMultiDepositTest is ForkTestBase {
-    UltraAlignmentVault vault;
+    UniAlignmentVault vault;
     address owner;
     address alice;
     address bob;
@@ -41,8 +41,8 @@ contract VaultMultiDepositTest is ForkTestBase {
         UniswapVaultPriceValidator priceValidator = new UniswapVaultPriceValidator(
             WETH, UNISWAP_V2_FACTORY, UNISWAP_V3_FACTORY, UNISWAP_V4_POOL_MANAGER, 1000
         );
-        UltraAlignmentVault vaultImpl = new UltraAlignmentVault();
-        vault = UltraAlignmentVault(payable(LibClone.clone(address(vaultImpl))));
+        UniAlignmentVault vaultImpl = new UniAlignmentVault();
+        vault = UniAlignmentVault(payable(LibClone.clone(address(vaultImpl))));
         vm.prank(owner);
         vault.initialize(
             WETH,
@@ -68,7 +68,7 @@ contract VaultMultiDepositTest is ForkTestBase {
         vault.setV4PoolKey(poolKey);
 
         // Label addresses
-        vm.label(address(vault), "UltraAlignmentVault");
+        vm.label(address(vault), "UniAlignmentVault");
         vm.label(alice, "Alice");
         vm.label(bob, "Bob");
         vm.label(charlie, "Charlie");

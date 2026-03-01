@@ -1,6 +1,6 @@
 # ms2.fun Protocol Architecture
 
-**Last Updated:** 2026-02-20
+**Last Updated:** 2026-03-01
 
 ---
 
@@ -105,13 +105,13 @@ struct AlignmentAsset {
 3. **On approval**, target is registered in AlignmentRegistry — vault instances can now be deployed against it
 4. **Vault instances** deployed by anyone (via registered factories) or by the DAO directly. MasterRegistry calls AlignmentRegistry to enforce the vault's alignment token matches an approved target asset
 5. **Project connects**: when the target project (e.g., Remilia) reaches out, DAO votes to add their multisig as an **ambassador**
-6. **Ambassador powers** are vault-type-dependent — UltraAlignmentVault has no management functions, but future vault types may grant ambassadors operational control
+6. **Ambassador powers** are vault-type-dependent — UniAlignmentVault has no management functions, but future vault types may grant ambassadors operational control
 
 ### Ambassador System
 
 Ambassadors are wallets officially provided by the target project. All ambassador changes go through DAO votes. Their powers depend on the vault type:
 
-- **UltraAlignmentVault**: No management functions. Vault activity (buying + LP-ing the target token) IS the upside.
+- **UniAlignmentVault**: No management functions. Vault activity (buying + LP-ing the target token) IS the upside.
 - **Future vault types**: May expose management functions gated by `isAmbassador(targetId, address)`.
 
 ### Enforcement
@@ -125,20 +125,36 @@ MasterRegistry calls AlignmentRegistry at `registerVault()`:
 
 ## 4. Vault System
 
-Vaults are the economic engine of the protocol. They collect fees from all project activity, convert them to the target community's token, and deposit Uniswap V4 LP positions.
+Vaults are the economic engine of the protocol. They collect fees from all project activity, convert them to the target community's token, and deposit LP positions. Three vault strategies exist — each targeting a different DEX.
 
 ### Terminology
 
 | Term | Definition |
 |------|-----------|
-| **Vault Factory** | Code template for a vault strategy (e.g., UltraAlignmentVault) |
+| **Vault Factory** | Code template for a vault strategy |
 | **Vault Factory Creator** | Developer who wrote the vault factory. Permanently in fee structure |
 | **Vault Instance** | Deployed vault configured for a specific alignment target |
 | **Benefactor** | A project instance that contributes fees to the vault |
 
-### UltraAlignmentVault
+### Vault Strategies
 
-The primary vault implementation. Share-based fee distribution with O(1) claims.
+| Vault | Location | DEX | Status |
+|-------|----------|-----|--------|
+| **UniAlignmentVault** | `src/vaults/uni/` | Uniswap V4 | Primary |
+| **ZAMMAlignmentVault** | `src/vaults/zamm/` | ZAMM | Alternative |
+| **CypherAlignmentVault** | `src/vaults/cypher/` | Algebra V2 | Cypher chain |
+
+### Factory-to-Vault Pairing
+
+| Factory | Vault |
+|---------|-------|
+| ERC404Factory | UniAlignmentVaultFactory |
+| ERC404ZAMMFactory | ZAMMAlignmentVaultFactory |
+| ERC404CypherFactory | CypherAlignmentVaultFactory |
+
+### UniAlignmentVault (`src/vaults/uni/`)
+
+The primary vault implementation. Uniswap V4 full-range LP with share-based fee distribution and O(1) claims. Implements `IUnlockCallback` for V4 LP operations. Hook integration via `UniAlignmentV4Hook` — post-graduation swap tax flows from the hook directly to the vault.
 
 **How it works:**
 1. Project instances send ETH to the vault via `receiveInstance()`
@@ -162,7 +178,19 @@ protocolYieldCutBps (default 500 = 5%)
 benefactors get the rest (95%)
 ```
 
-**Factory Creator Transfer:** The `factoryCreator` address is transferable via a two-step pattern (`transferFactoryCreator` → `acceptFactoryCreator`) for wallet management.
+**V4 Integration:** All `modifyLiquidity` calls occur within `unlockCallback`. Full-range positions (min/max usable ticks). Currency settlement via `CurrencySettler` library.
+
+### ZAMMAlignmentVault (`src/vaults/zamm/`)
+
+ZAMM-based LP vault. Simplified dragnet conversion — same benefactor share accounting model as UniAlignmentVault, but targets ZAMM pools instead of Uniswap V4. Deployed via `ZAMMAlignmentVaultFactory`.
+
+### CypherAlignmentVault (`src/vaults/cypher/`)
+
+Algebra V2 LP vault for the Cypher chain. Same benefactor share model; targets Algebra V2 pools. Deployed via `CypherAlignmentVaultFactory`, which is used by `ERC404CypherFactory`.
+
+### Factory Creator Transfer
+
+The `factoryCreator` address is transferable via a two-step pattern (`transferFactoryCreator` → `acceptFactoryCreator`) for wallet management. Applies to all vault types.
 
 ### Benefactor Delegation
 
@@ -170,12 +198,9 @@ Benefactors (project instances) can delegate fee claims to another address:
 - `delegateBenefactor(delegate)` — route claims to a different address
 - `claimFeesAsDelegate(benefactors[])` — batch claim for multiple benefactors
 
-### V4 Integration
+### Multi-Vault Instance Support
 
-The vault implements `IUnlockCallback` for V4 LP operations:
-- All `modifyLiquidity` calls occur within `unlockCallback`
-- Full-range positions (min/max usable ticks)
-- Currency settlement via `CurrencySettler` library
+Multiple vault instances per alignment target are supported. A single target (e.g., Remilia) can have a UniAlignmentVault, ZAMMAlignmentVault, and CypherAlignmentVault simultaneously — each attracting different project factories. MasterRegistry tracks all instances linked to each target.
 
 ---
 
@@ -450,6 +475,27 @@ Standalone registry for vault and hook metadata. Handles registration fees (0.05
 
 ---
 
+## 8.5. Frontend Registry
+
+`FrontendRegistry` (`src/registry/FrontendRegistry.sol`) is an ENS controller for decentralized frontend versioning. UUPS upgradeable, owned by the DAO via Timelock. All mutations require `onlyOwner` (Timelock).
+
+### How It Works
+
+- **Append-only release log**: Each `publishRelease()` call stores a `Release` record (release type, IPFS content hash, version string, notes, and optional contract addresses that shipped with the release).
+- **Release types**: `SITE_ONLY` for frontend-only changes; `ECOSYSTEM` when new contracts ship alongside the frontend update.
+- **ENS node management**: The registry manages a list of ENS nodes (e.g., `ms2.fun`, `app.ms2.fun`). Each node can independently be pointed at any release via `pointNodeToRelease()`.
+- **Atomic publish**: `publishRelease()` accepts a list of nodes to update immediately — stores the release and updates ENS content hashes atomically.
+- **Managed node set**: `addEnsName()` / `removeEnsName()` maintain the controlled ENS namespace. Only managed nodes can be steered.
+
+### Key Properties
+
+- Release IDs are 1-indexed uint32 values; 0 means no release assigned to a node.
+- Content hashes are IPFS hashes encoded per ENS contenthash spec.
+- Historical releases are permanent and queryable — the full deploy history is on-chain.
+- No contract address validation on `contracts[]` in a release — this is metadata only.
+
+---
+
 ## 9. Deployment & Upgrade
 
 ### Deploy Order
@@ -461,11 +507,12 @@ Standalone registry for vault and hook metadata. Handles registration fees (0.05
 5. **GlobalMessageRegistry** — Deploy with owner + masterRegistry reference
 6. **FeaturedQueueManager** — Deploy, initialize with masterRegistry + owner
 7. **VaultRegistry** — Deploy standalone
-8. **Alignment Targets** — Register via AlignmentRegistry (DAO or owner during bootstrap)
-9. **Project Factories** — Deploy with masterRegistry + globalMessageRegistry, register in MasterRegistry
-10. **Vault Instances** — Deploy for approved targets, register via MasterRegistry
-11. **Timelock** — Deploy and initialize with Safe as admin/proposer/canceller, open executor, 48h delay
-12. **Migrate ownership** — Transfer MasterRegistry, AlignmentRegistry, and all protocol contracts to Timelock
+8. **FrontendRegistry** — Deploy implementation, then proxy with `initialize(daoOwner, ensResolver)`
+9. **Alignment Targets** — Register via AlignmentRegistry (DAO or owner during bootstrap)
+10. **Project Factories** — Deploy with masterRegistry + globalMessageRegistry, register in MasterRegistry
+11. **Vault Instances** — Deploy for approved targets, register via MasterRegistry
+12. **Timelock** — Deploy and initialize with Safe as admin/proposer/canceller, open executor, 48h delay
+13. **Migrate ownership** — Transfer MasterRegistry, AlignmentRegistry, FrontendRegistry, and all protocol contracts to Timelock
 
 ### UUPS Upgrade Pattern
 
@@ -493,7 +540,10 @@ All protocol contracts with `onlyOwner` functions are owned by a Solady Timelock
 | **ProtocolTreasuryV1** | Timelock | Fund disbursements |
 | **FeaturedQueueManager** | Timelock | Queue configuration |
 | **QueryAggregator** | Timelock | Aggregation configuration |
-| **UltraAlignmentVault** | Timelock (new instances) | Pool config, fee params, treasury address |
+| **FrontendRegistry** | Timelock | ENS name management, release publishing, node steering |
+| **UniAlignmentVault** | Timelock (new instances) | Pool config, fee params, treasury address |
+| **ZAMMAlignmentVault** | Timelock (new instances) | Pool config, fee params, treasury address |
+| **CypherAlignmentVault** | Timelock (new instances) | Pool config, fee params, treasury address |
 | **GrandCentral** | Self-governing (daoOnly) | Shares, loot, governance params, conductors |
 | **Project Factories** | Protocol + Creator | Instance deployment, fee withdrawal |
 | **Project Instances** | Instance creator (artist) | Withdrawals, configuration |
@@ -510,8 +560,10 @@ All protocol contracts with `onlyOwner` functions are owned by a Solady Timelock
 
 | Upgradeable | Permanent |
 |------------|-----------|
-| MasterRegistryV1 (UUPS) | UltraAlignmentVault (no proxy) |
-| AlignmentRegistryV1 (UUPS) | GrandCentral (no proxy) |
+| MasterRegistryV1 (UUPS) | UniAlignmentVault (no proxy) |
+| AlignmentRegistryV1 (UUPS) | ZAMMAlignmentVault (no proxy) |
+| FrontendRegistry (UUPS) | CypherAlignmentVault (no proxy) |
+| | GrandCentral (no proxy) |
 | | All factory/instance contracts |
 | | V4 hooks |
 
@@ -565,8 +617,8 @@ src/
 │   │   ├── CurveParamsComputer.sol          # Bonding curve parameter computation
 │   │   ├── LiquidityDeployerModule.sol      # V4 graduation liquidity deployment
 │   │   ├── hooks/
-│   │   │   ├── UltraAlignmentV4Hook.sol
-│   │   │   └── UltraAlignmentHookFactory.sol
+│   │   │   ├── UniAlignmentV4Hook.sol
+│   │   │   └── UniAlignmentHookFactory.sol
 │   │   └── libraries/
 │   │       └── BondingCurveMath.sol
 │   ├── erc1155/
@@ -579,12 +631,23 @@ src/
 │       └── ERC721AuctionInstance.sol        # Auction instance
 │
 ├── vaults/
-│   └── UltraAlignmentVault.sol             # Share-based fee vault
+│   ├── uni/
+│   │   ├── UniAlignmentVault.sol           # Uniswap V4 full-range LP vault
+│   │   └── UniAlignmentVaultFactory.sol    # Factory for Uni V4 vaults
+│   ├── zamm/
+│   │   ├── ZAMMAlignmentVault.sol          # ZAMM LP vault
+│   │   └── ZAMMAlignmentVaultFactory.sol   # Factory for ZAMM vaults
+│   └── cypher/
+│       ├── CypherAlignmentVault.sol        # Algebra V2 LP vault (Cypher chain)
+│       └── CypherAlignmentVaultFactory.sol # Factory for Cypher vaults
 │
 ├── registry/
+│   ├── FrontendRegistry.sol                # ENS controller for frontend versioning (UUPS)
 │   ├── VaultRegistry.sol                   # Vault/hook metadata
 │   ├── GlobalMessageRegistry.sol           # Activity feed
 │   └── interfaces/
+│       ├── IFrontendRegistry.sol           # Frontend registry interface
+│       ├── IENSResolver.sol                # ENS resolver interface
 │       └── IGlobalMessageRegistry.sol      # Message registry interface
 │
 ├── treasury/

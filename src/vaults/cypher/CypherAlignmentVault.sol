@@ -18,10 +18,10 @@ interface IWETH9 {
     function transferFrom(address, address, uint256) external returns (bool);
 }
 
-/// @title UltraAlignmentCypherVault
+/// @title CypherAlignmentVault
 /// @notice Algebra V2 (Cypher AMM) backed alignment vault. Holds one LP position NFT.
 ///         Fees collected from LP, swapped to ETH, distributed via MasterChef accumulator.
-contract UltraAlignmentCypherVault is IAlignmentVault, Ownable, ReentrancyGuard {
+contract CypherAlignmentVault is IAlignmentVault, Ownable, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
     // ── Errors ────────────────────────────────────────────────────────────

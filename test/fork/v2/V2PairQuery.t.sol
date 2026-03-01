@@ -16,7 +16,7 @@ import { UniswapHelpers } from "../helpers/UniswapHelpers.sol";
  * - Price consistency across different pairs
  *
  * These tests help us understand how to implement _checkTargetAssetPriceAndPurchasePower()
- * and _quoteV2Swap() in UltraAlignmentVault.sol
+ * and _quoteV2Swap() in UniAlignmentVault.sol
  */
 contract V2PairQueryTest is ForkTestBase {
     function setUp() public {

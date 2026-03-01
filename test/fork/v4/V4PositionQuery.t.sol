@@ -19,7 +19,7 @@ import { IERC20 } from "forge-std/interfaces/IERC20.sol";
  * @notice Fork tests for querying V4 position details
  * @dev Run with: forge test --mp test/fork/v4/V4PositionQuery.t.sol --fork-url $ETH_RPC_URL -vvv
  *
- * These tests help us implement position tracking in UltraAlignmentVault.sol
+ * These tests help us implement position tracking in UniAlignmentVault.sol
  */
 contract V4PositionQueryTest is ForkTestBase, IUnlockCallback {
     using PoolIdLibrary for PoolKey;

@@ -4,7 +4,7 @@ pragma solidity ^0.8.24;
 import {Test, console, console2} from "forge-std/Test.sol";
 import {ERC1155Factory} from "../../../src/factories/erc1155/ERC1155Factory.sol";
 import {ERC1155Instance} from "../../../src/factories/erc1155/ERC1155Instance.sol";
-import {UltraAlignmentVault} from "../../../src/vaults/uni/UltraAlignmentVault.sol";
+import {UniAlignmentVault} from "../../../src/vaults/uni/UniAlignmentVault.sol";
 import {MockEXECToken} from "../../mocks/MockEXECToken.sol";
 import {MockMasterRegistry} from "../../mocks/MockMasterRegistry.sol";
 import {MockZRouter} from "../../mocks/MockZRouter.sol";
@@ -24,7 +24,7 @@ import {PromotionBadges} from "../../../src/promotion/PromotionBadges.sol";
  */
 contract ERC1155FactoryTest is GlobalMessagingTestBase {
     ERC1155Factory public factory;
-    UltraAlignmentVault public vault;
+    UniAlignmentVault public vault;
     MockEXECToken public token;
 
     address public owner = address(0x1);
@@ -42,8 +42,8 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
 
         // Deploy vault (WETH, PoolManager, V3Router, V2Router, V2Factory, V3Factory, AlignmentToken)
         {
-            UltraAlignmentVault _impl = new UltraAlignmentVault();
-            vault = UltraAlignmentVault(payable(LibClone.clone(address(_impl))));
+            UniAlignmentVault _impl = new UniAlignmentVault();
+            vault = UniAlignmentVault(payable(LibClone.clone(address(_impl))));
             vault.initialize(
                 address(0x2222222222222222222222222222222222222222),  // WETH
                 address(0x4444444444444444444444444444444444444444),  // V4 pool manager

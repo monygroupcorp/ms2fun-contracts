@@ -2,11 +2,11 @@
 pragma solidity ^0.8.24;
 
 import {LibClone} from "solady/utils/LibClone.sol";
-import {UltraAlignmentCypherVault} from "./UltraAlignmentCypherVault.sol";
+import {CypherAlignmentVault} from "./CypherAlignmentVault.sol";
 
-/// @title UltraAlignmentCypherVaultFactory
-/// @notice Deploys UltraAlignmentCypherVault clones
-contract UltraAlignmentCypherVaultFactory {
+/// @title CypherAlignmentVaultFactory
+/// @notice Deploys CypherAlignmentVault clones
+contract CypherAlignmentVaultFactory {
     address public immutable vaultImplementation;
 
     event VaultCreated(address indexed vault, address indexed alignmentToken, address indexed creator);
@@ -24,8 +24,8 @@ contract UltraAlignmentCypherVaultFactory {
         uint256 creatorYieldCutBps,
         address protocolTreasury,
         address liquidityDeployer
-    ) external returns (UltraAlignmentCypherVault vault) {
-        vault = UltraAlignmentCypherVault(payable(LibClone.clone(vaultImplementation)));
+    ) external returns (CypherAlignmentVault vault) {
+        vault = CypherAlignmentVault(payable(LibClone.clone(vaultImplementation)));
         vault.initialize(
             positionManager, swapRouterAddr, weth, alignmentToken,
             factoryCreator, creatorYieldCutBps, protocolTreasury, liquidityDeployer
