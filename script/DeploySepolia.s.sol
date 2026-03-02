@@ -335,7 +335,8 @@ contract DeploySepolia is Script {
                 creatorGraduationFeeBps: 100,
                 globalMessageRegistry: address(globalMessageRegistry),
                 curveComputer: address(curveParamsComputer),
-                tierGatingModule: address(0)
+                tierGatingModule: address(0),
+                componentRegistry: address(0)
             })
         );
         erc404CypherFactory.setProtocolTreasury(address(treasury));

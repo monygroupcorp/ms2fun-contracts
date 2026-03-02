@@ -14,6 +14,8 @@ import {MockAlgebraFactory, MockAlgebraPositionManager, MockAlgebraSwapRouter} f
 import {MockWETH} from "../../mocks/MockWETH.sol";
 import {MockMasterRegistry} from "../../mocks/MockMasterRegistry.sol";
 import {IdentityParams} from "../../../src/interfaces/IFactoryTypes.sol";
+import {ComponentRegistry} from "../../../src/registry/ComponentRegistry.sol";
+import {LibClone} from "solady/utils/LibClone.sol";
 
 contract ERC404CypherFactoryTest is Test {
     ERC404CypherFactory factory;
@@ -23,6 +25,7 @@ contract ERC404CypherFactoryTest is Test {
     CypherAlignmentVaultFactory vaultFactory;
     CurveParamsComputer curveComputer;
     PasswordTierGatingModule tierGatingModule;
+    ComponentRegistry componentRegistry;
     MockAlgebraFactory algebraFactory;
     MockAlgebraPositionManager positionManager;
     MockAlgebraSwapRouter swapRouter;
@@ -49,6 +52,11 @@ contract ERC404CypherFactoryTest is Test {
         CypherAlignmentVault vaultImpl = new CypherAlignmentVault();
         vaultFactory = new CypherAlignmentVaultFactory(address(vaultImpl));
 
+        ComponentRegistry compRegImpl = new ComponentRegistry();
+        address compRegProxy = LibClone.deployERC1967(address(compRegImpl));
+        componentRegistry = ComponentRegistry(compRegProxy);
+        componentRegistry.initialize(protocol);
+
         factory = new ERC404CypherFactory(
             ERC404CypherFactory.CoreConfig({
                 implementation: address(implementation),
@@ -67,7 +75,8 @@ contract ERC404CypherFactoryTest is Test {
                 creatorGraduationFeeBps: 50,
                 globalMessageRegistry: globalMsgRegistry,
                 curveComputer: address(curveComputer),
-                tierGatingModule: address(tierGatingModule)
+                tierGatingModule: address(tierGatingModule),
+                componentRegistry: address(componentRegistry)
             })
         );
 
@@ -180,5 +189,30 @@ contract ERC404CypherFactoryTest is Test {
     function test_protocol_and_creator_view() public view {
         assertEq(factory.protocol(), protocol);
         assertEq(factory.creator(), creator);
+    }
+
+    // ── ComponentRegistry validation ──────────────────────────────────────────
+
+    function test_cypherFactory_createInstanceWithGating_revertsOnUnapprovedModule() public {
+        address unapprovedModule = address(0xBAD);
+
+        vm.deal(address(this), 0.01 ether);
+        vm.expectRevert("Unapproved component");
+        factory.createInstance{value: 0.01 ether}(
+            _identity("GatedToken", "GATE"),
+            "",
+            unapprovedModule,
+            alignmentTarget
+        );
+    }
+
+    function test_cypherFactory_createInstance_noGating_stillWorks() public {
+        vm.deal(address(this), 0.01 ether);
+        address instance = factory.createInstance{value: 0.01 ether}(
+            _identity("OpenToken", "OPEN"),
+            "",
+            alignmentTarget
+        );
+        assertTrue(instance != address(0));
     }
 }
