@@ -281,7 +281,8 @@ contract DeploySepolia is Script {
                 globalMessageRegistry: address(globalMessageRegistry),
                 launchManager: address(launchManager),
                 curveComputer: address(curveParamsComputer),
-                tierGatingModule: address(0)
+                tierGatingModule: address(0),
+                componentRegistry: address(0)
             })
         );
         erc404Factory.setProtocolTreasury(address(treasury));

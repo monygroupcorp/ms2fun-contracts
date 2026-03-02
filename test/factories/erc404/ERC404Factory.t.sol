@@ -11,6 +11,9 @@ import {MockMasterRegistry} from "../../mocks/MockMasterRegistry.sol";
 import {PromotionBadges} from "../../../src/promotion/PromotionBadges.sol";
 import {BondingCurveMath} from "../../../src/factories/erc404/libraries/BondingCurveMath.sol";
 import {IdentityParams} from "../../../src/interfaces/IFactoryTypes.sol";
+import {ComponentRegistry} from "../../../src/registry/ComponentRegistry.sol";
+import {PasswordTierGatingModule} from "../../../src/gating/PasswordTierGatingModule.sol";
+import {LibClone} from "solady/utils/LibClone.sol";
 
 contract MockHook {}
 
@@ -44,6 +47,7 @@ contract ERC404FactoryTest is Test {
     MockHook public mockHook;
     MockMasterRegistryForStakingF public stakingRegistry;
     ERC404StakingModule public stakingModule;
+    ComponentRegistry public componentRegistry;
 
     address public protocolAdmin = address(0x9);
     address public creator1 = address(0x2);
@@ -79,6 +83,11 @@ contract ERC404FactoryTest is Test {
         launchMgr = new LaunchManager(protocolAdmin);
         curveComp = new CurveParamsComputer(protocolAdmin);
 
+        ComponentRegistry compRegImpl = new ComponentRegistry();
+        address compRegProxy = LibClone.deployERC1967(address(compRegImpl));
+        componentRegistry = ComponentRegistry(compRegProxy);
+        componentRegistry.initialize(protocolAdmin);
+
         ERC404BondingInstance impl = new ERC404BondingInstance();
         factory = new ERC404Factory(
             ERC404Factory.CoreConfig({
@@ -98,7 +107,8 @@ contract ERC404FactoryTest is Test {
                 globalMessageRegistry: mockGMR,
                 launchManager: address(launchMgr),
                 curveComputer: address(curveComp),
-                tierGatingModule: address(0)
+                tierGatingModule: address(0),
+                componentRegistry: address(componentRegistry)
             })
         );
 
@@ -300,7 +310,8 @@ contract ERC404FactoryTest is Test {
                 globalMessageRegistry: mockGMR,
                 launchManager: address(launchMgr),
                 curveComputer: address(curveComp),
-                tierGatingModule: address(0)
+                tierGatingModule: address(0),
+                componentRegistry: address(0)
             })
         );
         factoryBadPoolManager.setProfile(DEFAULT_PROFILE_ID, ERC404Factory.GraduationProfile({
@@ -341,7 +352,8 @@ contract ERC404FactoryTest is Test {
                 globalMessageRegistry: mockGMR,
                 launchManager: address(launchMgr),
                 curveComputer: address(curveComp),
-                tierGatingModule: address(0)
+                tierGatingModule: address(0),
+                componentRegistry: address(0)
             })
         );
         factoryBadWeth.setProfile(DEFAULT_PROFILE_ID, ERC404Factory.GraduationProfile({
@@ -1104,5 +1116,69 @@ contract ERC404FactoryTest is Test {
             ERC404Factory.CreationTier.STANDARD
         );
         vm.stopPrank();
+    }
+
+    // ── ComponentRegistry validation ──────────────────────────────────────────
+
+    function test_createInstanceWithGating_revertsOnUnapprovedModule() public {
+        address unapprovedModule = address(0xBAD6A7);
+        _setupStandardProfile();
+
+        vm.deal(creator1, 1 ether);
+        vm.prank(creator1);
+        vm.expectRevert("Unapproved component");
+        factory.createInstance{value: INSTANCE_CREATION_FEE}(
+            _identity("TestToken", "TEST", creator1),
+            "ipfs://Qmtest",
+            unapprovedModule,
+            ERC404Factory.CreationTier.STANDARD
+        );
+    }
+
+    function test_createInstanceWithGating_succeedsWithApprovedModule() public {
+        _setupStandardProfile();
+        address gatingModule = address(new PasswordTierGatingModule());
+        vm.prank(protocolAdmin);
+        componentRegistry.approveComponent(gatingModule, keccak256("gating"), "PasswordTierGating");
+
+        vm.deal(creator1, 1 ether);
+        vm.prank(creator1);
+        address instance = factory.createInstance{value: INSTANCE_CREATION_FEE}(
+            _identity("GatedToken", "GATE", creator1),
+            "ipfs://Qmtest",
+            gatingModule,
+            ERC404Factory.CreationTier.STANDARD
+        );
+
+        assertTrue(instance != address(0));
+    }
+
+    function test_createInstanceWithGating_zeroAddressSkipsValidation() public {
+        _setupStandardProfile();
+
+        vm.deal(creator1, 1 ether);
+        vm.prank(creator1);
+        address instance = factory.createInstance{value: INSTANCE_CREATION_FEE}(
+            _identity("OpenToken", "OPEN", creator1),
+            "ipfs://Qmtest",
+            address(0),
+            ERC404Factory.CreationTier.STANDARD
+        );
+
+        assertTrue(instance != address(0));
+    }
+
+    function test_createInstance_noGating_stillWorks() public {
+        _setupStandardProfile();
+
+        vm.deal(creator1, 1 ether);
+        vm.prank(creator1);
+        address instance = factory.createInstance{value: INSTANCE_CREATION_FEE}(
+            _identity("OpenToken2", "OPEN2", creator1),
+            "ipfs://Qmtest",
+            ERC404Factory.CreationTier.STANDARD
+        );
+
+        assertTrue(instance != address(0));
     }
 }

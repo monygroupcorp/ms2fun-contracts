@@ -141,7 +141,8 @@ contract CreatorFeesSplitTest is Test {
                 globalMessageRegistry: address(globalMsgRegistry),
                 launchManager: address(launchManager),
                 curveComputer: address(curveComputer),
-                tierGatingModule: address(0)
+                tierGatingModule: address(0),
+                componentRegistry: address(0)
             })
         );
         erc404Factory.setProtocolTreasury(treasury);

@@ -130,7 +130,8 @@ contract NamespaceCollisionTest is Test {
                 globalMessageRegistry: address(globalMsgRegistry),
                 launchManager: address(launchManager),
                 curveComputer: address(curveComputer),
-                tierGatingModule: address(tierGatingModule)
+                tierGatingModule: address(tierGatingModule),
+                componentRegistry: address(0)
             })
         );
 

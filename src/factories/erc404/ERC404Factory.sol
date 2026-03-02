@@ -19,6 +19,7 @@ import {LPFeeLibrary} from "v4-core/libraries/LPFeeLibrary.sol";
 import {IdentityParams} from "../../interfaces/IFactoryTypes.sol";
 import {PasswordTierGatingModule} from "../../gating/PasswordTierGatingModule.sol";
 import {IGatingModule} from "../../gating/IGatingModule.sol";
+import {IComponentRegistry} from "../../registry/interfaces/IComponentRegistry.sol";
 
 interface IUniAlignmentVaultV1 {
     function hook() external view returns (address);
@@ -52,6 +53,7 @@ contract ERC404Factory is OwnableRoles, ReentrancyGuard, IFactory {
         address launchManager;
         address curveComputer;
         address tierGatingModule;
+        address componentRegistry;   // NEW
     }
 
     IMasterRegistry public masterRegistry;
@@ -81,6 +83,7 @@ contract ERC404Factory is OwnableRoles, ReentrancyGuard, IFactory {
     LaunchManager public immutable launchManager;
     CurveParamsComputer public immutable curveComputer;
     PasswordTierGatingModule public immutable tierGatingModule;
+    IComponentRegistry public immutable componentRegistry;
 
     // Tiered creation — enum kept here for backward-compatible external ABI
     enum CreationTier { STANDARD, PREMIUM, LAUNCH }
@@ -152,6 +155,7 @@ contract ERC404Factory is OwnableRoles, ReentrancyGuard, IFactory {
         launchManager = LaunchManager(modules.launchManager);
         curveComputer = CurveParamsComputer(modules.curveComputer);
         tierGatingModule = PasswordTierGatingModule(modules.tierGatingModule);
+        componentRegistry = IComponentRegistry(modules.componentRegistry);
     }
 
     /// @notice Create an instance with open gating (no password tiers).
@@ -160,21 +164,96 @@ contract ERC404Factory is OwnableRoles, ReentrancyGuard, IFactory {
         string calldata metadataURI,
         CreationTier creationTier
     ) external payable nonReentrant returns (address instance) {
-        PasswordTierGatingModule.TierConfig memory emptyConfig;
-        return _createInstanceInternal(identity, metadataURI, emptyConfig, creationTier);
+        return _createInstanceCore(identity, metadataURI, address(0), creationTier);
     }
 
-    /// @notice Create an instance with password-tier gating.
+    /// @notice Create an instance with any DAO-approved gating component.
+    /// @param gatingModule address(0) = open gating; otherwise must be approved in ComponentRegistry.
+    function createInstance(
+        IdentityParams calldata identity,
+        string calldata metadataURI,
+        address gatingModule,
+        CreationTier creationTier
+    ) external payable nonReentrant returns (address instance) {
+        if (gatingModule != address(0)) {
+            require(componentRegistry.isApprovedComponent(gatingModule), "Unapproved component");
+        }
+        return _createInstanceCore(identity, metadataURI, gatingModule, creationTier);
+    }
+
+    /// @notice Create an instance with password-tier gating (convenience wrapper).
+    /// @dev Configures PasswordTierGatingModule for the new instance, then delegates to
+    ///      the original internal helper that calls _configureGating.
     function createInstanceWithTiers(
         IdentityParams calldata identity,
         string calldata metadataURI,
         PasswordTierGatingModule.TierConfig calldata tiers,
         CreationTier creationTier
     ) external payable nonReentrant returns (address instance) {
-        return _createInstanceInternal(identity, metadataURI, tiers, creationTier);
+        return _createInstanceInternalWithTiers(identity, metadataURI, tiers, creationTier);
     }
 
-    function _createInstanceInternal(
+    /// @dev New path: accepts a pre-resolved gatingModule address, skips _configureGating.
+    function _createInstanceCore(
+        IdentityParams calldata identity,
+        string calldata metadataURI,
+        address gatingModule,
+        CreationTier creationTier
+    ) internal returns (address instance) {
+        // Fee
+        uint256 fee = launchManager.getTierFee(
+            LaunchManager.CreationTier(uint8(creationTier)),
+            instanceCreationFee
+        );
+        require(msg.value >= fee, "Insufficient fee");
+        {
+            uint256 creatorCut = (fee * creatorFeeBps) / 10000;
+            uint256 protocolCut = fee - creatorCut;
+            accumulatedCreatorFees += creatorCut;
+            accumulatedProtocolFees += protocolCut;
+        }
+
+        // Validate identity
+        require(identity.nftCount > 0, "Invalid NFT count");
+        require(bytes(identity.name).length > 0, "Invalid name");
+        require(bytes(identity.symbol).length > 0, "Invalid symbol");
+        require(identity.owner != address(0), "Invalid owner");
+        require(identity.vault != address(0), "Vault required");
+        require(identity.vault.code.length > 0, "Vault must be a contract");
+        require(!masterRegistry.isNameTaken(identity.name), "Name already taken");
+
+        // Resolve hook from vault
+        address hook;
+        try IUniAlignmentVaultV1(payable(identity.vault)).hook() returns (address h) {
+            hook = h;
+        } catch {}
+        require(hook != address(0) && hook.code.length > 0, "Vault hook required");
+
+        // Soft vault capability check
+        try IAlignmentVault(payable(identity.vault)).supportsCapability(keccak256("YIELD_GENERATION"))
+            returns (bool supported) {
+            if (!supported) emit VaultCapabilityWarning(identity.vault, keccak256("YIELD_GENERATION"));
+        } catch {
+            emit VaultCapabilityWarning(identity.vault, keccak256("YIELD_GENERATION"));
+        }
+
+        // Compute BondingParams from profile
+        ERC404BondingInstance.BondingParams memory bonding = _computeBondingParams(identity.nftCount, identity.profileId);
+
+        // Assemble ProtocolParams
+        ERC404BondingInstance.ProtocolParams memory protocol = _getProtocolParams();
+
+        // Deploy clone
+        instance = LibClone.clone(implementation);
+
+        // gatingModule is pre-resolved — no _configureGating call needed
+        _initializeInstance(instance, identity.owner, identity.vault, bonding, protocol, hook, gatingModule);
+        _setMetadata(instance, identity);
+        _finalizeInstance(instance, identity, metadataURI, hook, creationTier, fee);
+    }
+
+    /// @dev Legacy path: accepts TierConfig, calls _configureGating after clone deployment.
+    function _createInstanceInternalWithTiers(
         IdentityParams calldata identity,
         string calldata metadataURI,
         PasswordTierGatingModule.TierConfig memory tiers,

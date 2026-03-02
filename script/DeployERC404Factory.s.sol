@@ -78,7 +78,8 @@ contract DeployERC404Factory is Script {
                 globalMessageRegistry: vm.envAddress("GLOBAL_MESSAGE_REGISTRY"),
                 launchManager: launchManager,
                 curveComputer: curveComputer,
-                tierGatingModule: address(0)
+                tierGatingModule: address(0),
+                componentRegistry: address(0)
             })
         );
     }
