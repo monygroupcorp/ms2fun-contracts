@@ -16,9 +16,7 @@ contract CypherLiquidityDeployerModule {
         uint256 tokenReserve;
         uint160 sqrtPriceX96;          // initial pool price
         uint256 graduationFeeBps;
-        uint256 creatorGraduationFeeBps;
         address protocolTreasury;
-        address factoryCreator;
         address token;                  // ERC404 token address (bonding instance)
         address weth;                   // WETH address
         address vault;                  // CypherAlignmentVault address
@@ -36,14 +34,12 @@ contract CypherLiquidityDeployerModule {
         uint256 ethToLP, uint256 tokenToLP
     );
     event GraduationFeePaid(address indexed treasury, uint256 amount);
-    event CreatorGraduationFeePaid(address indexed creator, uint256 amount);
 
     struct PoolSetupResult {
         uint256 tokenId;
         address pool;
         uint256 ethToLP;
         uint256 protocolFee;
-        uint256 creatorFee;
         bool tokenIsZero;
     }
 
@@ -67,11 +63,8 @@ contract CypherLiquidityDeployerModule {
         // ── Compute fee splits ──
         if (p.graduationFeeBps > 0 && p.protocolTreasury != address(0)) {
             r.protocolFee = p.ethReserve * p.graduationFeeBps / 10000;
-            if (p.creatorGraduationFeeBps > 0 && p.factoryCreator != address(0)) {
-                r.creatorFee = p.ethReserve * p.creatorGraduationFeeBps / 10000;
-            }
         }
-        r.ethToLP = p.ethReserve - r.protocolFee - r.creatorFee;
+        r.ethToLP = p.ethReserve - r.protocolFee;
 
         // ── Wrap ETH to WETH for LP ──
         address weth = p.weth;
@@ -118,10 +111,6 @@ contract CypherLiquidityDeployerModule {
         if (r.protocolFee > 0) {
             SafeTransferLib.safeTransferETH(p.protocolTreasury, r.protocolFee);
             emit GraduationFeePaid(p.protocolTreasury, r.protocolFee);
-        }
-        if (r.creatorFee > 0) {
-            SafeTransferLib.safeTransferETH(p.factoryCreator, r.creatorFee);
-            emit CreatorGraduationFeePaid(p.factoryCreator, r.creatorFee);
         }
         emit LiquidityDeployed(p.vault, r.pool, r.tokenId, r.ethToLP, p.tokenReserve);
     }

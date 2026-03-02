@@ -88,15 +88,9 @@ contract UniAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback, IAlignm
     uint256 public vaultFeeCollectionInterval = 1 days;
 
     // Protocol yield cut
-    uint256 public protocolYieldCutBps = 500; // 5% of LP yield
+    uint256 public protocolYieldCutBps = 100; // 1% of LP yield
     address public protocolTreasury;
     uint256 public accumulatedProtocolFees;
-
-    // Vault creator incentives
-    address public factoryCreator;
-    address public pendingFactoryCreator;
-    uint256 public creatorYieldCutBps;
-    uint256 public accumulatedCreatorFees;
 
     // Dust accumulation
     uint256 public accumulatedDustShares;
@@ -157,11 +151,6 @@ contract UniAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback, IAlignm
     event ProtocolTreasuryUpdated(address indexed newTreasury);
     event ProtocolFeesWithdrawn(uint256 amount);
 
-    event FactoryCreatorFeesWithdrawn(uint256 amount);
-    event FactoryCreatorYieldCollected(uint256 amount);
-    event FactoryCreatorTransferInitiated(address indexed current, address indexed pending);
-    event FactoryCreatorTransferAccepted(address indexed oldCreator, address indexed newCreator);
-
     event AlignmentTokenUpdated(address indexed oldToken, address indexed newToken);
     event V4PoolKeyUpdated(bytes32 indexed poolId);
     event ConversionRewardUpdated(uint256 newReward);
@@ -175,8 +164,6 @@ contract UniAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback, IAlignm
         address _weth,
         address _poolManager,
         address _alignmentToken,
-        address _factoryCreator,
-        uint256 _creatorYieldCutBps,
         address _zRouter,
         uint24  _zRouterFee,
         int24   _zRouterTickSpacing,
@@ -190,20 +177,17 @@ contract UniAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback, IAlignm
         require(_weth != address(0), "Invalid WETH");
         require(_poolManager != address(0), "Invalid pool manager");
         require(_alignmentToken != address(0), "Invalid alignment token");
-        require(_creatorYieldCutBps <= 500, "Creator cut exceeds protocol yield cut");
 
         weth = _weth;
         poolManager = _poolManager;
         alignmentToken = _alignmentToken;
-        factoryCreator = _factoryCreator;
-        creatorYieldCutBps = _creatorYieldCutBps;
         zRouter = _zRouter;
         zRouterFee = _zRouterFee;
         zRouterTickSpacing = _zRouterTickSpacing;
         priceValidator = _priceValidator;
 
         // Initialize defaults that can't use declaration initializers with clones
-        protocolYieldCutBps = 500;
+        protocolYieldCutBps = 100;
         standardConversionReward = 0.0012 ether;
         v3PreferredFee = 3000;
         maxPriceDeviationBps = 500;
@@ -443,19 +427,15 @@ contract UniAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback, IAlignm
 
             uint256 totalCollected = ethCollected + ethFromTokens;
             if (totalCollected > 0) {
-                uint256 totalCut = (totalCollected * protocolYieldCutBps) / 10000;
-                uint256 creatorCut = (totalCollected * creatorYieldCutBps) / 10000;
-                uint256 protocolCut = totalCut - creatorCut;
-                uint256 benefactorAmount = totalCollected - totalCut;
+                uint256 protocolCut = (totalCollected * protocolYieldCutBps) / 10000;
+                uint256 benefactorAmount = totalCollected - protocolCut;
 
                 accumulatedFees += benefactorAmount;
                 accumulatedProtocolFees += protocolCut;
-                accumulatedCreatorFees += creatorCut;
 
                 lastVaultFeeCollectionTime = block.timestamp;
                 emit FeesAccumulated(benefactorAmount);
                 if (protocolCut > 0) emit ProtocolYieldCollected(protocolCut);
-                if (creatorCut > 0) emit FactoryCreatorYieldCollected(creatorCut);
             }
         }
     }
@@ -748,38 +728,6 @@ contract UniAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback, IAlignm
 
         (bool success, ) = payable(msg.sender).call{value: totalClaimed}("");
         require(success, "ETH transfer failed");
-    }
-
-    // ========== Vault Creator Fees ==========
-
-    function withdrawCreatorFees() external {
-        require(msg.sender == factoryCreator, "Only factory creator");
-        uint256 amount = accumulatedCreatorFees;
-        require(amount > 0, "No creator fees");
-        accumulatedCreatorFees = 0;
-        (bool success, ) = payable(factoryCreator).call{value: amount}("");
-        require(success, "ETH transfer failed");
-        emit FactoryCreatorFeesWithdrawn(amount);
-    }
-
-    function transferFactoryCreator(address newCreator) external {
-        require(msg.sender == factoryCreator, "Only factory creator");
-        require(newCreator != address(0), "Invalid address");
-        require(newCreator != factoryCreator, "Already creator");
-        pendingFactoryCreator = newCreator;
-        emit FactoryCreatorTransferInitiated(factoryCreator, newCreator);
-    }
-
-    function acceptFactoryCreator() external {
-        require(msg.sender == pendingFactoryCreator, "Only pending creator");
-        address old = factoryCreator;
-        factoryCreator = pendingFactoryCreator;
-        pendingFactoryCreator = address(0);
-        emit FactoryCreatorTransferAccepted(old, factoryCreator);
-    }
-
-    function creator() external view returns (address) {
-        return factoryCreator;
     }
 
     // ========== Configuration ==========

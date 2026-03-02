@@ -27,7 +27,6 @@ contract CypherAlignmentVault is IAlignmentVault, Ownable, ReentrancyGuard {
     // ── Errors ────────────────────────────────────────────────────────────
     error VaultAlreadyInitialized();
     error ETHOnly();
-    error CreatorCutTooHigh();
     error OnlyLiquidityDeployer();
     error PositionAlreadyRegistered();
     error NoPosition();
@@ -35,7 +34,7 @@ contract CypherAlignmentVault is IAlignmentVault, Ownable, ReentrancyGuard {
 
     // ── Events ────────────────────────────────────────────────────────────
     event PositionRegistered(uint256 indexed tokenId, address pool, bool tokenIsZero, address benefactor, uint256 contribution);
-    event Harvested(uint256 totalFeesETH, uint256 benefactorFees, uint256 protocolFees, uint256 creatorFees);
+    event Harvested(uint256 totalFeesETH, uint256 benefactorFees, uint256 protocolFees);
     event DelegateSet(address indexed benefactor, address indexed delegate);
 
     // ── Config ────────────────────────────────────────────────────────────
@@ -43,7 +42,6 @@ contract CypherAlignmentVault is IAlignmentVault, Ownable, ReentrancyGuard {
     IAlgebraSwapRouter public swapRouter;
     address public weth;
     address public alignmentToken;
-    address public factoryCreator;
     address public protocolTreasury;
     address public liquidityDeployer;
 
@@ -53,12 +51,10 @@ contract CypherAlignmentVault is IAlignmentVault, Ownable, ReentrancyGuard {
     bool public tokenIsZero;           // true if alignmentToken < weth (token0 in pool)
 
     // ── Economics ─────────────────────────────────────────────────────────
-    uint256 public protocolYieldCutBps;  // default 500 (5%)
-    uint256 public creatorYieldCutBps;   // max 500, sub-share of protocol cut
+    uint256 public protocolYieldCutBps;  // default 100 (1%)
 
     // ── Fee buckets ───────────────────────────────────────────────────────
     uint256 public accumulatedProtocolFees;
-    uint256 public accumulatedCreatorFees;
     uint256 public _totalAccumulatedFees;
 
     // ── MasterChef accumulator ────────────────────────────────────────────
@@ -80,24 +76,19 @@ contract CypherAlignmentVault is IAlignmentVault, Ownable, ReentrancyGuard {
         address _swapRouter,
         address _weth,
         address _alignmentToken,
-        address _factoryCreator,
-        uint256 _creatorYieldCutBps,
         address _protocolTreasury,
         address _liquidityDeployer
     ) external {
         if (_initialized) revert VaultAlreadyInitialized();
-        if (_creatorYieldCutBps > 500) revert CreatorCutTooHigh();
         _initialized = true;
 
         positionManager = IAlgebraNFTPositionManager(_positionManager);
         swapRouter = IAlgebraSwapRouter(_swapRouter);
         weth = _weth;
         alignmentToken = _alignmentToken;
-        factoryCreator = _factoryCreator;
-        creatorYieldCutBps = _creatorYieldCutBps;
         protocolTreasury = _protocolTreasury;
         liquidityDeployer = _liquidityDeployer;
-        protocolYieldCutBps = 500;
+        protocolYieldCutBps = 100;
 
         _initializeOwner(msg.sender);
     }
@@ -187,13 +178,11 @@ contract CypherAlignmentVault is IAlignmentVault, Ownable, ReentrancyGuard {
         IWETH9(weth).withdraw(totalWETH);
         feesETH = totalWETH;
 
-        // Split: protocol cut, creator cut (sub-share of protocol), rest to benefactors
+        // Split: protocol cut, rest to benefactors
         uint256 protocolCut = feesETH * protocolYieldCutBps / 10000;
-        uint256 creatorCut  = feesETH * creatorYieldCutBps / 10000;
-        uint256 benefactorFees = feesETH - protocolCut - creatorCut;
+        uint256 benefactorFees = feesETH - protocolCut;
 
         accumulatedProtocolFees += protocolCut;
-        accumulatedCreatorFees += creatorCut;
         _totalAccumulatedFees += benefactorFees;
 
         // Update MasterChef accumulator
@@ -201,7 +190,7 @@ contract CypherAlignmentVault is IAlignmentVault, Ownable, ReentrancyGuard {
             accRewardPerContribution += benefactorFees * 1e18 / totalContributions;
         }
 
-        emit Harvested(feesETH, benefactorFees, protocolCut, creatorCut);
+        emit Harvested(feesETH, benefactorFees, protocolCut);
         emit FeesAccumulated(benefactorFees);
     }
 
@@ -251,22 +240,9 @@ contract CypherAlignmentVault is IAlignmentVault, Ownable, ReentrancyGuard {
         require(ok);
     }
 
-    function withdrawCreatorFees() external {
-        require(msg.sender == factoryCreator, "Not creator");
-        uint256 amount = accumulatedCreatorFees;
-        accumulatedCreatorFees = 0;
-        (bool ok,) = factoryCreator.call{value: amount}("");
-        require(ok);
-    }
-
     function setProtocolYieldCutBps(uint256 bps) external onlyOwner {
         require(bps <= 1000, "Max 10%");
         protocolYieldCutBps = bps;
-    }
-
-    function setCreatorYieldCutBps(uint256 bps) external onlyOwner {
-        require(bps <= 500, "Max 5%");
-        creatorYieldCutBps = bps;
     }
 
     // ── IAlignmentVault compliance ────────────────────────────────────────

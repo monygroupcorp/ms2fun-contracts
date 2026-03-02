@@ -16,7 +16,7 @@ Every participant earns: vault factory creators get yield cuts, artists get proj
 
 ```
 src/
-├── dao/                # GrandCentral (Moloch DAO) + StipendConductor
+├── dao/                # GrandCentral (Mol*** DAO) + StipendConductor
 ├── master/             # MasterRegistryV1 (UUPS), FeaturedQueueManager
 ├── factories/          # ERC404, ERC1155, ERC721 factories and instances
 ├── vaults/             # UltraAlignmentVault (share-based fee hub)
@@ -98,7 +98,7 @@ All instances have an **immutable** vault reference set at construction.
 
 ### Governance (GrandCentral + Timelock)
 
-Moloch-pattern DAO governing the protocol through a Gnosis Safe with a 48-hour timelock:
+Mol***-pattern DAO governing the protocol through a Gnosis Safe with a 48-hour timelock:
 - **Shares** = voting power, **Loot** = non-voting economic rights
 - Proposal lifecycle: Submit → Sponsor → Vote → Grace → Process
 - **Timelock**: all owner-gated operations (upgrades, registrations, parameter changes) must pass through a 48-hour delay before execution — giving users a credible exit window

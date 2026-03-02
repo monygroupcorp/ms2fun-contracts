@@ -93,10 +93,7 @@ contract ERC404RerollTest is Test {
             v4PoolManager: mockPoolManager,
             weth: mockWETH,
             bondingFeeBps: 100,
-            graduationFeeBps: 200,
-            polBps: 100,
-            factoryCreator: address(0xC1EA),
-            creatorGraduationFeeBps: 40
+            graduationFeeBps: 200
         }));
 
         token.initializeMetadata("TestToken", "TEST", "");

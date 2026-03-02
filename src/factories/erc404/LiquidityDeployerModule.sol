@@ -22,16 +22,6 @@ interface IWETH {
     function approve(address spender, uint256 amount) external returns (bool);
 }
 
-interface IProtocolTreasuryPOL {
-    function receivePOL(
-        PoolKey calldata poolKey,
-        int24 tickLower,
-        int24 tickUpper,
-        uint256 amount0,
-        uint256 amount1
-    ) external;
-}
-
 /**
  * @title LiquidityDeployerModule
  * @notice Singleton contract that handles all Uniswap V4 liquidity deployment.
@@ -48,10 +38,7 @@ contract LiquidityDeployerModule is IUnlockCallback {
         uint256 ethReserve;
         uint256 tokenReserve;
         uint256 graduationFeeBps;
-        uint256 creatorGraduationFeeBps;
-        uint256 polBps;
         address protocolTreasury;
-        address factoryCreator;
         address weth;
         address token;        // the ERC404 token (instance address)
         address instance;     // same as token, needed for token transfers
@@ -63,11 +50,8 @@ contract LiquidityDeployerModule is IUnlockCallback {
 
     struct AmountsResult {
         uint256 graduationFee;
-        uint256 creatorGradCut;
         uint256 ethForPool;
         uint256 tokensForPool;
-        uint256 polETH;
-        uint256 polTokens;
     }
 
     struct CallbackContext {
@@ -92,8 +76,6 @@ contract LiquidityDeployerModule is IUnlockCallback {
 
     event LiquidityDeployed(address indexed pool, uint256 amountToken, uint256 amountETH);
     event GraduationFeePaid(address indexed treasury, uint256 amount);
-    event CreatorGraduationFeePaid(address indexed factoryCreator, uint256 amount);
-    event ProtocolLiquidityDeployed(address indexed treasury, uint256 tokenAmount, uint256 ethAmount);
 
     /**
      * @notice Deploy V4 liquidity on behalf of an ERC404BondingInstance.
@@ -107,7 +89,7 @@ contract LiquidityDeployerModule is IUnlockCallback {
         AmountsResult memory r = _computeAmounts(p);
         PoolSetupResult memory setup = _setupPoolAndUnlock(p, r);
         liquidity = setup.liquidity;
-        _postUnlock(p, r, setup);
+        _postUnlock(p, r);
     }
 
     /// @dev Sets up pool, stores callback context, performs unlock, clears context, returns liquidity.
@@ -161,31 +143,15 @@ contract LiquidityDeployerModule is IUnlockCallback {
         setup.liquidity = abi.decode(result, (uint128));
     }
 
-    /// @dev Dispatches graduation fees, deploys POL, emits final event.
+    /// @dev Dispatches graduation fees, emits final event.
     function _postUnlock(
         DeployParams calldata p,
-        AmountsResult memory r,
-        PoolSetupResult memory setup
+        AmountsResult memory r
     ) private {
-        // Send graduation fees (ETH held = msg.value minus what was wrapped for pool)
-        if (r.graduationFee > 0) {
-            uint256 protocolCut = r.graduationFee - r.creatorGradCut;
-            if (protocolCut > 0) {
-                SafeTransferLib.safeTransferETH(p.protocolTreasury, protocolCut);
-                emit GraduationFeePaid(p.protocolTreasury, protocolCut);
-            }
-            if (r.creatorGradCut > 0) {
-                SafeTransferLib.safeTransferETH(p.factoryCreator, r.creatorGradCut);
-                emit CreatorGraduationFeePaid(p.factoryCreator, r.creatorGradCut);
-            }
-        }
-
-        // Deploy protocol-owned liquidity (POL)
-        if (r.polETH > 0 && r.polTokens > 0) {
-            _deployProtocolLiquidity(
-                p, setup.poolKey, setup.tickLower, setup.tickUpper,
-                r.polTokens, r.polETH, setup.token0IsThis
-            );
+        // Send graduation fee to protocol treasury
+        if (r.graduationFee > 0 && p.protocolTreasury != address(0)) {
+            SafeTransferLib.safeTransferETH(p.protocolTreasury, r.graduationFee);
+            emit GraduationFeePaid(p.protocolTreasury, r.graduationFee);
         }
 
         emit LiquidityDeployed(address(p.v4PoolManager), r.tokensForPool, r.ethForPool);
@@ -238,21 +204,10 @@ contract LiquidityDeployerModule is IUnlockCallback {
 
         if (p.graduationFeeBps > 0 && p.protocolTreasury != address(0)) {
             r.graduationFee = (ethAvailable * p.graduationFeeBps) / 10000;
-            if (p.creatorGraduationFeeBps > 0 && p.factoryCreator != address(0)) {
-                r.creatorGradCut = (ethAvailable * p.creatorGraduationFeeBps) / 10000;
-                if (r.creatorGradCut > r.graduationFee) r.creatorGradCut = r.graduationFee;
-            }
         }
 
-        uint256 ethAfterGrad = ethAvailable - r.graduationFee;
-
-        if (p.polBps > 0 && p.protocolTreasury != address(0)) {
-            r.polETH = (ethAfterGrad * p.polBps) / 10000;
-            r.polTokens = (p.tokenReserve * p.polBps) / 10000;
-        }
-
-        r.ethForPool = ethAfterGrad - r.polETH;
-        r.tokensForPool = p.tokenReserve - r.polTokens;
+        r.ethForPool = ethAvailable - r.graduationFee;
+        r.tokensForPool = p.tokenReserve;
 
         require(r.ethForPool > 0, "No ETH for pool");
         require(r.tokensForPool > 0, "No tokens for pool");
@@ -269,37 +224,6 @@ contract LiquidityDeployerModule is IUnlockCallback {
         sqrtPriceX96 = uint160(FixedPointMathLib.sqrt(priceX192));
         if (sqrtPriceX96 < TickMath.MIN_SQRT_PRICE + 1) sqrtPriceX96 = TickMath.MIN_SQRT_PRICE + 1;
         if (sqrtPriceX96 > TickMath.MAX_SQRT_PRICE - 1) sqrtPriceX96 = TickMath.MAX_SQRT_PRICE - 1;
-    }
-
-    function _deployProtocolLiquidity(
-        DeployParams calldata p,
-        PoolKey memory poolKey,
-        int24 tickLower,
-        int24 tickUpper,
-        uint256 polTokenAmount,
-        uint256 polETHAmount,
-        bool token0IsThis
-    ) internal {
-        // Wrap POL ETH to WETH
-        IWETH(p.weth).deposit{value: polETHAmount}();
-
-        // Transfer WETH to treasury
-        IWETH(p.weth).transfer(p.protocolTreasury, polETHAmount);
-
-        // Transfer project tokens to treasury
-        // (module holds polTokenAmount from the transfer done by instance before calling deployLiquidity)
-        IERC20(p.token).transfer(p.protocolTreasury, polTokenAmount);
-
-        // Determine amounts in currency order
-        uint256 polAmount0 = token0IsThis ? polTokenAmount : polETHAmount;
-        uint256 polAmount1 = token0IsThis ? polETHAmount : polTokenAmount;
-
-        // Treasury deploys its own V4 position
-        IProtocolTreasuryPOL(p.protocolTreasury).receivePOL(
-            poolKey, tickLower, tickUpper, polAmount0, polAmount1
-        );
-
-        emit ProtocolLiquidityDeployed(p.protocolTreasury, polTokenAmount, polETHAmount);
     }
 
     /// @notice Accept ETH (needed for WETH deposits returning change, etc.)

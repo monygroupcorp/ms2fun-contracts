@@ -19,7 +19,6 @@ contract CypherLiquidityDeployerModuleTest is Test {
     MockWETH weth;
 
     address protocolTreasury = makeAddr("treasury");
-    address factoryCreator = makeAddr("creator");
     address instance = makeAddr("instance");
 
     function setUp() public {
@@ -35,7 +34,7 @@ contract CypherLiquidityDeployerModuleTest is Test {
         vault = CypherAlignmentVault(payable(LibClone.clone(address(impl))));
         vault.initialize(
             address(positionManager), address(swapRouter), address(weth),
-            address(token), factoryCreator, 100, protocolTreasury,
+            address(token), protocolTreasury,
             address(deployer)  // liquidityDeployer = this module
         );
     }
@@ -55,9 +54,7 @@ contract CypherLiquidityDeployerModuleTest is Test {
                 tokenReserve: tokenReserve,
                 sqrtPriceX96: sqrtPriceX96,
                 graduationFeeBps: 200,
-                creatorGraduationFeeBps: 100,
                 protocolTreasury: protocolTreasury,
-                factoryCreator: factoryCreator,
                 token: address(token),
                 weth: address(weth),
                 vault: address(vault),
@@ -81,7 +78,6 @@ contract CypherLiquidityDeployerModuleTest is Test {
 
         vm.deal(address(this), ethReserve);
         uint256 treasuryBefore = protocolTreasury.balance;
-        uint256 creatorBefore = factoryCreator.balance;
 
         deployer.deployLiquidity{value: ethReserve}(
             CypherLiquidityDeployerModule.DeployParams({
@@ -89,9 +85,7 @@ contract CypherLiquidityDeployerModuleTest is Test {
                 tokenReserve: 1000e18,
                 sqrtPriceX96: 79228162514264337593543950336,
                 graduationFeeBps: 200,
-                creatorGraduationFeeBps: 100,
                 protocolTreasury: protocolTreasury,
-                factoryCreator: factoryCreator,
                 token: address(token),
                 weth: address(weth),
                 vault: address(vault),
@@ -101,8 +95,7 @@ contract CypherLiquidityDeployerModuleTest is Test {
             })
         );
 
-        // Protocol gets 2% = 0.02 ETH, creator gets 1% = 0.01 ETH
+        // Protocol gets 2% = 0.02 ETH
         assertEq(protocolTreasury.balance - treasuryBefore, 0.02 ether);
-        assertEq(factoryCreator.balance - creatorBefore, 0.01 ether);
     }
 }

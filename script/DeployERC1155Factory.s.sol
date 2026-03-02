@@ -9,13 +9,11 @@ contract DeployERC1155Factory is Script {
         uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
         address masterRegistry = vm.envAddress("MASTER_REGISTRY");
         address instanceTemplate = vm.envAddress("INSTANCE_TEMPLATE");
-        address creator = vm.envAddress("CREATOR");
-        uint256 creatorFeeBps = vm.envUint("CREATOR_FEE_BPS");
         address globalMessageRegistry = vm.envAddress("GLOBAL_MESSAGE_REGISTRY");
 
         vm.startBroadcast(deployerPrivateKey);
 
-        ERC1155Factory factory = new ERC1155Factory(masterRegistry, instanceTemplate, creator, creatorFeeBps, globalMessageRegistry, address(0));
+        ERC1155Factory factory = new ERC1155Factory(masterRegistry, instanceTemplate, globalMessageRegistry, address(0));
         console.log("ERC1155Factory deployed at:", address(factory));
 
         vm.stopBroadcast();

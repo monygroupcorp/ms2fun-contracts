@@ -119,10 +119,7 @@ contract ERC404BondingInstanceTest is Test {
             v4PoolManager: mockV4PoolManager,
             weth: mockWETH,
             bondingFeeBps: bondingFeeBps_,
-            graduationFeeBps: graduationFeeBps_,
-            polBps: polBps_,
-            factoryCreator: address(0xC1EA),
-            creatorGraduationFeeBps: 40
+            graduationFeeBps: graduationFeeBps_
         });
         inst.initializeProtocol(proto);
     }
@@ -487,79 +484,6 @@ contract ERC404BondingInstanceTest is Test {
     // - Storage (immutable set at construction)
     // - Factory passthrough (graduationFeeBps propagated to instance)
     // - Fee math correctness (bps calculation, precision, boundary)
-
-    // ========================
-    // POL BPS Tests
-    // ========================
-
-    function test_PolBps_StoredCorrectly() public {
-        assertEq(instance.polBps(), 100, "POL bps should be 100 (1%)");
-    }
-
-    function test_PolBps_Immutable() public {
-        vm.startPrank(owner);
-        ERC404BondingInstance customPolImpl = new ERC404BondingInstance();
-        ERC404BondingInstance customInstance = ERC404BondingInstance(payable(LibClone.clone(address(customPolImpl))));
-        _initInstance(customInstance, address(0xBEEF), address(0xFEE), 100, 200, 250, address(0));
-        customInstance.initializeMetadata("Custom POL", "CPOL", "");
-        vm.stopPrank();
-
-        assertEq(customInstance.polBps(), 250, "Custom POL bps should be stored");
-    }
-
-    function test_POL_MathCorrectness() public {
-        // With 2% grad fee on 15 ETH = 0.3, then 1% POL on 14.7 = 0.147
-        uint256 deployETH = 15 ether;
-        uint256 deployTokens = 1_000_000 * 1e18;
-        uint256 gradFeeBps = instance.graduationFeeBps(); // 200
-        uint256 polFeeBps = instance.polBps(); // 100
-
-        // Step 1: Graduation fee
-        uint256 graduationFee = (deployETH * gradFeeBps) / 10000;
-        uint256 afterGrad = deployETH - graduationFee;
-
-        // Step 2: POL carve-out
-        uint256 polETH = (afterGrad * polFeeBps) / 10000;
-        uint256 polTokens = (deployTokens * polFeeBps) / 10000;
-        uint256 mainETH = afterGrad - polETH;
-        uint256 mainTokens = deployTokens - polTokens;
-
-        assertEq(graduationFee, 0.3 ether, "Graduation fee: 2% of 15 ETH");
-        assertEq(afterGrad, 14.7 ether, "After grad: 14.7 ETH");
-        assertEq(polETH, 0.147 ether, "POL ETH: 1% of 14.7");
-        assertEq(polTokens, 10_000 * 1e18, "POL tokens: 1% of 1M");
-        assertEq(mainETH, 14.553 ether, "Main ETH: 14.7 - 0.147");
-        assertEq(mainTokens, 990_000 * 1e18, "Main tokens: 1M - 10K");
-    }
-
-    function test_POL_ZeroBps() public {
-        vm.startPrank(owner);
-        ERC404BondingInstance zeroPOLImpl = new ERC404BondingInstance();
-        ERC404BondingInstance zeroPOL = ERC404BondingInstance(payable(LibClone.clone(address(zeroPOLImpl))));
-        _initInstance(zeroPOL, address(0xBEEF), address(0xFEE), 100, 200, 0, address(0));
-        zeroPOL.initializeMetadata("Zero POL", "ZPOL", "");
-        vm.stopPrank();
-
-        assertEq(zeroPOL.polBps(), 0, "Zero POL bps should be allowed");
-
-        // Verify no carve-out with 0 bps
-        uint256 deployETH = 15 ether;
-        uint256 polETH = (deployETH * zeroPOL.polBps()) / 10000;
-        assertEq(polETH, 0, "No POL carve with 0 bps");
-    }
-
-    function test_POL_NoTreasury() public {
-        vm.startPrank(owner);
-        ERC404BondingInstance noTreasuryPOLImpl = new ERC404BondingInstance();
-        ERC404BondingInstance noTreasuryPOL = ERC404BondingInstance(payable(LibClone.clone(address(noTreasuryPOLImpl))));
-        _initInstance(noTreasuryPOL, address(0xBEEF), address(0), 100, 200, 100, address(0));
-        noTreasuryPOL.initializeMetadata("No Treasury POL", "NTPOL", "");
-        vm.stopPrank();
-
-        assertEq(noTreasuryPOL.polBps(), 100, "POL bps stored even without treasury");
-        assertEq(noTreasuryPOL.protocolTreasury(), address(0), "Treasury should be zero");
-        // POL carve-out is skipped when treasury is address(0) — verified in integration tests
-    }
 
     // ========================
     // Deterministic deployLiquidity Tests

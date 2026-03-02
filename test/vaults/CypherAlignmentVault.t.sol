@@ -20,7 +20,6 @@ contract CypherAlignmentVaultTest is Test {
     address owner = address(this);
     address liquidityDeployer = makeAddr("liquidityDeployer");
     address protocolTreasury = makeAddr("treasury");
-    address factoryCreator = makeAddr("creator");
     address alice = makeAddr("alice");
     address bob = makeAddr("bob");
     address carol = makeAddr("carol");
@@ -38,8 +37,6 @@ contract CypherAlignmentVaultTest is Test {
             address(swapRouter),
             address(weth),
             address(alignmentToken),
-            factoryCreator,
-            100,  // 1% creator yield cut
             protocolTreasury,
             liquidityDeployer
         );
@@ -79,31 +76,15 @@ contract CypherAlignmentVaultTest is Test {
     function test_initialize_setsConfig() public view {
         assertEq(address(vault.positionManager()), address(positionManager));
         assertEq(vault.alignmentToken(), address(alignmentToken));
-        assertEq(vault.factoryCreator(), factoryCreator);
         assertEq(vault.liquidityDeployer(), liquidityDeployer);
-        assertEq(vault.protocolYieldCutBps(), 500);
-        assertEq(vault.creatorYieldCutBps(), 100);
+        assertEq(vault.protocolYieldCutBps(), 100);
     }
 
     function test_initialize_revertIfCalledTwice() public {
         vm.expectRevert();
         vault.initialize(
             address(positionManager), address(swapRouter), address(weth),
-            address(alignmentToken), factoryCreator, 100, protocolTreasury, liquidityDeployer
-        );
-    }
-
-    function test_initialize_revertsIfCreatorCutTooHigh() public {
-        TestableCypherAlignmentVault impl2 = new TestableCypherAlignmentVault();
-        TestableCypherAlignmentVault newVault = TestableCypherAlignmentVault(
-            payable(LibClone.clone(address(impl2)))
-        );
-        vm.expectRevert();
-        newVault.initialize(
-            address(positionManager), address(swapRouter), address(weth),
-            address(alignmentToken), factoryCreator,
-            501, // above 500 max
-            protocolTreasury, liquidityDeployer
+            address(alignmentToken), protocolTreasury, liquidityDeployer
         );
     }
 
@@ -250,19 +231,17 @@ contract CypherAlignmentVaultTest is Test {
         assertGt(vault.accRewardPerContribution(), 0);
     }
 
-    function test_harvest_takesProtocolAndCreatorCuts() public {
+    function test_harvest_takesProtocolCut() public {
         vm.deal(address(this), 1 ether);
         vault.receiveContribution{value: 1 ether}(Currency.wrap(address(0)), 1 ether, alice);
         _setupHarvestFees(0, 1 ether, true);
 
         vault.harvest();
 
-        // 5% protocol cut of 1 ETH = 0.05 ETH
-        assertEq(vault.accumulatedProtocolFees(), 0.05 ether);
-        // 1% creator cut of 1 ETH = 0.01 ETH
-        assertEq(vault.accumulatedCreatorFees(), 0.01 ether);
-        // Benefactors receive 94%
-        assertEq(vault.calculateClaimableAmount(alice), 0.94 ether);
+        // 1% protocol cut of 1 ETH = 0.01 ETH
+        assertEq(vault.accumulatedProtocolFees(), 0.01 ether);
+        // Benefactors receive 99%
+        assertEq(vault.calculateClaimableAmount(alice), 0.99 ether);
     }
 
     function test_harvest_multipleHarvestsAccumulate() public {
@@ -314,9 +293,9 @@ contract CypherAlignmentVaultTest is Test {
         _setupHarvestFees(0, 1 ether, true);
         vault.harvest();
 
-        // benefactorFees = 1 ETH * 94% = 0.94 ETH (integer arithmetic)
+        // benefactorFees = 1 ETH * 99% = 0.99 ETH (integer arithmetic)
         // Alice: 10/30 = 1/3, Bob: 20/30 = 2/3
-        uint256 benefactorFees = 1 ether * 9400 / 10000; // 0.94 ETH exact
+        uint256 benefactorFees = 1 ether * 9900 / 10000; // 0.99 ETH exact
 
         uint256 aliceClaimable = vault.calculateClaimableAmount(alice);
         uint256 bobClaimable = vault.calculateClaimableAmount(bob);
@@ -438,39 +417,17 @@ contract CypherAlignmentVaultTest is Test {
         vm.deal(address(this), 1 ether);
         vault.receiveContribution{value: 1 ether}(Currency.wrap(address(0)), 1 ether, alice);
         _setupHarvestFees(0, 1 ether, true);
-        vault.harvest(); // vault now holds 1 ETH, 0.05 ETH is protocol fees
+        vault.harvest(); // vault now holds 1 ETH, 0.01 ETH is protocol fees (1% default)
 
         uint256 treasuryBefore = protocolTreasury.balance;
         vm.prank(protocolTreasury);
         vault.withdrawProtocolFees();
 
-        assertEq(protocolTreasury.balance - treasuryBefore, 0.05 ether);
+        assertEq(protocolTreasury.balance - treasuryBefore, 0.01 ether);
         assertEq(vault.accumulatedProtocolFees(), 0);
     }
 
-    // ── withdrawCreatorFees tests ─────────────────────────────────────────
-
-    function test_withdrawCreatorFees_revertsIfNotCreator() public {
-        vm.prank(alice);
-        vm.expectRevert("Not creator");
-        vault.withdrawCreatorFees();
-    }
-
-    function test_withdrawCreatorFees_transfersToCreator() public {
-        vm.deal(address(this), 1 ether);
-        vault.receiveContribution{value: 1 ether}(Currency.wrap(address(0)), 1 ether, alice);
-        _setupHarvestFees(0, 1 ether, true);
-        vault.harvest(); // vault holds 1 ETH, 0.01 ETH is creator fees
-
-        uint256 creatorBefore = factoryCreator.balance;
-        vm.prank(factoryCreator);
-        vault.withdrawCreatorFees();
-
-        assertEq(factoryCreator.balance - creatorBefore, 0.01 ether);
-        assertEq(vault.accumulatedCreatorFees(), 0);
-    }
-
-    // ── setProtocolYieldCutBps / setCreatorYieldCutBps tests ─────────────
+    // ── setProtocolYieldCutBps tests ──────────────────────────────────────
 
     function test_setProtocolYieldCutBps_onlyOwner() public {
         vm.prank(alice);
@@ -486,22 +443,6 @@ contract CypherAlignmentVaultTest is Test {
     function test_setProtocolYieldCutBps_updatesValue() public {
         vault.setProtocolYieldCutBps(1000);
         assertEq(vault.protocolYieldCutBps(), 1000);
-    }
-
-    function test_setCreatorYieldCutBps_onlyOwner() public {
-        vm.prank(alice);
-        vm.expectRevert();
-        vault.setCreatorYieldCutBps(100);
-    }
-
-    function test_setCreatorYieldCutBps_revertsAboveMax() public {
-        vm.expectRevert("Max 5%");
-        vault.setCreatorYieldCutBps(501);
-    }
-
-    function test_setCreatorYieldCutBps_updatesValue() public {
-        vault.setCreatorYieldCutBps(300);
-        assertEq(vault.creatorYieldCutBps(), 300);
     }
 
     // ── calculateClaimableAmount tests ────────────────────────────────────
@@ -571,23 +512,18 @@ contract CypherAlignmentVaultTest is Test {
         _setupHarvestFees(0, 1 ether, true);
         vault.harvest();
 
-        // 3. Alice claims — should receive 94% of 1 ETH (5% protocol + 1% creator taken)
+        // 3. Alice claims — should receive 99% of 1 ETH (1% protocol taken)
         uint256 aliceBefore = alice.balance;
         vm.prank(alice);
         vault.claimFees();
 
-        assertApproxEqRel(alice.balance - aliceBefore, 0.94 ether, 0.01e18);
+        assertApproxEqRel(alice.balance - aliceBefore, 0.99 ether, 0.01e18);
 
-        // 4. Protocol and creator withdraw their cuts
+        // 4. Protocol withdraws its cut
         uint256 treasuryBefore = protocolTreasury.balance;
         vm.prank(protocolTreasury);
         vault.withdrawProtocolFees();
-        assertApproxEqRel(protocolTreasury.balance - treasuryBefore, 0.05 ether, 0.01e18);
-
-        uint256 creatorBefore = factoryCreator.balance;
-        vm.prank(factoryCreator);
-        vault.withdrawCreatorFees();
-        assertApproxEqRel(factoryCreator.balance - creatorBefore, 0.01 ether, 0.01e18);
+        assertApproxEqRel(protocolTreasury.balance - treasuryBefore, 0.01 ether, 0.01e18);
     }
 
     function test_integration_multipleBenefactors_proportionalDistribution() public {
@@ -599,8 +535,8 @@ contract CypherAlignmentVaultTest is Test {
         _setupHarvestFees(0, 3 ether, true);
         vault.harvest();
 
-        // benefactorFees = 3 ETH * 94% = 2.82 ETH
-        uint256 benefactorFees = 3 ether * 9400 / 10000;
+        // benefactorFees = 3 ETH * 99% = 2.97 ETH
+        uint256 benefactorFees = 3 ether * 9900 / 10000;
 
         vm.prank(alice);
         uint256 aliceClaimed = vault.claimFees();

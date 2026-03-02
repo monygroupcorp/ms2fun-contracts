@@ -254,7 +254,7 @@ contract ERC721AuctionInstance is ERC721, Ownable, ReentrancyGuard, IFactoryInst
 
     /**
      * @notice Settle an auction after it ends with bids
-     * @dev Mints NFT to winner, refunds creator deposit, splits winning bid (20% vault, 80% creator).
+     * @dev Mints NFT to winner, refunds creator deposit, splits winning bid (1% protocol, 19% vault, 80% artist).
      *      Auto-advances line to next queued piece.
      * @param tokenId The token ID to settle
      */
@@ -274,9 +274,14 @@ contract ERC721AuctionInstance is ERC721, Ownable, ReentrancyGuard, IFactoryInst
         // Refund creator's deposit
         SafeTransferLib.safeTransferETH(owner(), auction.minBid);
 
-        // Split winning bid: 20% to vault, 80% to creator
-        uint256 vaultCut = (auction.highBid * 20) / 100;
-        uint256 creatorCut = auction.highBid - vaultCut;
+        // Split winning bid: 1/19/80
+        uint256 protocolCut = auction.highBid / 100;                         // 1%
+        uint256 vaultCut    = (auction.highBid * 19) / 100;                  // 19%
+        uint256 creatorCut  = auction.highBid - protocolCut - vaultCut;      // ~80%
+
+        if (protocolCut > 0 && _protocolTreasury != address(0)) {
+            SafeTransferLib.safeTransferETH(_protocolTreasury, protocolCut);
+        }
 
         _vault.receiveContribution{value: vaultCut}(
             Currency.wrap(address(0)),

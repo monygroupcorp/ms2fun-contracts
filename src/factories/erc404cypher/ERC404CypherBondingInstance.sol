@@ -81,8 +81,6 @@ contract ERC404CypherBondingInstance is DN404, Ownable, ReentrancyGuard, IInstan
         address positionManager;
         uint256 bondingFeeBps;
         uint256 graduationFeeBps;
-        uint256 creatorGraduationFeeBps;
-        address factoryCreator;
     }
 
     // ── State ─────────────────────────────────────────────────────────────────
@@ -106,8 +104,6 @@ contract ERC404CypherBondingInstance is DN404, Ownable, ReentrancyGuard, IInstan
     address public protocolTreasury;
     uint256 public bondingFeeBps;
     uint256 public graduationFeeBps;
-    uint256 public creatorGraduationFeeBps;
-    address public factoryCreator;
 
     string public styleUri;
 
@@ -192,8 +188,6 @@ contract ERC404CypherBondingInstance is DN404, Ownable, ReentrancyGuard, IInstan
         protocolTreasury = protocol.protocolTreasury;
         bondingFeeBps = protocol.bondingFeeBps;
         graduationFeeBps = protocol.graduationFeeBps;
-        creatorGraduationFeeBps = protocol.creatorGraduationFeeBps;
-        factoryCreator = protocol.factoryCreator;
 
         liquidityDeployer = CypherLiquidityDeployerModule(payable(protocol.liquidityDeployer));
         curveComputer = CurveParamsComputer(protocol.curveComputer);
@@ -376,9 +370,7 @@ contract ERC404CypherBondingInstance is DN404, Ownable, ReentrancyGuard, IInstan
             tokenReserve: LIQUIDITY_RESERVE,
             sqrtPriceX96: sqrtPriceX96,
             graduationFeeBps: graduationFeeBps,
-            creatorGraduationFeeBps: creatorGraduationFeeBps,
             protocolTreasury: protocolTreasury,
-            factoryCreator: factoryCreator,
             token: address(this),
             weth: weth,
             vault: address(vault),

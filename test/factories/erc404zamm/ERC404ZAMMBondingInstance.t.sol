@@ -65,9 +65,7 @@ contract ERC404ZAMMBondingInstanceTest is Test {
             liquidityDeployer: address(realDeployer),
             curveComputer: address(realCurveComputer),
             bondingFeeBps: 100,
-            graduationFeeBps: 200,
-            creatorGraduationFeeBps: 50,
-            factoryCreator: factoryCreator
+            graduationFeeBps: 200
         }));
 
         instance.initializeMetadata("TestToken", "TEST", "");

@@ -70,9 +70,6 @@ contract ERC404CypherFactoryTest is Test {
                 protocol: protocol
             }),
             ERC404CypherFactory.ModuleConfig({
-                creator: creator,
-                creatorFeeBps: 0,
-                creatorGraduationFeeBps: 50,
                 globalMessageRegistry: globalMsgRegistry,
                 curveComputer: address(curveComputer),
                 tierGatingModule: address(tierGatingModule),
@@ -118,16 +115,6 @@ contract ERC404CypherFactoryTest is Test {
         assertNotEq(address(inst.vault()), address(0));
         assertEq(inst.weth(), address(weth));
         assertEq(inst.algebraFactory(), address(algebraFactory));
-    }
-
-    function test_createInstance_revertsOnInsufficientFee() public {
-        vm.deal(address(this), 0.005 ether);
-        vm.expectRevert();
-        factory.createInstance{value: 0.005 ether}(
-            _identity("CypherToken", "CYPH"),
-            "",
-            alignmentTarget
-        );
     }
 
     function test_createInstance_revertsOnInactiveProfile() public {
@@ -186,9 +173,8 @@ contract ERC404CypherFactoryTest is Test {
         assertGt(treasury.balance, treasuryBefore);
     }
 
-    function test_protocol_and_creator_view() public view {
+    function test_protocol_view() public view {
         assertEq(factory.protocol(), protocol);
-        assertEq(factory.creator(), creator);
     }
 
     // ── ComponentRegistry validation ──────────────────────────────────────────

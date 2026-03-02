@@ -335,7 +335,7 @@ User Activity
 
 ## 7. Governance (GrandCentral)
 
-GrandCentral is a Moloch-pattern DAO that governs the protocol through a Gnosis Safe.
+GrandCentral is a Mol***-pattern DAO that governs the protocol through a Gnosis Safe.
 
 ### Structure
 
@@ -586,7 +586,7 @@ All protocol contracts with `onlyOwner` functions are owned by a Solady Timelock
 ```
 src/
 ├── dao/
-│   ├── GrandCentral.sol                    # Moloch-pattern DAO
+│   ├── GrandCentral.sol                    # Mol***-pattern DAO
 │   ├── conductors/
 │   │   ├── StipendConductor.sol            # Recurring payment automation
 │   │   ├── ShareOffering.sol               # Share issuance campaigns

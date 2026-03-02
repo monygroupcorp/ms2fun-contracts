@@ -14,7 +14,6 @@ contract DeployERC404Factory is Script {
         uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
         address masterRegistry = vm.envAddress("MASTER_REGISTRY");
         address protocol = vm.envAddress("PROTOCOL");
-        address creator = vm.envAddress("CREATOR");
 
         vm.startBroadcast(deployerPrivateKey);
 
@@ -30,7 +29,7 @@ contract DeployERC404Factory is Script {
         console.log("CurveParamsComputer deployed at:", address(curveComputer));
 
         ERC404Factory factory = _deployFactory(
-            address(impl), masterRegistry, protocol, creator,
+            address(impl), masterRegistry, protocol,
             address(stakingModule), address(liquidityDeployer),
             address(launchManager), address(curveComputer)
         );
@@ -54,7 +53,6 @@ contract DeployERC404Factory is Script {
         address impl,
         address masterRegistry,
         address protocol,
-        address creator,
         address stakingModule,
         address liquidityDeployer,
         address launchManager,
@@ -67,10 +65,7 @@ contract DeployERC404Factory is Script {
                 instanceTemplate: vm.envAddress("INSTANCE_TEMPLATE"),
                 v4PoolManager: vm.envAddress("V4_POOL_MANAGER"),
                 weth: vm.envAddress("WETH"),
-                protocol: protocol,
-                creator: creator,
-                creatorFeeBps: vm.envUint("CREATOR_FEE_BPS"),
-                creatorGraduationFeeBps: vm.envUint("CREATOR_GRADUATION_FEE_BPS")
+                protocol: protocol
             }),
             ERC404Factory.ModuleConfig({
                 stakingModule: stakingModule,

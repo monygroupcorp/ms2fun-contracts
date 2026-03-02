@@ -23,7 +23,6 @@ import {IComponentRegistry} from "../../registry/interfaces/IComponentRegistry.s
  */
 contract ERC404ZAMMFactory is OwnableRoles, ReentrancyGuard, IFactory {
     uint256 public constant PROTOCOL_ROLE = _ROLE_0;
-    uint256 public constant CREATOR_ROLE  = _ROLE_1;
 
     /// @dev Packs constructor params to stay within 16-local Yul stack limit.
     struct CoreConfig {
@@ -36,21 +35,15 @@ contract ERC404ZAMMFactory is OwnableRoles, ReentrancyGuard, IFactory {
         address protocol;
     }
     struct ModuleConfig {
-        address creator;
-        uint256 creatorFeeBps;
-        uint256 creatorGraduationFeeBps;
         address globalMessageRegistry;
         address curveComputer;
         address liquidityDeployer;
         address tierGatingModule;
-        address componentRegistry;   // NEW
+        address componentRegistry;
     }
 
     // ── Immutables ────────────────────────────────────────────────────────────
     address public immutable globalMessageRegistry;
-    address public immutable creator;
-    uint256 public immutable creatorFeeBps;
-    uint256 public immutable creatorGraduationFeeBps;
 
     // ── Config ────────────────────────────────────────────────────────────────
     IMasterRegistry public masterRegistry;
@@ -60,7 +53,7 @@ contract ERC404ZAMMFactory is OwnableRoles, ReentrancyGuard, IFactory {
     uint256 public feeOrHook;
     uint256 public taxBps;
     address public protocolTreasury;
-    uint256 public instanceCreationFee = 0.01 ether;
+    uint256 public accumulatedProtocolFees;
 
     uint256 public bondingFeeBps = 100;      // 1%
     uint256 public graduationFeeBps = 200;   // 2%
@@ -69,10 +62,6 @@ contract ERC404ZAMMFactory is OwnableRoles, ReentrancyGuard, IFactory {
     CurveParamsComputer public immutable curveComputer;
     PasswordTierGatingModule public immutable tierGatingModule;
     IComponentRegistry public immutable componentRegistry;
-
-    // Accumulated fees
-    uint256 public accumulatedCreatorFees;
-    uint256 public accumulatedProtocolFees;
 
     // Graduation profiles
     struct GraduationProfile {
@@ -90,23 +79,18 @@ contract ERC404ZAMMFactory is OwnableRoles, ReentrancyGuard, IFactory {
     event InstanceCreated(address indexed instance, address indexed instanceCreator, string name, string symbol, address indexed vault);
     event ProfileUpdated(uint256 indexed profileId, uint256 targetETH, bool active);
     event ProtocolTreasuryUpdated(address indexed old, address indexed next);
-    event InstanceCreationFeeUpdated(uint256 newFee);
     event TaxBpsUpdated(uint256 newBps);
 
     constructor(CoreConfig memory core, ModuleConfig memory modules) {
         require(core.implementation != address(0), "Invalid implementation");
         require(core.zamm != address(0), "Invalid zamm");
         require(core.protocol != address(0), "Invalid protocol");
-        require(modules.creator != address(0), "Invalid creator");
         require(modules.liquidityDeployer != address(0), "Invalid deployer");
         require(modules.globalMessageRegistry != address(0), "Invalid GMR");
         require(modules.curveComputer != address(0), "Invalid curveComputer");
-        require(modules.creatorFeeBps <= 10000, "Invalid creator fee");
-        require(modules.creatorGraduationFeeBps <= 10000, "Invalid creator grad fee");
 
         _initializeOwner(core.protocol);
         _grantRoles(core.protocol, PROTOCOL_ROLE);
-        _grantRoles(modules.creator, CREATOR_ROLE);
 
         implementation = core.implementation;
         masterRegistry = IMasterRegistry(core.masterRegistry);
@@ -114,9 +98,6 @@ contract ERC404ZAMMFactory is OwnableRoles, ReentrancyGuard, IFactory {
         zRouter = core.zRouter;
         feeOrHook = core.feeOrHook;
         taxBps = core.taxBps;
-        creator = modules.creator;
-        creatorFeeBps = modules.creatorFeeBps;
-        creatorGraduationFeeBps = modules.creatorGraduationFeeBps;
         liquidityDeployer = ZAMMLiquidityDeployerModule(payable(modules.liquidityDeployer));
         globalMessageRegistry = modules.globalMessageRegistry;
         curveComputer = CurveParamsComputer(modules.curveComputer);
@@ -175,19 +156,13 @@ contract ERC404ZAMMFactory is OwnableRoles, ReentrancyGuard, IFactory {
         address gatingModule,
         address vault
     ) internal returns (address instance) {
-        require(msg.value >= instanceCreationFee, "Insufficient fee");
+        accumulatedProtocolFees += msg.value;
         require(identity.nftCount > 0, "Invalid NFT count");
         require(bytes(identity.name).length > 0, "Invalid name");
         require(identity.owner != address(0), "Invalid creator");
         require(vault != address(0), "Vault required");
         require(vault.code.length > 0, "Vault must be contract");
         require(!masterRegistry.isNameTaken(identity.name), "Name taken");
-
-        {
-            uint256 creatorCut = (instanceCreationFee * creatorFeeBps) / 10000;
-            accumulatedCreatorFees += creatorCut;
-            accumulatedProtocolFees += instanceCreationFee - creatorCut;
-        }
 
         ERC404ZAMMBondingInstance.BondingParams memory bonding = _computeBondingParams(identity.nftCount, identity.profileId);
         instance = LibClone.clone(implementation);
@@ -206,19 +181,13 @@ contract ERC404ZAMMFactory is OwnableRoles, ReentrancyGuard, IFactory {
         address vault,
         PasswordTierGatingModule.TierConfig memory tiers
     ) internal returns (address instance) {
-        require(msg.value >= instanceCreationFee, "Insufficient fee");
+        accumulatedProtocolFees += msg.value;
         require(identity.nftCount > 0, "Invalid NFT count");
         require(bytes(identity.name).length > 0, "Invalid name");
         require(identity.owner != address(0), "Invalid creator");
         require(vault != address(0), "Vault required");
         require(vault.code.length > 0, "Vault must be contract");
         require(!masterRegistry.isNameTaken(identity.name), "Name taken");
-
-        {
-            uint256 creatorCut = (instanceCreationFee * creatorFeeBps) / 10000;
-            accumulatedCreatorFees += creatorCut;
-            accumulatedProtocolFees += instanceCreationFee - creatorCut;
-        }
 
         ERC404ZAMMBondingInstance.BondingParams memory bonding = _computeBondingParams(identity.nftCount, identity.profileId);
         instance = LibClone.clone(implementation);
@@ -259,9 +228,7 @@ contract ERC404ZAMMFactory is OwnableRoles, ReentrancyGuard, IFactory {
             liquidityDeployer: address(liquidityDeployer),
             curveComputer: address(curveComputer),
             bondingFeeBps: bondingFeeBps,
-            graduationFeeBps: graduationFeeBps,
-            creatorGraduationFeeBps: creatorGraduationFeeBps,
-            factoryCreator: creator
+            graduationFeeBps: graduationFeeBps
         });
     }
 
@@ -278,8 +245,8 @@ contract ERC404ZAMMFactory is OwnableRoles, ReentrancyGuard, IFactory {
         address vault
     ) private {
         masterRegistry.registerInstance(instance, address(this), identity.owner, identity.name, metadataURI, vault);
-        if (msg.value > instanceCreationFee) {
-            SafeTransferLib.safeTransferETH(msg.sender, msg.value - instanceCreationFee);
+        if (msg.value > 0) {
+            // Refund excess (none expected since fee is free, but keep pattern)
         }
         emit InstanceCreated(instance, identity.owner, identity.name, identity.symbol, vault);
     }
@@ -300,11 +267,6 @@ contract ERC404ZAMMFactory is OwnableRoles, ReentrancyGuard, IFactory {
         protocolTreasury = t;
     }
 
-    function setInstanceCreationFee(uint256 fee) external onlyRoles(PROTOCOL_ROLE) {
-        instanceCreationFee = fee;
-        emit InstanceCreationFeeUpdated(fee);
-    }
-
     function setTaxBps(uint256 bps) external onlyRoles(PROTOCOL_ROLE) {
         require(bps <= 300, "Max 3%");
         taxBps = bps;
@@ -317,13 +279,6 @@ contract ERC404ZAMMFactory is OwnableRoles, ReentrancyGuard, IFactory {
         require(amt > 0, "No fees");
         accumulatedProtocolFees = 0;
         SafeTransferLib.safeTransferETH(protocolTreasury, amt);
-    }
-
-    function withdrawCreatorFees() external onlyRoles(CREATOR_ROLE) {
-        uint256 amt = accumulatedCreatorFees;
-        require(amt > 0, "No fees");
-        accumulatedCreatorFees = 0;
-        SafeTransferLib.safeTransferETH(creator, amt);
     }
 
     function getFeatures() external view returns (bytes32[] memory) { return features; }

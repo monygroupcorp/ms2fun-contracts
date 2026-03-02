@@ -114,8 +114,6 @@ contract V4HookDeploymentTest is ForkTestBase {
                 WETH,
                 UNISWAP_V4_POOL_MANAGER,
                 USDC,  // Using USDC as alignment token for test
-                address(0xC1EA),
-                100,
                 address(new MockZRouter()),
                 3000,
                 60,

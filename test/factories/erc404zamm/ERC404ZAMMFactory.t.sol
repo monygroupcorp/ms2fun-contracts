@@ -73,9 +73,6 @@ contract ERC404ZAMMFactoryTest is Test {
                 protocol: protocol
             }),
             ERC404ZAMMFactory.ModuleConfig({
-                creator: creator,
-                creatorFeeBps: 0,
-                creatorGraduationFeeBps: 50,
                 globalMessageRegistry: globalMsgRegistry,
                 curveComputer: address(curveComputer),
                 liquidityDeployer: address(deployer),
@@ -122,16 +119,6 @@ contract ERC404ZAMMFactoryTest is Test {
 
         assertNotEq(instance, address(0));
         assertEq(ERC404ZAMMBondingInstance(payable(instance)).factory(), address(factory));
-    }
-
-    function test_createInstance_revertsOnInsufficientFee() public {
-        vm.deal(address(this), 0.005 ether);
-        vm.expectRevert();
-        factory.createInstance{value: 0.005 ether}(
-            _identity("TestToken", "TST"),
-            "",
-            vault
-        );
     }
 
     function test_createInstance_revertsOnInactiveProfile() public {
@@ -190,9 +177,8 @@ contract ERC404ZAMMFactoryTest is Test {
         assertGt(treasury.balance, treasuryBefore);
     }
 
-    function test_protocol_and_creator_view() public view {
+    function test_protocol_view() public view {
         assertEq(factory.protocol(), protocol);
-        assertEq(factory.creator(), creator);
     }
 
     // ── ComponentRegistry validation ──────────────────────────────────────────

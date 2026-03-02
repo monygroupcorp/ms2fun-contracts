@@ -48,8 +48,6 @@ contract VaultMultiDepositTest is ForkTestBase {
             WETH,
             UNISWAP_V4_POOL_MANAGER,
             alignmentToken,
-            address(0xC1EA),
-            100,
             address(0), // TODO: replace with deployed zRouter address
             3000,
             60,

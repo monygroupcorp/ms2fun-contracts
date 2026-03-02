@@ -44,8 +44,6 @@ contract ERC721AuctionFactoryTest is Test {
                 address(0x2222222222222222222222222222222222222222),
                 address(0x4444444444444444444444444444444444444444),
                 address(token),
-                address(0xC1EA),
-                100,
                 address(new MockZRouter()),
                 3000,
                 60,
@@ -66,7 +64,7 @@ contract ERC721AuctionFactoryTest is Test {
 
         GlobalMessageRegistry msgRegistry = new GlobalMessageRegistry();
         msgRegistry.initialize(owner, address(mockRegistry));
-        factory = new ERC721AuctionFactory(address(mockRegistry), address(0xC1EA), 2000, address(msgRegistry));
+        factory = new ERC721AuctionFactory(address(mockRegistry), address(msgRegistry));
         factory.setProtocolTreasury(treasury);
 
         vm.stopPrank();
@@ -77,9 +75,7 @@ contract ERC721AuctionFactoryTest is Test {
     // └─────────────────────────┘
 
     function test_FactoryCreation() public view {
-        assertEq(factory.instanceCreationFee(), 0.01 ether);
-        assertEq(factory.creator(), address(0xC1EA));
-        assertEq(factory.creatorFeeBps(), 2000);
+        assertEq(factory.protocol(), owner);
     }
 
     function test_CreateInstance() public {
@@ -111,67 +107,7 @@ contract ERC721AuctionFactoryTest is Test {
         assertEq(inst.owner(), artist);
     }
 
-    function test_CreateInstance_InsufficientFee() public {
-        vm.deal(artist, 1 ether);
-        vm.prank(artist);
-
-        vm.expectRevert("Insufficient fee");
-        factory.createInstance{value: 0.001 ether}(
-            "Test Auctions",
-            "ipfs://test",
-            artist,
-            address(vault),
-            "TART",
-            1,
-            BASE_DURATION,
-            TIME_BUFFER,
-            BID_INCREMENT
-        );
-    }
-
-    function test_CreateInstance_FeeSplit() public {
-        vm.deal(artist, 1 ether);
-        vm.prank(artist);
-
-        factory.createInstance{value: 0.01 ether}(
-            "Test Auctions",
-            "ipfs://test",
-            artist,
-            address(vault),
-            "TART",
-            1,
-            BASE_DURATION,
-            TIME_BUFFER,
-            BID_INCREMENT
-        );
-
-        // 20% to creator, 80% to protocol
-        assertEq(factory.accumulatedCreatorFees(), 0.002 ether);
-        assertEq(factory.accumulatedProtocolFees(), 0.008 ether);
-    }
-
-    function test_CreateInstance_RefundsExcess() public {
-        vm.deal(artist, 1 ether);
-        uint256 balBefore = artist.balance;
-        vm.prank(artist);
-
-        factory.createInstance{value: 0.05 ether}(
-            "Test Auctions",
-            "ipfs://test",
-            artist,
-            address(vault),
-            "TART",
-            1,
-            BASE_DURATION,
-            TIME_BUFFER,
-            BID_INCREMENT
-        );
-
-        // Should have refunded 0.04 ether
-        assertEq(balBefore - artist.balance, 0.01 ether);
-    }
-
-    function test_WithdrawFees() public {
+    function test_WithdrawProtocolFees() public {
         // Create an instance to generate fees
         vm.deal(artist, 1 ether);
         vm.prank(artist);
@@ -191,11 +127,6 @@ contract ERC721AuctionFactoryTest is Test {
         vm.prank(owner);
         factory.withdrawProtocolFees();
         assertEq(factory.accumulatedProtocolFees(), 0);
-
-        // Withdraw creator fees
-        vm.prank(address(0xC1EA));
-        factory.withdrawCreatorFees();
-        assertEq(factory.accumulatedCreatorFees(), 0);
     }
 
     // ┌─────────────────────────┐
@@ -385,6 +316,7 @@ contract ERC721AuctionFactoryTest is Test {
 
         uint256 artistBalBefore = artist.balance;
         uint256 vaultBalBefore = address(vault).balance;
+        uint256 treasuryBalBefore = treasury.balance;
 
         // Settle
         inst.settleAuction(1);
@@ -392,13 +324,18 @@ contract ERC721AuctionFactoryTest is Test {
         // NFT minted to bidder1
         assertEq(inst.ownerOf(1), bidder1);
 
-        // Creator deposit refunded + 80% of winning bid
-        uint256 expectedCreatorPay = 0.1 ether + (1 ether * 80) / 100;
+        // 1% protocol, 19% vault, ~80% artist (deposit refunded + creator cut)
+        uint256 protocolCut = 1 ether / 100;
+        uint256 expectedVaultCut = (1 ether * 19) / 100;
+        uint256 expectedCreatorCut = 1 ether - protocolCut - expectedVaultCut;
+        uint256 expectedCreatorPay = 0.1 ether + expectedCreatorCut; // deposit refund + creator cut
         assertEq(artist.balance - artistBalBefore, expectedCreatorPay);
 
-        // 20% of winning bid to vault
-        uint256 expectedVaultCut = (1 ether * 20) / 100;
+        // 19% of winning bid to vault
         assertEq(address(vault).balance - vaultBalBefore, expectedVaultCut);
+
+        // 1% of winning bid to protocol treasury
+        assertEq(treasury.balance - treasuryBalBefore, protocolCut);
 
         // Auction marked as settled
         auction = inst.getAuction(1);

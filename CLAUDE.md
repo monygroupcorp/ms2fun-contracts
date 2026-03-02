@@ -34,7 +34,7 @@ MasterRegistry holds a reference to AlignmentRegistry for vault registration val
 
 ## Governance
 
-GrandCentral is a Moloch-pattern DAO. Shares = voting power, loot = economic rights. Proposals execute via Gnosis Safe through a 48h Timelock. Conductor system delegates admin/manager/governor permissions.
+GrandCentral is a Mol***-pattern DAO. Shares = voting power, loot = economic rights. Proposals execute via Gnosis Safe through a 48h Timelock. Conductor system delegates admin/manager/governor permissions.
 
 ## Tech Stack
 

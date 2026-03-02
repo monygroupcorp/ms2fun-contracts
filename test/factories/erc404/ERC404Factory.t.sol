@@ -96,10 +96,7 @@ contract ERC404FactoryTest is Test {
                 instanceTemplate: mockInstanceTemplate,
                 v4PoolManager: mockV4PoolManager,
                 weth: mockWETH,
-                protocol: protocolAdmin,
-                creator: address(0xC1EA),
-                creatorFeeBps: 2000,
-                creatorGraduationFeeBps: 40
+                protocol: protocolAdmin
             }),
             ERC404Factory.ModuleConfig({
                 stakingModule: address(stakingModule),
@@ -213,18 +210,6 @@ contract ERC404FactoryTest is Test {
         vm.stopPrank();
     }
 
-    function test_createInstance_insufficientFee() public {
-        vm.deal(creator1, 0.001 ether);
-        vm.startPrank(creator1);
-        vm.expectRevert("Insufficient fee");
-        factory.createInstance{value: 0.001 ether}(
-            _identity("TestToken", "TEST", creator1),
-            "ipfs://metadata",
-            ERC404Factory.CreationTier.STANDARD
-        );
-        vm.stopPrank();
-    }
-
     function test_createInstance_invalidName() public {
         vm.deal(creator1, 1 ether);
         vm.startPrank(creator1);
@@ -299,10 +284,7 @@ contract ERC404FactoryTest is Test {
                 instanceTemplate: mockInstanceTemplate,
                 v4PoolManager: address(0), // missing
                 weth: mockWETH,
-                protocol: protocolAdmin,
-                creator: address(0xC1EA),
-                creatorFeeBps: 2000,
-                creatorGraduationFeeBps: 40
+                protocol: protocolAdmin
             }),
             ERC404Factory.ModuleConfig({
                 stakingModule: address(stakingModule),
@@ -341,10 +323,7 @@ contract ERC404FactoryTest is Test {
                 instanceTemplate: mockInstanceTemplate,
                 v4PoolManager: mockV4PoolManager,
                 weth: address(0), // missing
-                protocol: protocolAdmin,
-                creator: address(0xC1EA),
-                creatorFeeBps: 2000,
-                creatorGraduationFeeBps: 40
+                protocol: protocolAdmin
             }),
             ERC404Factory.ModuleConfig({
                 stakingModule: address(stakingModule),
@@ -374,28 +353,6 @@ contract ERC404FactoryTest is Test {
     }
 
     // ========================
-    // Fee Management Tests
-    // ========================
-
-    function test_instanceCreationFee_defaultValue() public view {
-        assertEq(factory.instanceCreationFee(), INSTANCE_CREATION_FEE);
-    }
-
-    function test_setInstanceCreationFee_ownerOnly() public {
-        vm.startPrank(protocolAdmin);
-        factory.setInstanceCreationFee(0.02 ether);
-        assertEq(factory.instanceCreationFee(), 0.02 ether);
-        vm.stopPrank();
-    }
-
-    function test_setInstanceCreationFee_nonOwnerFails() public {
-        vm.startPrank(nonOwner);
-        vm.expectRevert();
-        factory.setInstanceCreationFee(0.02 ether);
-        vm.stopPrank();
-    }
-
-    // ========================
     // Infrastructure Tests
     // ========================
 
@@ -414,26 +371,6 @@ contract ERC404FactoryTest is Test {
     function test_getFeatures() public view {
         bytes32[] memory factoryFeatures = factory.getFeatures();
         assertTrue(factoryFeatures.length > 0, "Factory should have features");
-    }
-
-    // ========================
-    // Excess Fee Refund Tests
-    // ========================
-
-    function test_createInstance_excessFeeRefund() public {
-        uint256 totalSent = INSTANCE_CREATION_FEE + 0.5 ether;
-        vm.deal(creator1, totalSent);
-        uint256 balanceBefore = creator1.balance;
-
-        vm.startPrank(creator1);
-        factory.createInstance{value: totalSent}(
-            _identity("TestToken", "TEST", creator1),
-            "ipfs://metadata",
-            ERC404Factory.CreationTier.STANDARD
-        );
-        vm.stopPrank();
-
-        assertEq(creator1.balance, balanceBefore - INSTANCE_CREATION_FEE, "Excess should be refunded");
     }
 
     // ========================
@@ -557,7 +494,8 @@ contract ERC404FactoryTest is Test {
         vm.startPrank(protocolAdmin);
         factory.setProtocolTreasury(treasury);
         assertEq(address(factory).balance, INSTANCE_CREATION_FEE);
-        uint256 expectedProtocolFees = (INSTANCE_CREATION_FEE * 8000) / 10000;
+        // All ETH goes to protocol (no creator split)
+        uint256 expectedProtocolFees = INSTANCE_CREATION_FEE;
         factory.withdrawProtocolFees();
         assertEq(factory.accumulatedProtocolFees(), 0);
         assertEq(treasury.balance, expectedProtocolFees);
@@ -676,73 +614,6 @@ contract ERC404FactoryTest is Test {
     }
 
     // ========================
-    // POL BPS Tests
-    // ========================
-
-    function test_PolBps_DefaultValue() public view {
-        assertEq(factory.polBps(), 100);
-    }
-
-    function test_SetPolBps() public {
-        vm.startPrank(protocolAdmin);
-        factory.setPolBps(200);
-        assertEq(factory.polBps(), 200);
-        vm.stopPrank();
-    }
-
-    function test_SetPolBps_EmitsEvent() public {
-        vm.startPrank(protocolAdmin);
-        vm.expectEmit(false, false, false, true);
-        emit ERC404Factory.POLConfigUpdated(250);
-        factory.setPolBps(250);
-        vm.stopPrank();
-    }
-
-    function test_SetPolBps_RevertExceedsCap() public {
-        vm.startPrank(protocolAdmin);
-        vm.expectRevert("Max 3%");
-        factory.setPolBps(301);
-        vm.stopPrank();
-    }
-
-    function test_SetPolBps_BoundaryAt300() public {
-        vm.startPrank(protocolAdmin);
-        factory.setPolBps(300);
-        assertEq(factory.polBps(), 300);
-        vm.stopPrank();
-    }
-
-    function test_SetPolBps_ZeroAllowed() public {
-        vm.startPrank(protocolAdmin);
-        factory.setPolBps(0);
-        assertEq(factory.polBps(), 0);
-        vm.stopPrank();
-    }
-
-    function test_SetPolBps_RevertNonOwner() public {
-        vm.startPrank(nonOwner);
-        vm.expectRevert();
-        factory.setPolBps(200);
-        vm.stopPrank();
-    }
-
-    function test_PolBps_PassedToInstance() public {
-        vm.startPrank(protocolAdmin);
-        factory.setPolBps(250);
-        vm.stopPrank();
-
-        vm.deal(creator1, 1 ether);
-        vm.startPrank(creator1);
-        address instance = factory.createInstance{value: INSTANCE_CREATION_FEE}(
-            _identity("POLToken", "POL", creator1),
-            "ipfs://metadata",
-            ERC404Factory.CreationTier.STANDARD
-        );
-        vm.stopPrank();
-        assertEq(ERC404BondingInstance(payable(instance)).polBps(), 250);
-    }
-
-    // ========================
     // Tiered Creation Tests (via LaunchManager)
     // ========================
 
@@ -818,58 +689,6 @@ contract ERC404FactoryTest is Test {
         vm.stopPrank();
     }
 
-    function test_createInstance_premiumTier_insufficientFee() public {
-        vm.startPrank(protocolAdmin);
-        launchMgr.setTierConfig(LaunchManager.CreationTier.PREMIUM, LaunchManager.TierConfig({
-            fee: 0.05 ether, featuredDuration: 0, featuredRankBoost: 0,
-            badge: PromotionBadges.BadgeType.NONE, badgeDuration: 0
-        }));
-        vm.stopPrank();
-
-        vm.deal(creator1, 1 ether);
-        vm.startPrank(creator1);
-        vm.expectRevert("Insufficient fee");
-        factory.createInstance{value: 0.01 ether}(
-            _identity("PremiumToken", "PREM", creator1),
-            "ipfs://metadata",
-            ERC404Factory.CreationTier.PREMIUM
-        );
-        vm.stopPrank();
-    }
-
-    function test_createInstance_tierNotConfigured() public {
-        vm.deal(creator1, 1 ether);
-        vm.startPrank(creator1);
-        vm.expectRevert("Tier not configured");
-        factory.createInstance{value: 0.1 ether}(
-            _identity("LaunchToken", "LNCH", creator1),
-            "ipfs://metadata",
-            ERC404Factory.CreationTier.LAUNCH
-        );
-        vm.stopPrank();
-    }
-
-    function test_createInstance_premiumTier_refundsExcess() public {
-        vm.startPrank(protocolAdmin);
-        launchMgr.setTierConfig(LaunchManager.CreationTier.PREMIUM, LaunchManager.TierConfig({
-            fee: 0.05 ether, featuredDuration: 0, featuredRankBoost: 0,
-            badge: PromotionBadges.BadgeType.NONE, badgeDuration: 0
-        }));
-        vm.stopPrank();
-
-        uint256 sent = 0.5 ether;
-        vm.deal(creator1, sent);
-        uint256 balanceBefore = creator1.balance;
-        vm.startPrank(creator1);
-        factory.createInstance{value: sent}(
-            _identity("RefundToken", "RFND", creator1),
-            "ipfs://metadata",
-            ERC404Factory.CreationTier.PREMIUM
-        );
-        vm.stopPrank();
-        assertEq(creator1.balance, balanceBefore - 0.05 ether);
-    }
-
     function test_createInstance_gracefulDegradation_noQueueOrBadges() public {
         vm.startPrank(protocolAdmin);
         launchMgr.setTierConfig(LaunchManager.CreationTier.LAUNCH, LaunchManager.TierConfig({
@@ -922,34 +741,6 @@ contract ERC404FactoryTest is Test {
         vm.startPrank(protocolAdmin);
         factory.setBondingFeeBps(200);
         assertEq(factory.bondingFeeBps(), 200);
-        vm.stopPrank();
-    }
-
-    function test_creatorRole_cannotSetBondingFee() public {
-        vm.startPrank(address(0xC1EA));
-        vm.expectRevert();
-        factory.setBondingFeeBps(200);
-        vm.stopPrank();
-    }
-
-    function test_creatorRole_canWithdrawCreatorFees() public {
-        vm.deal(creator1, 1 ether);
-        vm.startPrank(creator1);
-        factory.createInstance{value: INSTANCE_CREATION_FEE}(
-            _identity("FeeToken", "FEE", creator1),
-            "ipfs://metadata",
-            ERC404Factory.CreationTier.STANDARD
-        );
-        vm.stopPrank();
-        vm.startPrank(address(0xC1EA));
-        factory.withdrawCreatorFees();
-        vm.stopPrank();
-    }
-
-    function test_nonRole_cannotWithdrawCreatorFees() public {
-        vm.startPrank(nonOwner);
-        vm.expectRevert();
-        factory.withdrawCreatorFees();
         vm.stopPrank();
     }
 

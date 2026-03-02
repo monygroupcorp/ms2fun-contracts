@@ -14,12 +14,11 @@ contract ZAMMAlignmentVaultFactoryTest is Test {
     MockZRouter public mockZRouter;
     MockEXECToken public alignmentToken;
 
-    address public creator = address(0xC1EA);
     address public treasury = address(0x99);
 
     IZAMM.PoolKey public poolKey;
 
-    event VaultDeployed(address indexed vault, address indexed alignmentToken, address indexed creator);
+    event VaultDeployed(address indexed vault, address indexed alignmentToken);
 
     function setUp() public {
         mockZamm = new MockZAMM();
@@ -42,52 +41,34 @@ contract ZAMMAlignmentVaultFactoryTest is Test {
     }
 
     function test_deployVault_returnsAddress() public {
-        address vault = factory.deployVault(address(alignmentToken), poolKey, creator, 100);
+        address vault = factory.deployVault(address(alignmentToken), poolKey);
         assertTrue(vault != address(0));
     }
 
     function test_deployVault_isInitialized() public {
-        address vault = factory.deployVault(address(alignmentToken), poolKey, creator, 100);
+        address vault = factory.deployVault(address(alignmentToken), poolKey);
         ZAMMAlignmentVault v = ZAMMAlignmentVault(payable(vault));
         assertEq(v.alignmentToken(), address(alignmentToken));
-        assertEq(v.factoryCreator(), creator);
         assertEq(v.zamm(), address(mockZamm));
+        assertEq(v.protocolYieldCutBps(), 100);
     }
 
     function test_deployVault_emitsEvent() public {
         vm.expectEmit(false, false, false, false);
-        emit VaultDeployed(address(0), address(alignmentToken), creator);
-        factory.deployVault(address(alignmentToken), poolKey, creator, 100);
-    }
-
-    function test_deployVault_differentCreatorCuts() public {
-        // 0% creator cut
-        address v1 = factory.deployVault(address(alignmentToken), poolKey, creator, 0);
-        assertEq(ZAMMAlignmentVault(payable(v1)).creatorYieldCutBps(), 0);
-
-        // 500bps (max)
-        MockEXECToken t2 = new MockEXECToken(1e18);
-        IZAMM.PoolKey memory pk2 = IZAMM.PoolKey(0, 0, address(0), address(t2), 30);
-        address v2 = factory.deployVault(address(t2), pk2, creator, 500);
-        assertEq(ZAMMAlignmentVault(payable(v2)).creatorYieldCutBps(), 500);
-    }
-
-    function test_deployVault_revertExcessCreatorCut() public {
-        vm.expectRevert();
-        factory.deployVault(address(alignmentToken), poolKey, creator, 501);
+        emit VaultDeployed(address(0), address(alignmentToken));
+        factory.deployVault(address(alignmentToken), poolKey);
     }
 
     function test_vaultImplementation_isShared() public {
         address impl = factory.vaultImplementation();
         assertTrue(impl != address(0));
 
-        address v1 = factory.deployVault(address(alignmentToken), poolKey, creator, 100);
+        address v1 = factory.deployVault(address(alignmentToken), poolKey);
 
         MockEXECToken t2 = new MockEXECToken(1e18);
         IZAMM.PoolKey memory pk2 = IZAMM.PoolKey(0, 0, address(0), address(t2), 30);
-        address v2 = factory.deployVault(address(t2), pk2, creator, 100);
+        address v2 = factory.deployVault(address(t2), pk2);
 
-        // Both are clones of the same implementation, addresses differ
         assertTrue(v1 != v2);
         assertTrue(v1 != impl);
     }

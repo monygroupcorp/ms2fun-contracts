@@ -43,10 +43,7 @@ contract ZAMMLiquidityDeployerModule {
         uint256 ethReserve;
         uint256 tokenReserve;
         uint256 graduationFeeBps;
-        uint256 creatorGraduationFeeBps;
-        uint256 polBps;          // reserved for future use, pass 0
         address protocolTreasury;
-        address factoryCreator;
         address token;           // ERC404 token (instance address)
         address instance;        // same as token; LP recipient
         address zamm;            // ZAMM singleton
@@ -56,7 +53,6 @@ contract ZAMMLiquidityDeployerModule {
     struct PoolResult {
         uint256 ethForPool;
         uint256 graduationFee;
-        uint256 creatorCut;
         bool ethIsToken0;
         ZAMMPoolKey poolKey;
         uint256 liquidity;
@@ -64,7 +60,6 @@ contract ZAMMLiquidityDeployerModule {
 
     event LiquidityDeployed(address indexed zamm, address token0, address token1, uint256 liquidity);
     event GraduationFeePaid(address indexed treasury, uint256 amount);
-    event CreatorGraduationFeePaid(address indexed creator, uint256 amount);
 
     /**
      * @notice Deploy ZAMM liquidity on behalf of an ERC404ZAMMBondingInstance.
@@ -89,10 +84,6 @@ contract ZAMMLiquidityDeployerModule {
         // Compute fee splits
         if (p.graduationFeeBps > 0 && p.protocolTreasury != address(0)) {
             r.graduationFee = (p.ethReserve * p.graduationFeeBps) / 10000;
-            if (p.creatorGraduationFeeBps > 0 && p.factoryCreator != address(0)) {
-                r.creatorCut = (p.ethReserve * p.creatorGraduationFeeBps) / 10000;
-                if (r.creatorCut > r.graduationFee) r.creatorCut = r.graduationFee;
-            }
         }
         r.ethForPool = p.ethReserve - r.graduationFee;
         require(r.ethForPool > 0, "No ETH for pool");
@@ -125,15 +116,8 @@ contract ZAMMLiquidityDeployerModule {
 
     function _payFees(DeployParams calldata p, PoolResult memory r) private {
         if (r.graduationFee > 0) {
-            uint256 protocolCut = r.graduationFee - r.creatorCut;
-            if (protocolCut > 0) {
-                SafeTransferLib.safeTransferETH(p.protocolTreasury, protocolCut);
-                emit GraduationFeePaid(p.protocolTreasury, protocolCut);
-            }
-            if (r.creatorCut > 0) {
-                SafeTransferLib.safeTransferETH(p.factoryCreator, r.creatorCut);
-                emit CreatorGraduationFeePaid(p.factoryCreator, r.creatorCut);
-            }
+            SafeTransferLib.safeTransferETH(p.protocolTreasury, r.graduationFee);
+            emit GraduationFeePaid(p.protocolTreasury, r.graduationFee);
         }
         emit LiquidityDeployed(p.zamm, r.poolKey.token0, r.poolKey.token1, r.liquidity);
     }

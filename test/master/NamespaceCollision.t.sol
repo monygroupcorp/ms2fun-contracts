@@ -119,10 +119,7 @@ contract NamespaceCollisionTest is Test {
                 instanceTemplate: mockInstanceTemplate,
                 v4PoolManager: mockV4PoolManager,
                 weth: mockWETH,
-                protocol: owner,
-                creator: address(0xC1EA),
-                creatorFeeBps: 2000,
-                creatorGraduationFeeBps: 40
+                protocol: owner
             }),
             ERC404Factory.ModuleConfig({
                 stakingModule: address(stakingModule),
@@ -139,8 +136,6 @@ contract NamespaceCollisionTest is Test {
         erc1155Factory = new ERC1155Factory(
             address(registry),
             mockInstanceTemplate,
-            address(0xC1EA),
-            2000,
             address(globalMsgRegistry),
             address(0)
         );

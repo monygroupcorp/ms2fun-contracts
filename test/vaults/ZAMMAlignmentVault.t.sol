@@ -13,7 +13,7 @@ contract ZAMMAlignmentVaultTest is Test {
     // Mirror events for expectEmit matching
     event ContributionReceived(address indexed benefactor, uint256 amount);
     event Harvested(uint256 totalFees, uint256 benefactorFees, uint256 callerReward);
-    event VaultDeployed(address indexed vault, address indexed alignmentToken, address indexed creator);
+    event VaultDeployed(address indexed vault, address indexed alignmentToken);
 
     ZAMMAlignmentVault public vault;
     ZAMMAlignmentVault public impl;
@@ -23,7 +23,6 @@ contract ZAMMAlignmentVaultTest is Test {
 
     address public owner = address(0x1);
     address public treasury = address(0x99);
-    address public creator = address(0xC1EA);
     address public alice = address(0x2);
     address public bob = address(0x3);
     address public charlie = address(0x4);
@@ -58,8 +57,6 @@ contract ZAMMAlignmentVaultTest is Test {
             address(mockZRouter),
             address(alignmentToken),
             poolKey,
-            creator,
-            100, // 1% creator cut
             treasury
         );
 
@@ -74,10 +71,8 @@ contract ZAMMAlignmentVaultTest is Test {
         assertEq(vault.zamm(), address(mockZamm));
         assertEq(vault.zRouter(), address(mockZRouter));
         assertEq(vault.alignmentToken(), address(alignmentToken));
-        assertEq(vault.factoryCreator(), creator);
         assertEq(vault.protocolTreasury(), treasury);
-        assertEq(vault.protocolYieldCutBps(), 500);
-        assertEq(vault.creatorYieldCutBps(), 100);
+        assertEq(vault.protocolYieldCutBps(), 100);
     }
 
     function test_initialize_locksPoolKey() public view {
@@ -94,22 +89,6 @@ contract ZAMMAlignmentVaultTest is Test {
             address(mockZRouter),
             address(alignmentToken),
             poolKey,
-            creator,
-            100,
-            treasury
-        );
-    }
-
-    function test_initialize_revertIfCreatorCutExceeds500() public {
-        ZAMMAlignmentVault v2 = ZAMMAlignmentVault(payable(LibClone.clone(address(impl))));
-        vm.expectRevert();
-        v2.initialize(
-            address(mockZamm),
-            address(mockZRouter),
-            address(alignmentToken),
-            poolKey,
-            creator,
-            501, // over max
             treasury
         );
     }
@@ -430,24 +409,5 @@ contract ZAMMAlignmentVaultTest is Test {
         assertEq(vault.accumulatedProtocolFees(), 0);
     }
 
-    function test_transferFactoryCreator_twoStep() public {
-        address newCreator = address(0xCCCC);
-        vm.prank(creator);
-        vault.transferFactoryCreator(newCreator);
-        assertEq(vault.pendingFactoryCreator(), newCreator);
-
-        vm.prank(newCreator);
-        vault.acceptFactoryCreator();
-        assertEq(vault.factoryCreator(), newCreator);
-    }
-
-    function test_withdrawCreatorFees() public {
-        _setupWithLiquidity();
-        _triggerHarvestWithFees();
-
-        uint256 before = creator.balance;
-        vm.prank(creator);
-        vault.withdrawCreatorFees();
-        assertGt(creator.balance - before, 0);
-    }
 }
+

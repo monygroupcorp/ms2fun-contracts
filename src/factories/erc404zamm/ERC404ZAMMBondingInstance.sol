@@ -96,8 +96,6 @@ contract ERC404ZAMMBondingInstance is DN404, Ownable, ReentrancyGuard, IInstance
         address curveComputer;
         uint256 bondingFeeBps;
         uint256 graduationFeeBps;
-        uint256 creatorGraduationFeeBps;
-        address factoryCreator;
     }
 
     // ── State ─────────────────────────────────────────────────────────────────
@@ -121,8 +119,6 @@ contract ERC404ZAMMBondingInstance is DN404, Ownable, ReentrancyGuard, IInstance
     address public protocolTreasury;
     uint256 public bondingFeeBps;
     uint256 public graduationFeeBps;
-    uint256 public creatorGraduationFeeBps;
-    address public factoryCreator;
 
     string public styleUri;
 
@@ -211,8 +207,6 @@ contract ERC404ZAMMBondingInstance is DN404, Ownable, ReentrancyGuard, IInstance
         protocolTreasury = protocol.protocolTreasury;
         bondingFeeBps = protocol.bondingFeeBps;
         graduationFeeBps = protocol.graduationFeeBps;
-        creatorGraduationFeeBps = protocol.creatorGraduationFeeBps;
-        factoryCreator = protocol.factoryCreator;
 
         liquidityDeployer = ZAMMLiquidityDeployerModule(payable(protocol.liquidityDeployer));
         curveComputer = CurveParamsComputer(protocol.curveComputer);
@@ -394,10 +388,7 @@ contract ERC404ZAMMBondingInstance is DN404, Ownable, ReentrancyGuard, IInstance
             ethReserve: ethToSend,
             tokenReserve: LIQUIDITY_RESERVE,
             graduationFeeBps: graduationFeeBps,
-            creatorGraduationFeeBps: creatorGraduationFeeBps,
-            polBps: 0,
             protocolTreasury: protocolTreasury,
-            factoryCreator: factoryCreator,
             token: address(this),
             instance: address(this),
             zamm: _zamm,
