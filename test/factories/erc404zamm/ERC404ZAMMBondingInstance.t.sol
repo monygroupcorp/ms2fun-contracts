@@ -9,6 +9,7 @@ import {BondingCurveMath} from "../../../src/factories/erc404/libraries/BondingC
 import {CurveParamsComputer} from "../../../src/factories/erc404/CurveParamsComputer.sol";
 import {MockZAMM} from "../../mocks/MockZAMM.sol";
 import {MockMasterRegistry} from "../../mocks/MockMasterRegistry.sol";
+import {MockVault} from "../../mocks/MockVault.sol";
 
 contract ERC404ZAMMBondingInstanceTest is Test {
     ERC404ZAMMBondingInstance instance;
@@ -19,7 +20,7 @@ contract ERC404ZAMMBondingInstanceTest is Test {
     address owner = makeAddr("owner");
     address buyer = makeAddr("buyer");
     address treasury = makeAddr("treasury");
-    address vault = makeAddr("vault");
+    MockVault mockVault;
     address factory = makeAddr("factory");
     address globalMsgRegistry = makeAddr("globalMsgRegistry");
     address factoryCreator = makeAddr("factoryCreator");
@@ -30,6 +31,7 @@ contract ERC404ZAMMBondingInstanceTest is Test {
         zamm = new MockZAMM();
         realDeployer = new ZAMMLiquidityDeployerModule();
         realCurveComputer = new CurveParamsComputer(address(this));
+        mockVault = new MockVault();
         masterRegistry = new MockMasterRegistry();
 
         // Deploy implementation and clone it (constructor guards implementation from direct init)
@@ -48,7 +50,7 @@ contract ERC404ZAMMBondingInstanceTest is Test {
         vm.startPrank(factory);
         instance.initialize(
             owner,
-            vault,
+            address(mockVault),
             ERC404ZAMMBondingInstance.BondingParams({
                 maxSupply: 10_000 ether,
                 unit: 1e18,
@@ -64,8 +66,7 @@ contract ERC404ZAMMBondingInstanceTest is Test {
             masterRegistry: address(masterRegistry),
             liquidityDeployer: address(realDeployer),
             curveComputer: address(realCurveComputer),
-            bondingFeeBps: 100,
-            graduationFeeBps: 200
+            bondingFeeBps: 100
         }));
 
         instance.initializeMetadata("TestToken", "TEST", "");
@@ -74,7 +75,7 @@ contract ERC404ZAMMBondingInstanceTest is Test {
 
     function test_initialize_setsState() public view {
         assertEq(instance.factory(), factory);
-        assertEq(address(instance.vault()), vault);
+        assertEq(address(instance.vault()), address(mockVault));
         assertFalse(instance.graduated());
         assertFalse(instance.bondingActive());
     }
@@ -250,15 +251,7 @@ contract ERC404ZAMMBondingInstanceTest is Test {
         vm.deal(zammAddr, 10 ether);
         zamm.setEthPerToken(1e15); // 0.001 ETH per token
 
-        // vault is just an address in tests — it needs to accept ETH
-        // MockVault: vault = makeAddr("vault") is an EOA, can receive ETH but has no receiveInstance()
-        // We need to make vault accept the call — use a mock vault
-        vm.mockCall(
-            vault,
-            abi.encodeWithSignature("receiveContribution(address,uint256,address)"),
-            abi.encode()
-        );
-
+        // MockVault accepts receiveContribution() calls
         instance.sweepTax();
         assertEq(instance.accumulatedTax(), 0);
     }
@@ -280,7 +273,7 @@ contract ERC404ZAMMBondingInstanceTest is Test {
     }
 
     function test_ClaimAllFees_IteratesAllVaults() public {
-        address vault1 = vault;
+        address vault1 = address(mockVault);
         address vault2 = makeAddr("vault2");
 
         // Mock registry to return two vaults

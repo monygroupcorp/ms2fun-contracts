@@ -15,6 +15,7 @@ import {CurrencySettler} from "../../libraries/v4/CurrencySettler.sol";
 import {FixedPointMathLib} from "solady/utils/FixedPointMathLib.sol";
 import {SafeTransferLib} from "solady/utils/SafeTransferLib.sol";
 import {IERC20} from "../../shared/interfaces/IERC20.sol";
+import {IAlignmentVault} from "../../interfaces/IAlignmentVault.sol";
 
 interface IWETH {
     function deposit() external payable;
@@ -37,8 +38,8 @@ contract LiquidityDeployerModule is IUnlockCallback {
     struct DeployParams {
         uint256 ethReserve;
         uint256 tokenReserve;
-        uint256 graduationFeeBps;
         address protocolTreasury;
+        address vault;        // alignment vault (receives 19% of raise)
         address weth;
         address token;        // the ERC404 token (instance address)
         address instance;     // same as token, needed for token transfers
@@ -49,8 +50,9 @@ contract LiquidityDeployerModule is IUnlockCallback {
     }
 
     struct AmountsResult {
-        uint256 graduationFee;
-        uint256 ethForPool;
+        uint256 protocolFee;  // 1% of raise → protocol treasury
+        uint256 vaultCut;     // 19% of raise → alignment vault
+        uint256 ethForPool;   // 80% of raise → LP
         uint256 tokensForPool;
     }
 
@@ -76,6 +78,7 @@ contract LiquidityDeployerModule is IUnlockCallback {
 
     event LiquidityDeployed(address indexed pool, uint256 amountToken, uint256 amountETH);
     event GraduationFeePaid(address indexed treasury, uint256 amount);
+    event GraduationVaultContribution(address indexed vault, uint256 amount);
 
     /**
      * @notice Deploy V4 liquidity on behalf of an ERC404BondingInstance.
@@ -148,10 +151,17 @@ contract LiquidityDeployerModule is IUnlockCallback {
         DeployParams calldata p,
         AmountsResult memory r
     ) private {
-        // Send graduation fee to protocol treasury
-        if (r.graduationFee > 0 && p.protocolTreasury != address(0)) {
-            SafeTransferLib.safeTransferETH(p.protocolTreasury, r.graduationFee);
-            emit GraduationFeePaid(p.protocolTreasury, r.graduationFee);
+        // 1% → protocol treasury
+        if (r.protocolFee > 0 && p.protocolTreasury != address(0)) {
+            SafeTransferLib.safeTransferETH(p.protocolTreasury, r.protocolFee);
+            emit GraduationFeePaid(p.protocolTreasury, r.protocolFee);
+        }
+        // 19% → alignment vault
+        if (r.vaultCut > 0 && p.vault != address(0)) {
+            IAlignmentVault(payable(p.vault)).receiveContribution{value: r.vaultCut}(
+                Currency.wrap(address(0)), r.vaultCut, p.instance
+            );
+            emit GraduationVaultContribution(p.vault, r.vaultCut);
         }
 
         emit LiquidityDeployed(address(p.v4PoolManager), r.tokensForPool, r.ethForPool);
@@ -202,11 +212,10 @@ contract LiquidityDeployerModule is IUnlockCallback {
     function _computeAmounts(DeployParams calldata p) internal pure returns (AmountsResult memory r) {
         uint256 ethAvailable = p.ethReserve;
 
-        if (p.graduationFeeBps > 0 && p.protocolTreasury != address(0)) {
-            r.graduationFee = (ethAvailable * p.graduationFeeBps) / 10000;
-        }
-
-        r.ethForPool = ethAvailable - r.graduationFee;
+        // Fixed 1/19/80 split: 1% protocol, 19% vault, 80% LP
+        r.protocolFee = ethAvailable / 100;
+        r.vaultCut    = (ethAvailable * 19) / 100;
+        r.ethForPool  = ethAvailable - r.protocolFee - r.vaultCut;
         r.tokensForPool = p.tokenReserve;
 
         require(r.ethForPool > 0, "No ETH for pool");

@@ -25,14 +25,13 @@ contract LiquidityDeployerModuleTest is Test {
     function _params(
         uint256 ethReserve,
         uint256 tokenReserve,
-        uint256 gradBps,
         address treasury
     ) internal pure returns (LiquidityDeployerModule.DeployParams memory p) {
         p = LiquidityDeployerModule.DeployParams({
             ethReserve: ethReserve,
             tokenReserve: tokenReserve,
-            graduationFeeBps: gradBps,
             protocolTreasury: treasury,
+            vault: address(0x5),
             weth: address(0x3),
             token: address(0x4),
             instance: address(0x4),
@@ -47,37 +46,32 @@ contract LiquidityDeployerModuleTest is Test {
     // Fee math tests
     // -----------------------------------------------------------------------
 
-    function test_computeAmounts_splitsFees() public pure {
+    function test_computeAmounts_119_80_split() public pure {
         uint256 ethReserve = 10 ether;
-        uint256 gradBps = 200; // 2%
 
-        // graduationFee = 10 ether * 200 / 10000 = 0.2 ether
-        uint256 graduationFee = (ethReserve * gradBps) / 10000;
-        assertEq(graduationFee, 0.2 ether);
+        // Fixed 1/19/80 split
+        uint256 protocolFee = ethReserve / 100;           // 1% = 0.1 ETH
+        uint256 vaultCut    = (ethReserve * 19) / 100;    // 19% = 1.9 ETH
+        uint256 ethForPool  = ethReserve - protocolFee - vaultCut; // 80% = 8.0 ETH
 
-        // ethForPool = 10 - 0.2 = 9.8 ether
-        uint256 ethForPool = ethReserve - graduationFee;
-        assertEq(ethForPool, 9.8 ether);
+        assertEq(protocolFee, 0.1 ether);
+        assertEq(vaultCut,    1.9 ether);
+        assertEq(ethForPool,  8.0 ether);
     }
 
-    function test_computeAmounts_noFees() public pure {
-        // Zero fees: everything goes to pool
-        uint256 ethReserve = 10 ether;
-        uint256 tokenReserve = 1000 ether;
-        uint256 gradBps = 0;
+    function test_computeAmounts_roundingInvariant() public pure {
+        // Verify no ETH is lost in the split
+        uint256 ethReserve = 1 ether;
+        uint256 protocolFee = ethReserve / 100;
+        uint256 vaultCut    = (ethReserve * 19) / 100;
+        uint256 ethForPool  = ethReserve - protocolFee - vaultCut;
 
-        uint256 graduationFee = (ethReserve * gradBps) / 10000;
-        uint256 ethForPool = ethReserve - graduationFee;
-        uint256 tokensForPool = tokenReserve;
-
-        assertEq(ethForPool, 10 ether);
-        assertEq(tokensForPool, 1000 ether);
-        assertEq(graduationFee, 0);
+        assertEq(protocolFee + vaultCut + ethForPool, ethReserve);
     }
 
     function test_deployLiquidity_revertsIfNotEnoughETH() public {
         LiquidityDeployerModule.DeployParams memory p = _params(
-            1 ether, 100 ether, 0, address(0x1)
+            1 ether, 100 ether, address(0x1)
         );
         // Send less ETH than ethReserve — module checks msg.value == ethReserve
         vm.expectRevert("ETH mismatch");
@@ -86,7 +80,7 @@ contract LiquidityDeployerModuleTest is Test {
 
     function test_deployLiquidity_revertsIfNoETHSent() public {
         LiquidityDeployerModule.DeployParams memory p = _params(
-            1 ether, 100 ether, 0, address(0x1)
+            1 ether, 100 ether, address(0x1)
         );
         vm.expectRevert("ETH mismatch");
         module.deployLiquidity{value: 0}(p);

@@ -56,7 +56,6 @@ contract ERC404ZAMMFactory is OwnableRoles, ReentrancyGuard, IFactory {
     uint256 public accumulatedProtocolFees;
 
     uint256 public bondingFeeBps = 100;      // 1%
-    uint256 public graduationFeeBps = 200;   // 2%
 
     ZAMMLiquidityDeployerModule public immutable liquidityDeployer;
     CurveParamsComputer public immutable curveComputer;
@@ -227,8 +226,7 @@ contract ERC404ZAMMFactory is OwnableRoles, ReentrancyGuard, IFactory {
             masterRegistry: address(masterRegistry),
             liquidityDeployer: address(liquidityDeployer),
             curveComputer: address(curveComputer),
-            bondingFeeBps: bondingFeeBps,
-            graduationFeeBps: graduationFeeBps
+            bondingFeeBps: bondingFeeBps
         });
     }
 

@@ -88,8 +88,7 @@ contract ERC404CypherBondingInstanceTest is Test {
             weth: address(weth),
             algebraFactory: address(algebraFactory),
             positionManager: address(positionManager),
-            bondingFeeBps: 100,
-            graduationFeeBps: 200
+            bondingFeeBps: 100
         }));
 
         instance.initializeMetadata("CypherToken", "CYPH", "");

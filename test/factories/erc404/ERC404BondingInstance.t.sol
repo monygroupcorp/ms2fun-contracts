@@ -73,7 +73,7 @@ contract ERC404BondingInstanceTest is Test {
         // must occur within this prank context
         ERC404BondingInstance impl = new ERC404BondingInstance();
         instance = ERC404BondingInstance(payable(LibClone.clone(address(impl))));
-        _initInstance(instance, address(0xBEEF), address(0xFEE), 100, 200, 100, address(0));
+        _initInstance(instance, address(0xBEEF), address(0xFEE), 100, address(0));
         instance.initializeMetadata("Test Token", "TEST", "");
 
         vm.stopPrank();
@@ -95,8 +95,6 @@ contract ERC404BondingInstanceTest is Test {
         address vault_,
         address treasury_,
         uint256 bondingFeeBps_,
-        uint256 graduationFeeBps_,
-        uint256 polBps_,
         address hook_
     ) internal {
         ERC404BondingInstance.BondingParams memory bonding = ERC404BondingInstance.BondingParams({
@@ -118,8 +116,7 @@ contract ERC404BondingInstanceTest is Test {
             curveComputer: address(curveComputer),
             v4PoolManager: mockV4PoolManager,
             weth: mockWETH,
-            bondingFeeBps: bondingFeeBps_,
-            graduationFeeBps: graduationFeeBps_
+            bondingFeeBps: bondingFeeBps_
         });
         inst.initializeProtocol(proto);
     }
@@ -329,7 +326,7 @@ contract ERC404BondingInstanceTest is Test {
         vm.startPrank(owner);
         ERC404BondingInstance zeroFeeImpl = new ERC404BondingInstance();
         ERC404BondingInstance zeroFeeInstance = ERC404BondingInstance(payable(LibClone.clone(address(zeroFeeImpl))));
-        _initInstance(zeroFeeInstance, address(0xBEEF), address(0xFEE), 0, 0, 0, address(0));
+        _initInstance(zeroFeeInstance, address(0xBEEF), address(0xFEE), 0, address(0));
         zeroFeeInstance.initializeMetadata("Zero Fee Token", "ZFT", "");
         uint256 futureTime = block.timestamp + 1 days;
         zeroFeeInstance.setBondingOpenTime(futureTime);
@@ -356,7 +353,7 @@ contract ERC404BondingInstanceTest is Test {
         vm.startPrank(owner);
         ERC404BondingInstance noTreasuryImplInst = new ERC404BondingInstance();
         ERC404BondingInstance noTreasuryInstance = ERC404BondingInstance(payable(LibClone.clone(address(noTreasuryImplInst))));
-        _initInstance(noTreasuryInstance, address(0xBEEF), address(0), 100, 200, 100, address(0));
+        _initInstance(noTreasuryInstance, address(0xBEEF), address(0), 100, address(0));
         noTreasuryInstance.initializeMetadata("No Treasury Token", "NTT", "");
         uint256 futureTime = block.timestamp + 1 days;
         noTreasuryInstance.setBondingOpenTime(futureTime);
@@ -417,43 +414,17 @@ contract ERC404BondingInstanceTest is Test {
     // Graduation Fee Tests
     // ========================
 
-    function test_GraduationFeeBps_StoredCorrectly() public {
-        assertEq(instance.graduationFeeBps(), 200, "Graduation fee should be 2% (200 bps)");
-    }
-
-    function test_GraduationFeeBps_Immutable() public {
-        // Deploy instance with specific graduation fee
-        vm.startPrank(owner);
-        ERC404BondingInstance customGradImpl = new ERC404BondingInstance();
-        ERC404BondingInstance customInstance = ERC404BondingInstance(payable(LibClone.clone(address(customGradImpl))));
-        _initInstance(customInstance, address(0xBEEF), address(0xFEE), 100, 450, 100, address(0));
-        customInstance.initializeMetadata("Custom Grad Fee", "CGF", "");
-        vm.stopPrank();
-
-        assertEq(customInstance.graduationFeeBps(), 450, "Custom graduation fee should be stored");
-    }
-
-    function test_GraduationFeeBps_ZeroAllowed() public {
-        vm.startPrank(owner);
-        ERC404BondingInstance zeroGradImpl = new ERC404BondingInstance();
-        ERC404BondingInstance zeroGradInstance = ERC404BondingInstance(payable(LibClone.clone(address(zeroGradImpl))));
-        _initInstance(zeroGradInstance, address(0xBEEF), address(0xFEE), 100, 0, 100, address(0));
-        zeroGradInstance.initializeMetadata("Zero Grad Fee", "ZGF", "");
-        vm.stopPrank();
-
-        assertEq(zeroGradInstance.graduationFeeBps(), 0, "Zero graduation fee should be allowed");
-    }
-
-    function test_GraduationFee_MathCorrectness() public {
-        // Verify the fee math: (amount * bps) / 10000
-        // With 200 bps (2%) on 15 ETH: fee = 0.3 ETH, pool gets 14.7 ETH
+    function test_GraduationSplit_MathCorrectness() public {
+        // Verify the hardcoded 1/19/80 split at graduation
+        // 1% → protocol, 19% → vault, 80% → LP
         uint256 deployETH = 15 ether;
-        uint256 feeBps = instance.graduationFeeBps(); // 200
-        uint256 expectedFee = (deployETH * feeBps) / 10000;
-        uint256 expectedPoolAmount = deployETH - expectedFee;
+        uint256 protocolFee = deployETH / 100;           // 1%
+        uint256 vaultCut    = (deployETH * 19) / 100;    // 19%
+        uint256 ethForPool  = deployETH - protocolFee - vaultCut; // ~80%
 
-        assertEq(expectedFee, 0.3 ether, "2% of 15 ETH should be 0.3 ETH");
-        assertEq(expectedPoolAmount, 14.7 ether, "Pool should get 14.7 ETH");
+        assertEq(protocolFee, 0.15 ether,   "1% of 15 ETH should be 0.15 ETH");
+        assertEq(vaultCut,    2.85 ether,    "19% of 15 ETH should be 2.85 ETH");
+        assertEq(ethForPool,  12 ether,      "80% of 15 ETH should be 12 ETH");
     }
 
     function test_GraduationFee_SmallAmountPrecision() public {
@@ -481,9 +452,7 @@ contract ERC404BondingInstanceTest is Test {
     // mock V4 PoolManager, mock WETH, and mock hook contracts.
     // The graduation fee logic is exercised in fork tests when available.
     // The unit tests above verify:
-    // - Storage (immutable set at construction)
-    // - Factory passthrough (graduationFeeBps propagated to instance)
-    // - Fee math correctness (bps calculation, precision, boundary)
+    // - Graduation split math correctness (hardcoded 1/19/80)
 
     // ========================
     // Deterministic deployLiquidity Tests
@@ -518,7 +487,7 @@ contract ERC404BondingInstanceTest is Test {
         vm.startPrank(owner);
         ERC404BondingInstance noHookImpl = new ERC404BondingInstance();
         ERC404BondingInstance noHookInstance = ERC404BondingInstance(payable(LibClone.clone(address(noHookImpl))));
-        _initInstance(noHookInstance, address(0xBEEF), address(0xFEE), 100, 200, 100, address(0));
+        _initInstance(noHookInstance, address(0xBEEF), address(0xFEE), 100, address(0));
         noHookInstance.initializeMetadata("No Hook", "NH", "");
         uint256 futureTime = block.timestamp + 1 days;
         noHookInstance.setBondingOpenTime(futureTime);

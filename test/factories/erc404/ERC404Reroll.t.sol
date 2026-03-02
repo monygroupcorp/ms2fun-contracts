@@ -92,8 +92,7 @@ contract ERC404RerollTest is Test {
             curveComputer: address(curveComputer),
             v4PoolManager: mockPoolManager,
             weth: mockWETH,
-            bondingFeeBps: 100,
-            graduationFeeBps: 200
+            bondingFeeBps: 100
         }));
 
         token.initializeMetadata("TestToken", "TEST", "");

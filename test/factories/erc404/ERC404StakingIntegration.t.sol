@@ -178,8 +178,7 @@ contract ERC404StakingIntegrationTest is Test {
             curveComputer: address(curveComputer),
             v4PoolManager: address(0x100),
             weth: address(0x300),
-            bondingFeeBps: 100,
-            graduationFeeBps: 200
+            bondingFeeBps: 100
         }));
 
         instance.initializeMetadata("Integration Token", "INTG", "");

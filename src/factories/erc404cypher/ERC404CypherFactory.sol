@@ -61,7 +61,6 @@ contract ERC404CypherFactory is OwnableRoles, ReentrancyGuard, IFactory {
     uint256 public accumulatedProtocolFees;
 
     uint256 public bondingFeeBps = 100;      // 1%
-    uint256 public graduationFeeBps = 200;   // 2%
 
     CypherLiquidityDeployerModule public immutable liquidityDeployer;
     CypherAlignmentVaultFactory public immutable vaultFactory;
@@ -258,8 +257,7 @@ contract ERC404CypherFactory is OwnableRoles, ReentrancyGuard, IFactory {
             weth: weth,
             algebraFactory: algebraFactory,
             positionManager: positionManager,
-            bondingFeeBps: bondingFeeBps,
-            graduationFeeBps: graduationFeeBps
+            bondingFeeBps: bondingFeeBps
         });
     }
 

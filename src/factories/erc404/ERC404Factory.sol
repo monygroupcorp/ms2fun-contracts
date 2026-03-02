@@ -62,7 +62,6 @@ contract ERC404Factory is OwnableRoles, ReentrancyGuard, IFactory {
     // Protocol revenue
     address public protocolTreasury;
     uint256 public bondingFeeBps = 100; // 1% default
-    uint256 public graduationFeeBps = 200; // 2% default
     uint256 public accumulatedProtocolFees;
 
     // Modules
@@ -109,7 +108,6 @@ contract ERC404Factory is OwnableRoles, ReentrancyGuard, IFactory {
     event ProtocolTreasuryUpdated(address indexed oldTreasury, address indexed newTreasury);
     event ProtocolFeesWithdrawn(address indexed treasury, uint256 amount);
     event BondingFeeUpdated(uint256 newBps);
-    event GraduationFeeUpdated(uint256 newBps);
     event InstanceCreatedWithTier(address indexed instance, CreationTier tier);
 
     constructor(CoreConfig memory core, ModuleConfig memory modules) {
@@ -346,8 +344,7 @@ contract ERC404Factory is OwnableRoles, ReentrancyGuard, IFactory {
             curveComputer: address(curveComputer),
             v4PoolManager: v4PoolManager,
             weth: weth,
-            bondingFeeBps: bondingFeeBps,
-            graduationFeeBps: graduationFeeBps
+            bondingFeeBps: bondingFeeBps
         });
     }
 
@@ -382,12 +379,6 @@ contract ERC404Factory is OwnableRoles, ReentrancyGuard, IFactory {
         require(_bps <= 300, "Max 3%");
         bondingFeeBps = _bps;
         emit BondingFeeUpdated(_bps);
-    }
-
-    function setGraduationFeeBps(uint256 _bps) external onlyRoles(PROTOCOL_ROLE) {
-        require(_bps <= 500, "Max 5%");
-        graduationFeeBps = _bps;
-        emit GraduationFeeUpdated(_bps);
     }
 
     function setProfile(uint256 profileId, GraduationProfile calldata profile) external onlyRoles(PROTOCOL_ROLE) {

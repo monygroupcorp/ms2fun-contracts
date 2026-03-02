@@ -95,7 +95,6 @@ contract ERC404ZAMMBondingInstance is DN404, Ownable, ReentrancyGuard, IInstance
         address liquidityDeployer;
         address curveComputer;
         uint256 bondingFeeBps;
-        uint256 graduationFeeBps;
     }
 
     // ── State ─────────────────────────────────────────────────────────────────
@@ -118,7 +117,6 @@ contract ERC404ZAMMBondingInstance is DN404, Ownable, ReentrancyGuard, IInstance
 
     address public protocolTreasury;
     uint256 public bondingFeeBps;
-    uint256 public graduationFeeBps;
 
     string public styleUri;
 
@@ -206,7 +204,6 @@ contract ERC404ZAMMBondingInstance is DN404, Ownable, ReentrancyGuard, IInstance
         globalMessageRegistry = IGlobalMessageRegistry(protocol.globalMessageRegistry);
         protocolTreasury = protocol.protocolTreasury;
         bondingFeeBps = protocol.bondingFeeBps;
-        graduationFeeBps = protocol.graduationFeeBps;
 
         liquidityDeployer = ZAMMLiquidityDeployerModule(payable(protocol.liquidityDeployer));
         curveComputer = CurveParamsComputer(protocol.curveComputer);
@@ -387,8 +384,8 @@ contract ERC404ZAMMBondingInstance is DN404, Ownable, ReentrancyGuard, IInstance
         ZAMMLiquidityDeployerModule.DeployParams memory p = ZAMMLiquidityDeployerModule.DeployParams({
             ethReserve: ethToSend,
             tokenReserve: LIQUIDITY_RESERVE,
-            graduationFeeBps: graduationFeeBps,
             protocolTreasury: protocolTreasury,
+            vault: address(vault),
             token: address(this),
             instance: address(this),
             zamm: _zamm,
