@@ -99,10 +99,6 @@ contract ERC404ZAMMFactory is OwnableRoles, ReentrancyGuard, IFactory {
         tierGatingModule = PasswordTierGatingModule(modules.tierGatingModule);
         componentRegistry = IComponentRegistry(modules.componentRegistry);
 
-        _features.push(FeatureUtils.BONDING_CURVE);
-        _features.push(FeatureUtils.LIQUIDITY_POOL);
-        _features.push(FeatureUtils.CHAT);
-        _features.push(FeatureUtils.PORTFOLIO);
         _features.push(FeatureUtils.GATING);
     }
 

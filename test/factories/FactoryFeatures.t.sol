@@ -105,7 +105,8 @@ contract FactoryFeaturesTest is Test {
         vm.stopPrank();
 
         bytes32[] memory feats = IFactory(address(factory)).features();
-        assertTrue(_hasGating(feats), "ERC404Factory: GATING tag missing from features()");
+        assertEq(feats.length, 1, "ERC404Factory: features() must have exactly 1 element");
+        assertEq(feats[0], FeatureUtils.GATING, "ERC404Factory: features()[0] must be GATING");
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -139,7 +140,8 @@ contract FactoryFeaturesTest is Test {
         );
 
         bytes32[] memory feats = IFactory(address(factory)).features();
-        assertTrue(_hasGating(feats), "ERC404ZAMMFactory: GATING tag missing from features()");
+        assertEq(feats.length, 1, "ERC404ZAMMFactory: features() must have exactly 1 element");
+        assertEq(feats[0], FeatureUtils.GATING, "ERC404ZAMMFactory: features()[0] must be GATING");
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -177,7 +179,8 @@ contract FactoryFeaturesTest is Test {
         );
 
         bytes32[] memory feats = IFactory(address(factory)).features();
-        assertTrue(_hasGating(feats), "ERC404CypherFactory: GATING tag missing from features()");
+        assertEq(feats.length, 1, "ERC404CypherFactory: features() must have exactly 1 element");
+        assertEq(feats[0], FeatureUtils.GATING, "ERC404CypherFactory: features()[0] must be GATING");
     }
 
     // ─────────────────────────────────────────────────────────────────────────

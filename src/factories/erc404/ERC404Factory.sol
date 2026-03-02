@@ -72,13 +72,7 @@ contract ERC404Factory is OwnableRoles, ReentrancyGuard, IFactory {
     enum CreationTier { STANDARD, PREMIUM, LAUNCH }
 
     // Feature matrix
-    bytes32[] internal _features = [
-        FeatureUtils.BONDING_CURVE,
-        FeatureUtils.LIQUIDITY_POOL,
-        FeatureUtils.CHAT,
-        FeatureUtils.PORTFOLIO,
-        FeatureUtils.GATING
-    ];
+    bytes32[] internal _features = [FeatureUtils.GATING];
 
     // Graduation profiles (protocol-defined)
     struct GraduationProfile {
