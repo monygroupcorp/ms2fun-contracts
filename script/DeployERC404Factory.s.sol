@@ -21,7 +21,9 @@ contract DeployERC404Factory is Script {
         console.log("ERC404BondingInstance implementation deployed at:", address(impl));
         ERC404StakingModule stakingModule = new ERC404StakingModule(masterRegistry);
         console.log("ERC404StakingModule deployed at:", address(stakingModule));
-        LiquidityDeployerModule liquidityDeployer = new LiquidityDeployerModule(3000, 60);
+        LiquidityDeployerModule liquidityDeployer = new LiquidityDeployerModule(
+            vm.envAddress("V4_POOL_MANAGER"), vm.envAddress("WETH"), 3000, 60
+        );
         console.log("LiquidityDeployerModule deployed at:", address(liquidityDeployer));
         LaunchManager launchManager = new LaunchManager(protocol);
         console.log("LaunchManager deployed at:", address(launchManager));

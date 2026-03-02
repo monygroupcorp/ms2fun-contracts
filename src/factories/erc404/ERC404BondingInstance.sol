@@ -11,6 +11,7 @@ import { CurveParamsComputer } from "./CurveParamsComputer.sol";
 import { ERC404StakingModule } from "./ERC404StakingModule.sol";
 import { LiquidityDeployerModule } from "./LiquidityDeployerModule.sol";
 import { IPoolManager } from "v4-core/interfaces/IPoolManager.sol";
+import { ILiquidityDeployerModule } from "../../interfaces/ILiquidityDeployerModule.sol";
 import { IAlignmentVault } from "../../interfaces/IAlignmentVault.sol";
 import {IMasterRegistry} from "../../master/interfaces/IMasterRegistry.sol";
 import { IGlobalMessageRegistry } from "../../registry/interfaces/IGlobalMessageRegistry.sol";
@@ -617,18 +618,16 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IInstanceLife
         // Transfer LIQUIDITY_RESERVE tokens to the module (module settles on behalf of this address)
         _transfer(address(this), address(liquidityDeployer), LIQUIDITY_RESERVE);
 
-        LiquidityDeployerModule.DeployParams memory p = LiquidityDeployerModule.DeployParams({
+        ILiquidityDeployerModule.DeployParams memory p = ILiquidityDeployerModule.DeployParams({
             ethReserve: ethToSend,
             tokenReserve: LIQUIDITY_RESERVE,
             protocolTreasury: protocolTreasury,
             vault: address(vault),
-            weth: weth,
             token: address(this),
-            instance: address(this),
-            v4PoolManager: IPoolManager(v4PoolManager)
+            instance: address(this)
         });
 
-        liquidity = liquidityDeployer.deployLiquidity{value: ethToSend}(p);
+        liquidityDeployer.deployLiquidity{value: ethToSend}(p);
 
         liquidityPool = v4PoolManager;
         emit LiquidityDeployed(liquidityPool, LIQUIDITY_RESERVE, ethToSend);

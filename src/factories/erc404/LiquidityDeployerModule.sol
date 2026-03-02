@@ -16,6 +16,7 @@ import {FixedPointMathLib} from "solady/utils/FixedPointMathLib.sol";
 import {SafeTransferLib} from "solady/utils/SafeTransferLib.sol";
 import {IERC20} from "../../shared/interfaces/IERC20.sol";
 import {IAlignmentVault} from "../../interfaces/IAlignmentVault.sol";
+import {ILiquidityDeployerModule} from "../../interfaces/ILiquidityDeployerModule.sol";
 
 interface IWETH {
     function deposit() external payable;
@@ -30,29 +31,22 @@ interface IWETH {
  *         Owns the unlockCallback so V4 bytecode is not embedded in the instance.
  *         Pool fee and tick spacing are fixed at construction time.
  */
-contract LiquidityDeployerModule is IUnlockCallback {
+contract LiquidityDeployerModule is IUnlockCallback, ILiquidityDeployerModule {
     using CurrencyLibrary for Currency;
     using StateLibrary for IPoolManager;
     using CurrencySettler for Currency;
     using FixedPointMathLib for uint256;
 
+    address public immutable weth;
+    IPoolManager public immutable v4PoolManager;
     uint24 public immutable poolFee;
     int24 public immutable tickSpacing;
 
-    constructor(uint24 _poolFee, int24 _tickSpacing) {
+    constructor(address _v4PoolManager, address _weth, uint24 _poolFee, int24 _tickSpacing) {
+        v4PoolManager = IPoolManager(_v4PoolManager);
+        weth = _weth;
         poolFee = _poolFee;
         tickSpacing = _tickSpacing;
-    }
-
-    struct DeployParams {
-        uint256 ethReserve;
-        uint256 tokenReserve;
-        address protocolTreasury;
-        address vault;        // alignment vault (receives 19% of raise)
-        address weth;
-        address token;        // the ERC404 token (instance address)
-        address instance;     // same as token, needed for token transfers
-        IPoolManager v4PoolManager;
     }
 
     struct AmountsResult {
@@ -91,23 +85,21 @@ contract LiquidityDeployerModule is IUnlockCallback {
      * @dev Caller must have transferred LIQUIDITY_RESERVE tokens to this contract before calling.
      *      ETH is sent as msg.value.
      * @param p Deployment parameters
-     * @return liquidity Amount of liquidity added to the primary pool position
      */
-    function deployLiquidity(DeployParams calldata p) external payable returns (uint128 liquidity) {
+    function deployLiquidity(DeployParams calldata p) external payable override {
         require(msg.value == p.ethReserve, "ETH mismatch");
         AmountsResult memory r = _computeAmounts(p);
-        PoolSetupResult memory setup = _setupPoolAndUnlock(p, r);
-        liquidity = setup.liquidity;
+        _setupPoolAndUnlock(p, r);
         _postUnlock(p, r);
     }
 
     /// @dev Sets up pool, stores callback context, performs unlock, clears context, returns liquidity.
     function _setupPoolAndUnlock(
-        DeployParams calldata p,
+        ILiquidityDeployerModule.DeployParams calldata p,
         AmountsResult memory r
     ) private returns (PoolSetupResult memory setup) {
         Currency currencyToken = Currency.wrap(p.token);
-        Currency currencyWETH  = Currency.wrap(p.weth);
+        Currency currencyWETH  = Currency.wrap(weth);
         setup.token0IsThis = currencyToken < currencyWETH;
 
         Currency currency0 = setup.token0IsThis ? currencyToken : currencyWETH;
@@ -127,11 +119,11 @@ contract LiquidityDeployerModule is IUnlockCallback {
         });
 
         // Wrap ETH and approve pool manager
-        IWETH(p.weth).deposit{value: r.ethForPool}();
-        IWETH(p.weth).approve(address(p.v4PoolManager), r.ethForPool);
+        IWETH(weth).deposit{value: r.ethForPool}();
+        IWETH(weth).approve(address(v4PoolManager), r.ethForPool);
 
         // Initialize pool
-        p.v4PoolManager.initialize(setup.poolKey, sqrtPriceX96);
+        v4PoolManager.initialize(setup.poolKey, sqrtPriceX96);
 
         uint256 amount0 = setup.token0IsThis ? r.tokensForPool : r.ethForPool;
         uint256 amount1 = setup.token0IsThis ? r.ethForPool   : r.tokensForPool;
@@ -143,10 +135,10 @@ contract LiquidityDeployerModule is IUnlockCallback {
             amount0:     amount0,
             amount1:     amount1,
             instance:    p.instance,
-            poolManager: p.v4PoolManager
+            poolManager: v4PoolManager
         });
 
-        bytes memory result = p.v4PoolManager.unlock(abi.encode(uint8(0)));
+        bytes memory result = v4PoolManager.unlock(abi.encode(uint8(0)));
         delete _ctx;
 
         setup.liquidity = abi.decode(result, (uint128));
@@ -154,7 +146,7 @@ contract LiquidityDeployerModule is IUnlockCallback {
 
     /// @dev Dispatches graduation fees, emits final event.
     function _postUnlock(
-        DeployParams calldata p,
+        ILiquidityDeployerModule.DeployParams calldata p,
         AmountsResult memory r
     ) private {
         // 1% → protocol treasury
@@ -170,7 +162,7 @@ contract LiquidityDeployerModule is IUnlockCallback {
             emit GraduationVaultContribution(p.vault, r.vaultCut);
         }
 
-        emit LiquidityDeployed(address(p.v4PoolManager), r.tokensForPool, r.ethForPool);
+        emit LiquidityDeployed(address(v4PoolManager), r.tokensForPool, r.ethForPool);
     }
 
     /**
@@ -215,7 +207,7 @@ contract LiquidityDeployerModule is IUnlockCallback {
     // Internal helpers
     // -------------------------------------------------------------------------
 
-    function _computeAmounts(DeployParams calldata p) internal pure returns (AmountsResult memory r) {
+    function _computeAmounts(ILiquidityDeployerModule.DeployParams calldata p) internal pure returns (AmountsResult memory r) {
         uint256 ethAvailable = p.ethReserve;
 
         // Fixed 1/19/80 split: 1% protocol, 19% vault, 80% LP

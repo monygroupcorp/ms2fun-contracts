@@ -3,7 +3,7 @@ pragma solidity ^0.8.24;
 
 import {Test} from "forge-std/Test.sol";
 import {LiquidityDeployerModule} from "../../../src/factories/erc404/LiquidityDeployerModule.sol";
-import {IPoolManager} from "v4-core/interfaces/IPoolManager.sol";
+import {ILiquidityDeployerModule} from "../../../src/interfaces/ILiquidityDeployerModule.sol";
 
 /**
  * @title LiquidityDeployerModuleTest
@@ -14,7 +14,7 @@ contract LiquidityDeployerModuleTest is Test {
     LiquidityDeployerModule public module;
 
     function setUp() public {
-        module = new LiquidityDeployerModule(3000, 60);
+        module = new LiquidityDeployerModule(address(0), address(0x3), 3000, 60);
     }
 
     // -----------------------------------------------------------------------
@@ -25,16 +25,14 @@ contract LiquidityDeployerModuleTest is Test {
         uint256 ethReserve,
         uint256 tokenReserve,
         address treasury
-    ) internal pure returns (LiquidityDeployerModule.DeployParams memory p) {
-        p = LiquidityDeployerModule.DeployParams({
+    ) internal pure returns (ILiquidityDeployerModule.DeployParams memory p) {
+        p = ILiquidityDeployerModule.DeployParams({
             ethReserve: ethReserve,
             tokenReserve: tokenReserve,
             protocolTreasury: treasury,
             vault: address(0x5),
-            weth: address(0x3),
             token: address(0x4),
-            instance: address(0x4),
-            v4PoolManager: IPoolManager(address(0))
+            instance: address(0x4)
         });
     }
 
@@ -66,7 +64,7 @@ contract LiquidityDeployerModuleTest is Test {
     }
 
     function test_deployLiquidity_revertsIfNotEnoughETH() public {
-        LiquidityDeployerModule.DeployParams memory p = _params(
+        ILiquidityDeployerModule.DeployParams memory p = _params(
             1 ether, 100 ether, address(0x1)
         );
         // Send less ETH than ethReserve — module checks msg.value == ethReserve
@@ -75,7 +73,7 @@ contract LiquidityDeployerModuleTest is Test {
     }
 
     function test_deployLiquidity_revertsIfNoETHSent() public {
-        LiquidityDeployerModule.DeployParams memory p = _params(
+        ILiquidityDeployerModule.DeployParams memory p = _params(
             1 ether, 100 ether, address(0x1)
         );
         vm.expectRevert("ETH mismatch");
@@ -87,6 +85,11 @@ contract LiquidityDeployerModuleTest is Test {
         module.unlockCallback(bytes(""));
     }
 
+    function test_implementsUniformInterface() public view {
+        ILiquidityDeployerModule deployer = ILiquidityDeployerModule(address(module));
+        assertTrue(address(deployer) != address(0));
+    }
+
     // ── Hook removal tests (TDD) ──────────────────────────────────────────────
 
     function test_module_hasImmutablePoolConfig() public view {
@@ -96,17 +99,15 @@ contract LiquidityDeployerModuleTest is Test {
     }
 
     function test_deployParams_noPoolConfigFields() public pure {
-        // DeployParams must compile without poolFee/tickSpacing/v4Hook
-        LiquidityDeployerModule.DeployParams memory p = LiquidityDeployerModule.DeployParams({
+        // DeployParams must compile without weth/v4PoolManager — they are constructor immutables now
+        ILiquidityDeployerModule.DeployParams memory p = ILiquidityDeployerModule.DeployParams({
             ethReserve: 1 ether,
             tokenReserve: 100 ether,
             protocolTreasury: address(0x1),
             vault: address(0x5),
-            weth: address(0x3),
             token: address(0x4),
-            instance: address(0x4),
-            v4PoolManager: IPoolManager(address(0))
-        }); // no poolFee/tickSpacing/v4Hook
+            instance: address(0x4)
+        });
         assertEq(p.ethReserve, 1 ether);
     }
 }

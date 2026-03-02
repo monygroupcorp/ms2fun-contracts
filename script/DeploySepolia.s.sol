@@ -254,7 +254,7 @@ contract DeploySepolia is Script {
         // Phase 5: ERC404Factory
         ERC404BondingInstance erc404Impl = new ERC404BondingInstance();
         ERC404StakingModule erc404StakingModule = new ERC404StakingModule(masterRegistry);
-        LiquidityDeployerModule erc404LiquidityDeployer = new LiquidityDeployerModule(3000, 60);
+        LiquidityDeployerModule erc404LiquidityDeployer = new LiquidityDeployerModule(poolManager, weth, 3000, 60);
         launchManager = new LaunchManager(deployer);
         curveParamsComputer = new CurveParamsComputer(deployer);
         erc404Factory = new ERC404Factory(
