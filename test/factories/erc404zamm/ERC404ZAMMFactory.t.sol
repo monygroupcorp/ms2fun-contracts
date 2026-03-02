@@ -51,7 +51,7 @@ contract ERC404ZAMMFactoryTest is Test {
     function setUp() public {
         zamm = new MockZAMM();
         masterRegistry = new MockMasterRegistryZ();
-        deployer = new ZAMMLiquidityDeployerModule();
+        deployer = new ZAMMLiquidityDeployerModule(address(zamm), 30);
         implementation = new ERC404ZAMMBondingInstance();
         curveComputer = new CurveParamsComputer(protocol);
         tierGatingModule = new PasswordTierGatingModule();

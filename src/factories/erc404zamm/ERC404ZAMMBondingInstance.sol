@@ -13,6 +13,7 @@ import {IMasterRegistry} from "../../master/interfaces/IMasterRegistry.sol";
 import {IGlobalMessageRegistry} from "../../registry/interfaces/IGlobalMessageRegistry.sol";
 import {IInstanceLifecycle, TYPE_ERC404, STATE_BONDING, STATE_PAUSED, STATE_GRADUATED} from "../../interfaces/IInstanceLifecycle.sol";
 import {ZAMMLiquidityDeployerModule} from "./ZAMMLiquidityDeployerModule.sol";
+import {ILiquidityDeployerModule} from "../../interfaces/ILiquidityDeployerModule.sol";
 import {IGatingModule} from "../../gating/IGatingModule.sol";
 
 // ── Errors ────────────────────────────────────────────────────────────────────
@@ -109,9 +110,6 @@ contract ERC404ZAMMBondingInstance is DN404, Ownable, ReentrancyGuard, IInstance
     // ── Graduation state ───────────────────────────────────────────────────────
     bool public graduated;
     address public zamm;                     // ZAMM singleton address (set at graduation)
-    ZAMMLiquidityDeployerModule.ZAMMPoolKey public zammPoolKey; // pool key (set at graduation)
-    uint256 public zammPoolId;              // keccak256(abi.encode(zammPoolKey))
-    bool public tokenIsZero;               // whether this token is token0 in the ZAMM pool
 
     // ── Events ────────────────────────────────────────────────────────────────
     event BondingSale(address indexed user, uint256 amount, uint256 cost, bool isBuy);
@@ -352,25 +350,19 @@ contract ERC404ZAMMBondingInstance is DN404, Ownable, ReentrancyGuard, IInstance
         // Transfer LIQUIDITY_RESERVE tokens to deployer
         _transfer(address(this), address(liquidityDeployer), LIQUIDITY_RESERVE);
 
-        ZAMMLiquidityDeployerModule.DeployParams memory p = ZAMMLiquidityDeployerModule.DeployParams({
+        ILiquidityDeployerModule.DeployParams memory p = ILiquidityDeployerModule.DeployParams({
             ethReserve: ethToSend,
             tokenReserve: LIQUIDITY_RESERVE,
             protocolTreasury: protocolTreasury,
             vault: address(vault),
             token: address(this),
-            instance: address(this),
-            zamm: _zamm,
-            feeOrHook: _feeOrHook
+            instance: address(this)
         });
 
-        ZAMMLiquidityDeployerModule.ZAMMPoolKey memory poolKey;
-        (poolKey, lpMinted) = liquidityDeployer.deployLiquidity{value: ethToSend}(p);
+        liquidityDeployer.deployLiquidity{value: ethToSend}(p);
 
         graduated = true;
         zamm = _zamm;
-        zammPoolKey = poolKey;
-        zammPoolId = uint256(keccak256(abi.encode(poolKey)));
-        tokenIsZero = poolKey.token0 == address(this);
 
         emit LiquidityDeployed(_zamm, LIQUIDITY_RESERVE, ethToSend);
         emit StateChanged(STATE_GRADUATED);

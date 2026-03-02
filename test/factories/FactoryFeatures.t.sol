@@ -115,7 +115,7 @@ contract FactoryFeaturesTest is Test {
 
     function test_ERC404ZAMMFactory_features_returnsArrayViaInterface() public {
         MockZAMM zamm = new MockZAMM();
-        ZAMMLiquidityDeployerModule deployer = new ZAMMLiquidityDeployerModule();
+        ZAMMLiquidityDeployerModule deployer = new ZAMMLiquidityDeployerModule(address(zamm), 30);
         ERC404ZAMMBondingInstance impl = new ERC404ZAMMBondingInstance();
         CurveParamsComputer curveComp = new CurveParamsComputer(protocol);
         PasswordTierGatingModule tierGating = new PasswordTierGatingModule();

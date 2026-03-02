@@ -29,7 +29,7 @@ contract ERC404ZAMMBondingInstanceTest is Test {
 
     function setUp() public {
         zamm = new MockZAMM();
-        realDeployer = new ZAMMLiquidityDeployerModule();
+        realDeployer = new ZAMMLiquidityDeployerModule(address(zamm), 30);
         realCurveComputer = new CurveParamsComputer(address(this));
         mockVault = new MockVault();
         masterRegistry = new MockMasterRegistry();

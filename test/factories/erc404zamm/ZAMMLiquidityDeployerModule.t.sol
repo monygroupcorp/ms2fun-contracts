@@ -3,6 +3,7 @@ pragma solidity ^0.8.24;
 
 import {Test} from "forge-std/Test.sol";
 import {ZAMMLiquidityDeployerModule} from "../../../src/factories/erc404zamm/ZAMMLiquidityDeployerModule.sol";
+import {ILiquidityDeployerModule} from "../../../src/interfaces/ILiquidityDeployerModule.sol";
 import {MockZAMM} from "../../mocks/MockZAMM.sol";
 import {MockERC20} from "../../mocks/MockERC20.sol";
 import {MockVault} from "../../mocks/MockVault.sol";
@@ -20,7 +21,7 @@ contract ZAMMLiquidityDeployerModuleTest is Test {
         zamm = new MockZAMM();
         token = new MockERC20("Test", "TST");
         vault = new MockVault();
-        module = new ZAMMLiquidityDeployerModule();
+        module = new ZAMMLiquidityDeployerModule(address(zamm), 30);
     }
 
     function test_deployLiquidity_basicFlow() public {
@@ -30,24 +31,20 @@ contract ZAMMLiquidityDeployerModuleTest is Test {
         // Mint tokens to module (simulates instance transferring them before calling)
         token.mint(address(module), tokenReserve);
 
-        ZAMMLiquidityDeployerModule.DeployParams memory p = ZAMMLiquidityDeployerModule.DeployParams({
+        ILiquidityDeployerModule.DeployParams memory p = ILiquidityDeployerModule.DeployParams({
             ethReserve: ethReserve,
             tokenReserve: tokenReserve,
             protocolTreasury: treasury,
             vault: address(vault),
             token: address(token),
-            instance: instance,
-            zamm: address(zamm),
-            feeOrHook: 30 // 0.3% ZAMM fee
+            instance: instance
         });
 
         vm.deal(address(this), ethReserve);
-        (ZAMMLiquidityDeployerModule.ZAMMPoolKey memory poolKey, uint256 liquidity) =
-            module.deployLiquidity{value: ethReserve}(p);
+        module.deployLiquidity{value: ethReserve}(p);
 
-        // Pool key should be set with correct token ordering
-        assertEq(poolKey.feeOrHook, 30);
-        assertGt(liquidity, 0);
+        // feeOrHook is now an immutable on the module
+        assertEq(module.feeOrHook(), 30);
 
         // Fixed 1/19/80 split
         uint256 expectedProtocolFee = ethReserve / 100;
@@ -58,15 +55,13 @@ contract ZAMMLiquidityDeployerModuleTest is Test {
 
     function test_deployLiquidity_revertsOnETHMismatch() public {
         token.mint(address(module), 1000 ether);
-        ZAMMLiquidityDeployerModule.DeployParams memory p = ZAMMLiquidityDeployerModule.DeployParams({
+        ILiquidityDeployerModule.DeployParams memory p = ILiquidityDeployerModule.DeployParams({
             ethReserve: 10 ether,
             tokenReserve: 1000 ether,
             protocolTreasury: treasury,
             vault: address(vault),
             token: address(token),
-            instance: instance,
-            zamm: address(zamm),
-            feeOrHook: 30
+            instance: instance
         });
 
         vm.deal(address(this), 5 ether);
