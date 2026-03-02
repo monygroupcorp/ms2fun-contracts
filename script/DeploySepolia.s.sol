@@ -21,6 +21,7 @@ import {ERC404Factory} from "../src/factories/erc404/ERC404Factory.sol";
 import {ERC404BondingInstance} from "../src/factories/erc404/ERC404BondingInstance.sol";
 import {LaunchManager} from "../src/factories/erc404/LaunchManager.sol";
 import {CurveParamsComputer} from "../src/factories/erc404/CurveParamsComputer.sol";
+import {ComponentRegistry} from "../src/registry/ComponentRegistry.sol";
 import {ERC1155Factory} from "../src/factories/erc1155/ERC1155Factory.sol";
 import {ERC721AuctionFactory} from "../src/factories/erc721/ERC721AuctionFactory.sol";
 import {PromotionBadges} from "../src/promotion/PromotionBadges.sol";
@@ -69,6 +70,7 @@ contract DeploySepolia is Script {
 
     LaunchManager public launchManager;
     CurveParamsComputer public curveParamsComputer;
+    ComponentRegistry public componentRegistry;
 
     ERC404Factory public erc404Factory;
     ERC1155Factory public erc1155Factory;
@@ -238,9 +240,6 @@ contract DeploySepolia is Script {
         MasterRegistryV1(masterRegistry).registerFactory(
             address(erc721Factory), "ERC721", "ERC721-Auction", "ERC721 Auction Factory", "https://sepolia.ms2.fun/factory/erc721", new bytes32[](0)
         );
-        MasterRegistryV1(masterRegistry).registerFactory(
-            address(erc404CypherFactory), "ERC404", "ERC404-Cypher", "ERC404 Cypher Bonding Factory", "https://sepolia.ms2.fun/factory/erc404cypher", new bytes32[](0)
-        );
     }
 
     function _deployFactories(address deployer, address weth, address poolManager) private {
@@ -248,6 +247,13 @@ contract DeploySepolia is Script {
         ERC404BondingInstance erc404Impl = new ERC404BondingInstance();
         launchManager = new LaunchManager(deployer);
         curveParamsComputer = new CurveParamsComputer(deployer);
+
+        // Deploy ComponentRegistry (UUPS proxy)
+        ComponentRegistry compRegImpl = new ComponentRegistry();
+        address compRegProxy = LibClone.deployERC1967(address(compRegImpl));
+        componentRegistry = ComponentRegistry(compRegProxy);
+        componentRegistry.initialize(deployer);
+
         erc404Factory = new ERC404Factory(
             ERC404Factory.CoreConfig({
                 implementation: address(erc404Impl),
@@ -258,7 +264,7 @@ contract DeploySepolia is Script {
                 globalMessageRegistry: address(globalMessageRegistry),
                 launchManager: address(launchManager),
                 tierGatingModule: address(0),
-                componentRegistry: address(0)
+                componentRegistry: address(componentRegistry)
             })
         );
         erc404Factory.setProtocolTreasury(address(treasury));
@@ -297,6 +303,7 @@ contract DeploySepolia is Script {
         console.log("MockSafe/Safe:", safe);
         console.log("TestToken (ERC20):", address(testToken));
         console.log("UniAlignmentVault:", address(vault));
+        console.log("ComponentRegistry:", address(componentRegistry));
         console.log("ERC404Factory:", address(erc404Factory));
         console.log("ERC1155Factory:", address(erc1155Factory));
         console.log("ERC721AuctionFactory:", address(erc721Factory));
