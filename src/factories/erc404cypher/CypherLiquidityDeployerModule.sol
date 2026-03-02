@@ -2,27 +2,27 @@
 pragma solidity ^0.8.24;
 
 import {SafeTransferLib} from "solady/utils/SafeTransferLib.sol";
+import {FixedPointMathLib} from "solady/utils/FixedPointMathLib.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IAlgebraFactory, IAlgebraPool, IAlgebraNFTPositionManager} from "../../interfaces/algebra/IAlgebra.sol";
 import {CypherAlignmentVault} from "../../vaults/cypher/CypherAlignmentVault.sol";
 import {Currency} from "v4-core/types/Currency.sol";
+import {ILiquidityDeployerModule} from "../../interfaces/ILiquidityDeployerModule.sol";
 
 /// @title CypherLiquidityDeployerModule
-/// @notice Called by ERC404CypherBondingInstance at graduation.
+/// @notice Called by ERC404BondingInstance at graduation.
 ///         Creates Algebra pool, mints LP to vault, registers benefactor.
-contract CypherLiquidityDeployerModule {
+contract CypherLiquidityDeployerModule is ILiquidityDeployerModule {
+    using FixedPointMathLib for uint256;
 
-    struct DeployParams {
-        uint256 ethReserve;
-        uint256 tokenReserve;
-        uint160 sqrtPriceX96;          // initial pool price
-        address protocolTreasury;
-        address token;                  // ERC404 token address (bonding instance)
-        address weth;                   // WETH address
-        address vault;                  // CypherAlignmentVault address
-        address algebraFactory;
-        address positionManager;
-        address instance;               // bonding instance (benefactor to register)
+    address public immutable algebraFactory;
+    address public immutable positionManager;
+    address public immutable weth;
+
+    constructor(address _algebraFactory, address _positionManager, address _weth) {
+        algebraFactory = _algebraFactory;
+        positionManager = _positionManager;
+        weth = _weth;
     }
 
     // Full-range ticks for tick spacing 60: floor(887272/60)*60 = 887220
@@ -48,46 +48,46 @@ contract CypherLiquidityDeployerModule {
     /// @notice Deploy Algebra pool liquidity and register with vault.
     /// @dev Caller must have pre-transferred tokenReserve to this contract.
     ///      ETH must equal p.ethReserve exactly.
-    function deployLiquidity(DeployParams calldata p)
-        external payable
-        returns (uint256 tokenId, address pool)
-    {
+    function deployLiquidity(DeployParams calldata p) external payable override {
         require(msg.value == p.ethReserve, "ETH mismatch");
         require(p.token != address(0) && p.vault != address(0), "Invalid params");
 
         PoolSetupResult memory r = _setupPool(p);
-        tokenId = r.tokenId;
-        pool = r.pool;
         _postMint(p, r);
     }
 
-    function _setupPool(DeployParams calldata p) private returns (PoolSetupResult memory r) {
+    function _setupPool(ILiquidityDeployerModule.DeployParams calldata p) private returns (PoolSetupResult memory r) {
         // Fixed 1/19/80 split: 1% protocol, 19% vault, 80% LP
         r.protocolFee = p.ethReserve / 100;
         r.vaultCut    = (p.ethReserve * 19) / 100;
         r.ethToLP     = p.ethReserve - r.protocolFee - r.vaultCut;
 
+        // ── Compute sqrtPriceX96 internally from token ordering ──
+        bool tokenIsZero = p.token < weth;
+        uint256 amount0 = tokenIsZero ? p.tokenReserve : r.ethToLP;
+        uint256 amount1 = tokenIsZero ? r.ethToLP : p.tokenReserve;
+        uint160 sqrtPriceX96 = uint160(
+            FixedPointMathLib.sqrt(FixedPointMathLib.fullMulDiv(amount1, 1 << 192, amount0))
+        );
+
         // ── Wrap ETH to WETH for LP ──
-        address weth = p.weth;
         (bool depositOk,) = weth.call{value: r.ethToLP}(abi.encodeWithSignature("deposit()"));
         require(depositOk, "WETH deposit failed");
 
         // ── Create Algebra pool ──
-        r.pool = IAlgebraFactory(p.algebraFactory).createPool(p.token, weth, "");
-        IAlgebraPool(r.pool).initialize(p.sqrtPriceX96);
+        r.pool = IAlgebraFactory(algebraFactory).createPool(p.token, weth, "");
+        IAlgebraPool(r.pool).initialize(sqrtPriceX96);
 
         // ── Determine token ordering and amounts ──
-        r.tokenIsZero = p.token < weth;
-        (address token0, address token1) = r.tokenIsZero ? (p.token, weth) : (weth, p.token);
-        uint256 amount0 = r.tokenIsZero ? p.tokenReserve : r.ethToLP;
-        uint256 amount1 = r.tokenIsZero ? r.ethToLP : p.tokenReserve;
+        r.tokenIsZero = tokenIsZero;
+        (address token0, address token1) = tokenIsZero ? (p.token, weth) : (weth, p.token);
 
         // ── Approve and mint LP ──
-        IERC20(p.token).approve(p.positionManager, p.tokenReserve);
-        IERC20(weth).approve(p.positionManager, r.ethToLP);
+        IERC20(p.token).approve(positionManager, p.tokenReserve);
+        IERC20(weth).approve(positionManager, r.ethToLP);
 
         uint128 liquidity;
-        (r.tokenId, liquidity,,) = IAlgebraNFTPositionManager(p.positionManager).mint(
+        (r.tokenId, liquidity,,) = IAlgebraNFTPositionManager(positionManager).mint(
             IAlgebraNFTPositionManager.MintParams({
                 token0: token0,
                 token1: token1,
@@ -105,7 +105,7 @@ contract CypherLiquidityDeployerModule {
         require(liquidity > 0, "Zero liquidity");
     }
 
-    function _postMint(DeployParams calldata p, PoolSetupResult memory r) private {
+    function _postMint(ILiquidityDeployerModule.DeployParams calldata p, PoolSetupResult memory r) private {
         CypherAlignmentVault(payable(p.vault)).registerPosition(
             r.tokenId, r.pool, r.tokenIsZero, p.instance, r.ethToLP
         );

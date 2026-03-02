@@ -41,7 +41,6 @@ contract ERC404CypherFactoryTest is Test {
 
     function setUp() public {
         masterRegistry = new MockMasterRegistry();
-        deployer = new CypherLiquidityDeployerModule();
         implementation = new ERC404CypherBondingInstance();
         curveComputer = new CurveParamsComputer(protocol);
         tierGatingModule = new PasswordTierGatingModule();
@@ -49,6 +48,9 @@ contract ERC404CypherFactoryTest is Test {
         positionManager = new MockAlgebraPositionManager();
         swapRouter = new MockAlgebraSwapRouter();
         weth = new MockWETH();
+        deployer = new CypherLiquidityDeployerModule(
+            address(algebraFactory), address(positionManager), address(weth)
+        );
 
         ComponentRegistry compRegImpl = new ComponentRegistry();
         address compRegProxy = LibClone.deployERC1967(address(compRegImpl));

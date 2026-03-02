@@ -39,7 +39,9 @@ contract ERC404CypherBondingInstanceTest is Test {
         positionManager = new MockAlgebraPositionManager();
         swapRouter = new MockAlgebraSwapRouter();
         weth = new MockWETH();
-        liquidityDeployer = new CypherLiquidityDeployerModule();
+        liquidityDeployer = new CypherLiquidityDeployerModule(
+            address(algebraFactory), address(positionManager), address(weth)
+        );
         realCurveComputer = new CurveParamsComputer(address(this));
         masterRegistry = new MockMasterRegistry();
 

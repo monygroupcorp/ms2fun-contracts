@@ -303,7 +303,11 @@ contract DeploySepolia is Script {
     }
 
     function _deployCypherFactory(address deployer, address weth) private {
-        cypherLiquidityDeployer = new CypherLiquidityDeployerModule();
+        cypherLiquidityDeployer = new CypherLiquidityDeployerModule(
+            vm.envOr("ALGEBRA_FACTORY", SEPOLIA_ALGEBRA_FACTORY),
+            vm.envOr("POSITION_MANAGER", SEPOLIA_POSITION_MANAGER),
+            weth
+        );
 
         ERC404CypherBondingInstance erc404CypherImpl = new ERC404CypherBondingInstance();
         erc404CypherFactory = new ERC404CypherFactory(

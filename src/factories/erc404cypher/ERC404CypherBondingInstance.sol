@@ -13,6 +13,7 @@ import {IMasterRegistry} from "../../master/interfaces/IMasterRegistry.sol";
 import {IGlobalMessageRegistry} from "../../registry/interfaces/IGlobalMessageRegistry.sol";
 import {IInstanceLifecycle, TYPE_ERC404, STATE_BONDING, STATE_PAUSED, STATE_GRADUATED} from "../../interfaces/IInstanceLifecycle.sol";
 import {CypherLiquidityDeployerModule} from "./CypherLiquidityDeployerModule.sol";
+import {ILiquidityDeployerModule} from "../../interfaces/ILiquidityDeployerModule.sol";
 import {IGatingModule} from "../../gating/IGatingModule.sol";
 import {Currency} from "v4-core/types/Currency.sol";
 
@@ -363,16 +364,12 @@ contract ERC404CypherBondingInstance is DN404, Ownable, ReentrancyGuard, IInstan
         // Transfer LIQUIDITY_RESERVE tokens to deployer module
         _transfer(address(this), address(liquidityDeployer), LIQUIDITY_RESERVE);
 
-        CypherLiquidityDeployerModule.DeployParams memory p = CypherLiquidityDeployerModule.DeployParams({
+        ILiquidityDeployerModule.DeployParams memory p = ILiquidityDeployerModule.DeployParams({
             ethReserve: ethToSend,
             tokenReserve: LIQUIDITY_RESERVE,
-            sqrtPriceX96: sqrtPriceX96,
             protocolTreasury: protocolTreasury,
             token: address(this),
-            weth: weth,
             vault: address(vault),
-            algebraFactory: algebraFactory,
-            positionManager: positionManager,
             instance: address(this)
         });
 

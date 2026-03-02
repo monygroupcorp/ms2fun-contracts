@@ -150,13 +150,15 @@ contract FactoryFeaturesTest is Test {
 
     function test_ERC404CypherFactory_features_returnsArrayViaInterface() public {
         ERC404CypherBondingInstance impl = new ERC404CypherBondingInstance();
-        CypherLiquidityDeployerModule deployer = new CypherLiquidityDeployerModule();
         CurveParamsComputer curveComp = new CurveParamsComputer(protocol);
         PasswordTierGatingModule tierGating = new PasswordTierGatingModule();
         MockAlgebraFactory algebraFactory = new MockAlgebraFactory();
         MockAlgebraPositionManager positionManager = new MockAlgebraPositionManager();
         MockAlgebraSwapRouter swapRouter = new MockAlgebraSwapRouter();
         MockWETH weth = new MockWETH();
+        CypherLiquidityDeployerModule deployer = new CypherLiquidityDeployerModule(
+            address(algebraFactory), address(positionManager), address(weth)
+        );
         ComponentRegistry compReg = _deployComponentRegistry();
 
         ERC404CypherFactory factory = new ERC404CypherFactory(

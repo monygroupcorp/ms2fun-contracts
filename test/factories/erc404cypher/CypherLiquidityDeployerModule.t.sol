@@ -3,6 +3,7 @@
 pragma solidity ^0.8.20;
 import "forge-std/Test.sol";
 import "../../../src/factories/erc404cypher/CypherLiquidityDeployerModule.sol";
+import {ILiquidityDeployerModule} from "../../../src/interfaces/ILiquidityDeployerModule.sol";
 import "../../../src/vaults/cypher/CypherAlignmentVault.sol";
 import {LibClone} from "solady/utils/LibClone.sol";
 import {MockERC20} from "../../mocks/MockERC20.sol";
@@ -28,7 +29,9 @@ contract CypherLiquidityDeployerModuleTest is Test {
         token = new MockERC20("Token", "TKN");
         weth = new MockWETH();
 
-        deployer = new CypherLiquidityDeployerModule();
+        deployer = new CypherLiquidityDeployerModule(
+            address(algebraFactory), address(positionManager), address(weth)
+        );
 
         CypherAlignmentVault impl = new CypherAlignmentVault();
         vault = CypherAlignmentVault(payable(LibClone.clone(address(impl))));
@@ -45,30 +48,30 @@ contract CypherLiquidityDeployerModuleTest is Test {
 
         // Mint tokens to deployer module (simulating transfer from bonding instance)
         token.mint(address(deployer), tokenReserve);
-        uint160 sqrtPriceX96 = 79228162514264337593543950336; // ~1:1 ratio
 
         vm.deal(address(this), ethReserve);
-        (uint256 tokenId, address pool) = deployer.deployLiquidity{value: ethReserve}(
-            CypherLiquidityDeployerModule.DeployParams({
+        deployer.deployLiquidity{value: ethReserve}(
+            ILiquidityDeployerModule.DeployParams({
                 ethReserve: ethReserve,
                 tokenReserve: tokenReserve,
-                sqrtPriceX96: sqrtPriceX96,
                 protocolTreasury: protocolTreasury,
                 token: address(token),
-                weth: address(weth),
                 vault: address(vault),
-                algebraFactory: address(algebraFactory),
-                positionManager: address(positionManager),
                 instance: instance
             })
         );
 
+        uint256 tokenId = vault.lpTokenId();
+        address pool = vault.lpPool();
         assertGt(tokenId, 0);
         assertNotEq(pool, address(0));
-        assertEq(vault.lpTokenId(), tokenId);
-        assertEq(vault.lpPool(), pool);
         // instance is registered with ethToLP as contribution (ethReserve minus fees)
         assertGt(vault.benefactorContribution(instance), 0);
+    }
+
+    function test_implementsUniformInterface() public view {
+        ILiquidityDeployerModule d = ILiquidityDeployerModule(address(deployer));
+        assertTrue(address(d) != address(0));
     }
 
     function test_deployLiquidity_pays119_80_split() public {
@@ -80,16 +83,12 @@ contract CypherLiquidityDeployerModuleTest is Test {
         uint256 vaultBefore    = address(vault).balance;
 
         deployer.deployLiquidity{value: ethReserve}(
-            CypherLiquidityDeployerModule.DeployParams({
+            ILiquidityDeployerModule.DeployParams({
                 ethReserve: ethReserve,
                 tokenReserve: 1000e18,
-                sqrtPriceX96: 79228162514264337593543950336,
                 protocolTreasury: protocolTreasury,
                 token: address(token),
-                weth: address(weth),
                 vault: address(vault),
-                algebraFactory: address(algebraFactory),
-                positionManager: address(positionManager),
                 instance: instance
             })
         );
