@@ -4,6 +4,7 @@ pragma solidity ^0.8.20;
 import {Ownable} from "solady/auth/Ownable.sol";
 import {FixedPointMathLib} from "solady/utils/FixedPointMathLib.sol";
 import {BondingCurveMath} from "./libraries/BondingCurveMath.sol";
+import {ICurveComputer} from "../../interfaces/ICurveComputer.sol";
 
 /**
  * @title CurveParamsComputer
@@ -11,7 +12,7 @@ import {BondingCurveMath} from "./libraries/BondingCurveMath.sol";
  * @dev Extracted from ERC404Factory to reduce bytecode size. Owns all curve weight state and computation.
  *      The factory looks up the profile and passes it in; this contract has no storage dependency on the factory.
  */
-contract CurveParamsComputer is Ownable {
+contract CurveParamsComputer is Ownable, ICurveComputer {
     using FixedPointMathLib for uint256;
 
     // Reference curve shape weights (protocol-configurable)
