@@ -21,8 +21,6 @@ import {ERC404ZAMMBondingInstance} from "../../src/factories/erc404zamm/ERC404ZA
 import {ZAMMLiquidityDeployerModule} from "../../src/factories/erc404zamm/ZAMMLiquidityDeployerModule.sol";
 import {ERC404CypherBondingInstance} from "../../src/factories/erc404cypher/ERC404CypherBondingInstance.sol";
 import {CypherLiquidityDeployerModule} from "../../src/factories/erc404cypher/CypherLiquidityDeployerModule.sol";
-import {CypherAlignmentVault} from "../../src/vaults/cypher/CypherAlignmentVault.sol";
-import {CypherAlignmentVaultFactory} from "../../src/vaults/cypher/CypherAlignmentVaultFactory.sol";
 import {PasswordTierGatingModule} from "../../src/gating/PasswordTierGatingModule.sol";
 import {ComponentRegistry} from "../../src/registry/ComponentRegistry.sol";
 import {MockZAMM} from "../mocks/MockZAMM.sol";
@@ -151,8 +149,6 @@ contract FactoryFeaturesTest is Test {
     function test_ERC404CypherFactory_features_returnsArrayViaInterface() public {
         ERC404CypherBondingInstance impl = new ERC404CypherBondingInstance();
         CypherLiquidityDeployerModule deployer = new CypherLiquidityDeployerModule();
-        CypherAlignmentVault vaultImpl = new CypherAlignmentVault();
-        CypherAlignmentVaultFactory vaultFactory = new CypherAlignmentVaultFactory(address(vaultImpl));
         CurveParamsComputer curveComp = new CurveParamsComputer(protocol);
         PasswordTierGatingModule tierGating = new PasswordTierGatingModule();
         MockAlgebraFactory algebraFactory = new MockAlgebraFactory();
@@ -165,7 +161,6 @@ contract FactoryFeaturesTest is Test {
             ERC404CypherFactory.CoreConfig({
                 implementation: address(impl),
                 masterRegistry: makeAddr("mr"),
-                vaultFactory: address(vaultFactory),
                 liquidityDeployer: address(deployer),
                 algebraFactory: address(algebraFactory),
                 positionManager: address(positionManager),

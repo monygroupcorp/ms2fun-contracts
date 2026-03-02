@@ -6,8 +6,6 @@ import {Test} from "forge-std/Test.sol";
 import {ERC404CypherFactory} from "../../../src/factories/erc404cypher/ERC404CypherFactory.sol";
 import {ERC404CypherBondingInstance} from "../../../src/factories/erc404cypher/ERC404CypherBondingInstance.sol";
 import {CypherLiquidityDeployerModule} from "../../../src/factories/erc404cypher/CypherLiquidityDeployerModule.sol";
-import {CypherAlignmentVault} from "../../../src/vaults/cypher/CypherAlignmentVault.sol";
-import {CypherAlignmentVaultFactory} from "../../../src/vaults/cypher/CypherAlignmentVaultFactory.sol";
 import {CurveParamsComputer} from "../../../src/factories/erc404/CurveParamsComputer.sol";
 import {PasswordTierGatingModule} from "../../../src/gating/PasswordTierGatingModule.sol";
 import {MockAlgebraFactory, MockAlgebraPositionManager, MockAlgebraSwapRouter} from "../../mocks/MockCypherAlgebra.sol";
@@ -17,12 +15,16 @@ import {IdentityParams} from "../../../src/interfaces/IFactoryTypes.sol";
 import {ComponentRegistry} from "../../../src/registry/ComponentRegistry.sol";
 import {LibClone} from "solady/utils/LibClone.sol";
 
+/// @dev Minimal vault stub — just needs code at the address
+contract MockMinimalVault {
+    receive() external payable {}
+}
+
 contract ERC404CypherFactoryTest is Test {
     ERC404CypherFactory factory;
     MockMasterRegistry masterRegistry;
     CypherLiquidityDeployerModule deployer;
     ERC404CypherBondingInstance implementation;
-    CypherAlignmentVaultFactory vaultFactory;
     CurveParamsComputer curveComputer;
     PasswordTierGatingModule tierGatingModule;
     ComponentRegistry componentRegistry;
@@ -36,7 +38,7 @@ contract ERC404CypherFactoryTest is Test {
     address treasury = makeAddr("treasury");
     address globalMsgRegistry = makeAddr("globalMsgRegistry");
     address instanceCreator = makeAddr("instanceCreator");
-    address alignmentTarget = makeAddr("alignmentTarget");
+    address mockVault; // deployed in setUp as MockMinimalVault
 
     function setUp() public {
         masterRegistry = new MockMasterRegistry();
@@ -49,19 +51,16 @@ contract ERC404CypherFactoryTest is Test {
         swapRouter = new MockAlgebraSwapRouter();
         weth = new MockWETH();
 
-        CypherAlignmentVault vaultImpl = new CypherAlignmentVault();
-        vaultFactory = new CypherAlignmentVaultFactory(address(vaultImpl));
-
         ComponentRegistry compRegImpl = new ComponentRegistry();
         address compRegProxy = LibClone.deployERC1967(address(compRegImpl));
         componentRegistry = ComponentRegistry(compRegProxy);
         componentRegistry.initialize(protocol);
+        mockVault = address(new MockMinimalVault());
 
         factory = new ERC404CypherFactory(
             ERC404CypherFactory.CoreConfig({
                 implementation: address(implementation),
                 masterRegistry: address(masterRegistry),
-                vaultFactory: address(vaultFactory),
                 liquidityDeployer: address(deployer),
                 algebraFactory: address(algebraFactory),
                 positionManager: address(positionManager),
@@ -95,7 +94,7 @@ contract ERC404CypherFactoryTest is Test {
             symbol: symbol_,
             styleUri: "",
             owner: instanceCreator,
-            vault: address(0), // Cypher creates vault internally
+            vault: address(0), // unused: vault is passed as separate param to createInstance
             nftCount: 100,
             profileId: 0
         });
@@ -106,7 +105,7 @@ contract ERC404CypherFactoryTest is Test {
         address instance = factory.createInstance{value: 0.01 ether}(
             _identity("CypherToken", "CYPH"),
             "",
-            alignmentTarget
+            mockVault
         );
 
         assertNotEq(instance, address(0));
@@ -129,7 +128,7 @@ contract ERC404CypherFactoryTest is Test {
             profileId: 99 // inactive profile
         });
         vm.expectRevert();
-        factory.createInstance{value: 0.01 ether}(id, "", alignmentTarget);
+        factory.createInstance{value: 0.01 ether}(id, "", mockVault);
     }
 
     function test_createInstance_revertsOnDuplicateName() public {
@@ -137,7 +136,7 @@ contract ERC404CypherFactoryTest is Test {
         factory.createInstance{value: 0.01 ether}(
             _identity("Taken", "TST"),
             "",
-            alignmentTarget
+            mockVault
         );
         // Real MasterRegistry marks name taken on registerInstance; simulate that here
         masterRegistry.markNameTaken("Taken");
@@ -145,7 +144,7 @@ contract ERC404CypherFactoryTest is Test {
         factory.createInstance{value: 0.01 ether}(
             _identity("Taken", "TST2"),
             "",
-            alignmentTarget
+            mockVault
         );
     }
 
@@ -164,7 +163,7 @@ contract ERC404CypherFactoryTest is Test {
         factory.createInstance{value: 0.01 ether}(
             _identity("FeeTest", "FT"),
             "",
-            alignmentTarget
+            mockVault
         );
 
         uint256 treasuryBefore = treasury.balance;
@@ -188,7 +187,7 @@ contract ERC404CypherFactoryTest is Test {
             _identity("GatedToken", "GATE"),
             "",
             unapprovedModule,
-            alignmentTarget
+            mockVault
         );
     }
 
@@ -197,8 +196,31 @@ contract ERC404CypherFactoryTest is Test {
         address instance = factory.createInstance{value: 0.01 ether}(
             _identity("OpenToken", "OPEN"),
             "",
-            alignmentTarget
+            mockVault
         );
         assertTrue(instance != address(0));
+    }
+
+    /// @dev After refactor, createInstance must accept a pre-deployed vault and wire it directly.
+    function test_createInstance_acceptsPreExistingVault() public {
+        // Deploy a minimal vault (any contract with code will do)
+        address preDeployedVault = address(new MockMinimalVault());
+
+        vm.deal(address(this), 0.01 ether);
+        address instance = factory.createInstance{value: 0.01 ether}(
+            _identity("VaultToken", "VT"),
+            "",
+            preDeployedVault
+        );
+
+        // Instance must be wired to the exact vault we passed, not a newly-created one
+        assertEq(address(ERC404CypherBondingInstance(payable(instance)).vault()), preDeployedVault);
+    }
+
+    /// @dev Factory must be constructible without a vaultFactory argument.
+    function test_createInstance_noVaultFactoryNeeded() public view {
+        // If CoreConfig has no vaultFactory field, this test passes at compile time.
+        // Verify that the factory (deployed in setUp without vaultFactory) works.
+        assertNotEq(address(factory), address(0));
     }
 }
