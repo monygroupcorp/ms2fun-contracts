@@ -24,6 +24,10 @@ contract MockFactory is IFactory {
         masterRegistry = IMasterRegistry(_masterRegistry);
     }
 
+    function features() external pure returns (bytes32[] memory) {
+        return new bytes32[](0);
+    }
+
     function registerInstance(
         address instance,
         address _creator,

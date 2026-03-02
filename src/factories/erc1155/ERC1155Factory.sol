@@ -11,6 +11,7 @@ import {IFactory} from "../../interfaces/IFactory.sol";
 import {PromotionBadges} from "../../promotion/PromotionBadges.sol";
 import {FeaturedQueueManager} from "../../master/FeaturedQueueManager.sol";
 import {IComponentRegistry} from "../../registry/interfaces/IComponentRegistry.sol";
+import {FeatureUtils} from "../../master/libraries/FeatureUtils.sol";
 
 /**
  * @title ERC1155Factory
@@ -21,11 +22,13 @@ contract ERC1155Factory is Ownable, ReentrancyGuard, IFactory {
     address public immutable globalMessageRegistry;
     IComponentRegistry public immutable componentRegistry;
     address public instanceTemplate;
-    uint256 public instanceCreationFee;
 
     // Protocol revenue
     address public protocolTreasury;
     uint256 public accumulatedProtocolFees;
+
+    // Pluggable component tags
+    bytes32[] internal _features;
 
     // Trusted agents that can add editions on behalf of users
     mapping(address => bool) public isAgent;
@@ -34,7 +37,6 @@ contract ERC1155Factory is Ownable, ReentrancyGuard, IFactory {
     enum CreationTier { STANDARD, PREMIUM, LAUNCH }
 
     struct TierConfig {
-        uint256 fee;
         uint256 featuredDuration;    // 0 = no featured placement
         uint256 featuredRankBoost;   // ETH allocated to rank score (0 = duration only)
         PromotionBadges.BadgeType badge; // NONE = no badge
@@ -52,7 +54,6 @@ contract ERC1155Factory is Ownable, ReentrancyGuard, IFactory {
         address indexed vault
     );
 
-    event InstanceCreationFeeUpdated(uint256 newFee);
     event VaultCapabilityWarning(address indexed vault, bytes32 indexed capability);
 
     event EditionAdded(
@@ -65,8 +66,8 @@ contract ERC1155Factory is Ownable, ReentrancyGuard, IFactory {
     );
     event ProtocolTreasuryUpdated(address indexed oldTreasury, address indexed newTreasury);
     event ProtocolFeesWithdrawn(address indexed treasury, uint256 amount);
-    event TierConfigUpdated(CreationTier tier, uint256 fee);
-    event InstanceCreatedWithTier(address indexed instance, CreationTier tier, uint256 fee);
+    event TierConfigUpdated(CreationTier tier);
+    event InstanceCreatedWithTier(address indexed instance, CreationTier tier);
     event AgentUpdated(address indexed agent, bool authorized);
 
     constructor(
@@ -81,7 +82,7 @@ contract ERC1155Factory is Ownable, ReentrancyGuard, IFactory {
         globalMessageRegistry = _globalMessageRegistry;
         componentRegistry = IComponentRegistry(_componentRegistry);
         instanceTemplate = _instanceTemplate;
-        instanceCreationFee = 0.01 ether;
+        _features.push(FeatureUtils.GATING);
     }
 
     /**
@@ -136,20 +137,9 @@ contract ERC1155Factory is Ownable, ReentrancyGuard, IFactory {
         address vault,
         string memory styleUri,
         CreationTier creationTier,
-        address gatingModule       // NEW
+        address gatingModule
     ) internal returns (address instance) {
-        // Determine fee based on tier
         TierConfig memory config = tierConfigs[creationTier];
-        uint256 fee;
-        if (config.fee > 0) {
-            fee = config.fee;
-        } else if (creationTier == CreationTier.STANDARD) {
-            fee = instanceCreationFee;
-        } else {
-            revert("Tier not configured");
-        }
-
-        require(msg.value >= fee, "Insufficient fee");
 
         // Compute featured cost upfront so it can be forwarded (not accumulated)
         uint256 featuredCost = 0;
@@ -157,7 +147,10 @@ contract ERC1155Factory is Ownable, ReentrancyGuard, IFactory {
             featuredCost = featuredQueueManager.quoteDurationCost(config.featuredDuration) + config.featuredRankBoost;
         }
 
-        accumulatedProtocolFees += fee - featuredCost;
+        require(msg.value >= featuredCost, "Insufficient featured fee");
+
+        // All non-featured payment goes to protocol
+        accumulatedProtocolFees += msg.value - featuredCost;
 
         require(bytes(name).length > 0, "Invalid name");
         require(creator != address(0), "Invalid creator");
@@ -189,15 +182,10 @@ contract ERC1155Factory is Ownable, ReentrancyGuard, IFactory {
             promotionBadges.assignBadgeFor(instance, config.badge, config.badgeDuration);
         }
 
-        // Refund excess
-        if (msg.value > fee) {
-            SafeTransferLib.safeTransferETH(msg.sender, msg.value - fee);
-        }
-
         emit InstanceCreated(instance, creator, name, vault);
 
         if (creationTier != CreationTier.STANDARD) {
-            emit InstanceCreatedWithTier(instance, creationTier, fee);
+            emit InstanceCreatedWithTier(instance, creationTier);
         }
     }
 
@@ -207,7 +195,7 @@ contract ERC1155Factory is Ownable, ReentrancyGuard, IFactory {
         address creator,
         address vault,
         string memory styleUri,
-        address gatingModule       // NEW
+        address gatingModule
     ) private returns (address instance) {
         instance = address(new ERC1155Instance(
             name,
@@ -219,7 +207,7 @@ contract ERC1155Factory is Ownable, ReentrancyGuard, IFactory {
             globalMessageRegistry,
             protocolTreasury,
             address(masterRegistry),
-            gatingModule           // NEW
+            gatingModule
         ));
         masterRegistry.registerInstance(
             instance,
@@ -242,7 +230,7 @@ contract ERC1155Factory is Ownable, ReentrancyGuard, IFactory {
         string memory metadataURI,
         ERC1155Instance.PricingModel pricingModel,
         uint256 priceIncreaseRate,
-        uint256 openTime           // NEW
+        uint256 openTime
     ) external returns (uint256 editionId) {
         require(isAgent[msg.sender], "Not authorized agent");
         ERC1155Instance instanceContract = ERC1155Instance(instance);
@@ -254,7 +242,7 @@ contract ERC1155Factory is Ownable, ReentrancyGuard, IFactory {
             metadataURI,
             pricingModel,
             priceIncreaseRate,
-            openTime               // NEW
+            openTime
         );
 
         editionId = instanceContract.nextEditionId() - 1;
@@ -263,20 +251,11 @@ contract ERC1155Factory is Ownable, ReentrancyGuard, IFactory {
     }
 
     /**
-     * @notice Set instance creation fee (owner only)
-     */
-    function setInstanceCreationFee(uint256 _fee) external onlyOwner {
-        instanceCreationFee = _fee;
-        emit InstanceCreationFeeUpdated(_fee);
-    }
-
-    /**
      * @notice Set tier configuration (owner only)
      */
     function setTierConfig(CreationTier tier, TierConfig calldata config) external onlyOwner {
-        require(config.fee > 0, "Fee must be positive");
         tierConfigs[tier] = config;
-        emit TierConfigUpdated(tier, config.fee);
+        emit TierConfigUpdated(tier);
     }
 
     /**
@@ -319,5 +298,9 @@ contract ERC1155Factory is Ownable, ReentrancyGuard, IFactory {
 
     function protocol() external view returns (address) {
         return owner();
+    }
+
+    function features() external view returns (bytes32[] memory) {
+        return _features;
     }
 }

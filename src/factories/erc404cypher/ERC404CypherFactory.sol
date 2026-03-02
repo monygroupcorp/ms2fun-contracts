@@ -10,8 +10,6 @@ import {IFactory} from "../../interfaces/IFactory.sol";
 import {FeatureUtils} from "../../master/libraries/FeatureUtils.sol";
 import {ERC404CypherBondingInstance} from "./ERC404CypherBondingInstance.sol";
 import {CypherLiquidityDeployerModule} from "./CypherLiquidityDeployerModule.sol";
-import {CypherAlignmentVaultFactory} from "../../vaults/cypher/CypherAlignmentVaultFactory.sol";
-import {CypherAlignmentVault} from "../../vaults/cypher/CypherAlignmentVault.sol";
 import {CurveParamsComputer} from "../erc404/CurveParamsComputer.sol";
 import {BondingCurveMath} from "../erc404/libraries/BondingCurveMath.sol";
 import {IdentityParams} from "../../interfaces/IFactoryTypes.sol";
@@ -30,7 +28,6 @@ contract ERC404CypherFactory is OwnableRoles, ReentrancyGuard, IFactory {
     struct CoreConfig {
         address implementation;
         address masterRegistry;
-        address vaultFactory;
         address liquidityDeployer;
         address algebraFactory;
         address positionManager;
@@ -63,7 +60,6 @@ contract ERC404CypherFactory is OwnableRoles, ReentrancyGuard, IFactory {
     uint256 public bondingFeeBps = 100;      // 1%
 
     CypherLiquidityDeployerModule public immutable liquidityDeployer;
-    CypherAlignmentVaultFactory public immutable vaultFactory;
     CurveParamsComputer public immutable curveComputer;
     PasswordTierGatingModule public immutable tierGatingModule;
     IComponentRegistry public immutable componentRegistry;
@@ -78,7 +74,7 @@ contract ERC404CypherFactory is OwnableRoles, ReentrancyGuard, IFactory {
     mapping(uint256 => GraduationProfile) public profiles;
 
     // Features
-    bytes32[] public features;
+    bytes32[] internal _features;
 
     // ── Events ────────────────────────────────────────────────────────────────
     event InstanceCreated(address indexed instance, address indexed instanceCreator, string name, string symbol, address indexed vault);
@@ -87,7 +83,6 @@ contract ERC404CypherFactory is OwnableRoles, ReentrancyGuard, IFactory {
 
     constructor(CoreConfig memory core, ModuleConfig memory modules) {
         require(core.implementation != address(0), "Invalid implementation");
-        require(core.vaultFactory != address(0), "Invalid vault factory");
         require(core.liquidityDeployer != address(0), "Invalid deployer");
         require(core.weth != address(0), "Invalid weth");
         require(core.protocol != address(0), "Invalid protocol");
@@ -100,7 +95,6 @@ contract ERC404CypherFactory is OwnableRoles, ReentrancyGuard, IFactory {
         implementation = core.implementation;
         masterRegistry = IMasterRegistry(core.masterRegistry);
         liquidityDeployer = CypherLiquidityDeployerModule(payable(core.liquidityDeployer));
-        vaultFactory = CypherAlignmentVaultFactory(core.vaultFactory);
         globalMessageRegistry = modules.globalMessageRegistry;
         curveComputer = CurveParamsComputer(modules.curveComputer);
         algebraFactory = core.algebraFactory;
@@ -110,10 +104,7 @@ contract ERC404CypherFactory is OwnableRoles, ReentrancyGuard, IFactory {
         tierGatingModule = PasswordTierGatingModule(modules.tierGatingModule);
         componentRegistry = IComponentRegistry(modules.componentRegistry);
 
-        features.push(FeatureUtils.BONDING_CURVE);
-        features.push(FeatureUtils.LIQUIDITY_POOL);
-        features.push(FeatureUtils.CHAT);
-        features.push(FeatureUtils.PORTFOLIO);
+        _features.push(FeatureUtils.GATING);
     }
 
     /**
@@ -122,9 +113,9 @@ contract ERC404CypherFactory is OwnableRoles, ReentrancyGuard, IFactory {
     function createInstance(
         IdentityParams calldata identity,
         string calldata metadataURI,
-        address alignmentTarget
+        address vault
     ) external payable nonReentrant returns (address instance) {
-        return _createInstanceCore(identity, metadataURI, address(0), alignmentTarget);
+        return _createInstanceCore(identity, metadataURI, address(0), vault);
     }
 
     /**
@@ -135,12 +126,12 @@ contract ERC404CypherFactory is OwnableRoles, ReentrancyGuard, IFactory {
         IdentityParams calldata identity,
         string calldata metadataURI,
         address gatingModule,
-        address alignmentTarget
+        address vault
     ) external payable nonReentrant returns (address instance) {
         if (gatingModule != address(0)) {
             require(componentRegistry.isApprovedComponent(gatingModule), "Unapproved component");
         }
-        return _createInstanceCore(identity, metadataURI, gatingModule, alignmentTarget);
+        return _createInstanceCore(identity, metadataURI, gatingModule, vault);
     }
 
     /**
@@ -149,10 +140,10 @@ contract ERC404CypherFactory is OwnableRoles, ReentrancyGuard, IFactory {
     function createInstanceWithTiers(
         IdentityParams calldata identity,
         string calldata metadataURI,
-        address alignmentTarget,
+        address vault,
         PasswordTierGatingModule.TierConfig calldata tiers
     ) external payable nonReentrant returns (address instance) {
-        return _createInstanceInternalWithTiers(identity, metadataURI, alignmentTarget, tiers);
+        return _createInstanceInternalWithTiers(identity, metadataURI, vault, tiers);
     }
 
     /// @dev New path: accepts a pre-resolved gatingModule address, skips _configureGating.
@@ -160,18 +151,18 @@ contract ERC404CypherFactory is OwnableRoles, ReentrancyGuard, IFactory {
         IdentityParams calldata identity,
         string calldata metadataURI,
         address gatingModule,
-        address alignmentTarget
+        address vault
     ) internal returns (address instance) {
         accumulatedProtocolFees += msg.value;
         require(identity.nftCount > 0, "Invalid NFT count");
         require(bytes(identity.name).length > 0, "Invalid name");
         require(identity.owner != address(0), "Invalid creator");
-        require(alignmentTarget != address(0), "Invalid alignment target");
+        require(vault != address(0), "Invalid vault");
+        require(vault.code.length > 0, "Vault must be a contract");
         require(!masterRegistry.isNameTaken(identity.name), "Name taken");
 
         ERC404CypherBondingInstance.BondingParams memory bonding = _computeBondingParams(identity.nftCount, identity.profileId);
         instance = LibClone.clone(implementation);
-        address vault = address(_deployVault(alignmentTarget));
 
         // gatingModule is pre-resolved — no configureFor call
         ERC404CypherBondingInstance(payable(instance)).initialize(identity.owner, vault, bonding, gatingModule);
@@ -184,19 +175,19 @@ contract ERC404CypherFactory is OwnableRoles, ReentrancyGuard, IFactory {
     function _createInstanceInternalWithTiers(
         IdentityParams calldata identity,
         string calldata metadataURI,
-        address alignmentTarget,
+        address vault,
         PasswordTierGatingModule.TierConfig memory tiers
     ) internal returns (address instance) {
         accumulatedProtocolFees += msg.value;
         require(identity.nftCount > 0, "Invalid NFT count");
         require(bytes(identity.name).length > 0, "Invalid name");
         require(identity.owner != address(0), "Invalid creator");
-        require(alignmentTarget != address(0), "Invalid alignment target");
+        require(vault != address(0), "Invalid vault");
+        require(vault.code.length > 0, "Vault must be a contract");
         require(!masterRegistry.isNameTaken(identity.name), "Name taken");
 
         ERC404CypherBondingInstance.BondingParams memory bonding = _computeBondingParams(identity.nftCount, identity.profileId);
         instance = LibClone.clone(implementation);
-        address vault = address(_deployVault(alignmentTarget));
 
         address gatingModuleAddr;
         if (tiers.passwordHashes.length > 0) {
@@ -208,17 +199,6 @@ contract ERC404CypherFactory is OwnableRoles, ReentrancyGuard, IFactory {
         ERC404CypherBondingInstance(payable(instance)).initializeProtocol(_buildProtocolParams(vault));
         _setMetadata(instance, identity);
         _finalizeInstance(instance, identity, metadataURI, vault);
-    }
-
-    function _deployVault(address alignmentTarget) private returns (CypherAlignmentVault) {
-        return vaultFactory.createVault(
-            positionManager,
-            swapRouter,
-            weth,
-            alignmentTarget,
-            protocolTreasury != address(0) ? protocolTreasury : owner(),
-            address(liquidityDeployer)
-        );
     }
 
     function _computeBondingParams(uint256 nftCount, uint8 profileId) private view
@@ -291,6 +271,8 @@ contract ERC404CypherFactory is OwnableRoles, ReentrancyGuard, IFactory {
         SafeTransferLib.safeTransferETH(protocolTreasury, amt);
     }
 
-    function getFeatures() external view returns (bytes32[] memory) { return features; }
+    function getFeatures() external view returns (bytes32[] memory) { return _features; }
     function protocol() external view returns (address) { return owner(); }
+
+    function features() external view returns (bytes32[] memory) { return _features; }
 }

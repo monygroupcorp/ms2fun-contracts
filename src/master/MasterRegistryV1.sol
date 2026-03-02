@@ -107,7 +107,7 @@ contract MasterRegistryV1 is UUPSUpgradeable, Ownable, IMasterRegistry {
             displayTitle: displayTitle,
             metadataURI: metadataURI,
             features: features,
-            creator: factoryProtocol,
+            creator: address(0),
             active: true,
             registeredAt: block.timestamp
         });

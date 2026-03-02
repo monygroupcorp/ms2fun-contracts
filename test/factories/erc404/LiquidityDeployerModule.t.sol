@@ -3,7 +3,6 @@ pragma solidity ^0.8.24;
 
 import {Test} from "forge-std/Test.sol";
 import {LiquidityDeployerModule} from "../../../src/factories/erc404/LiquidityDeployerModule.sol";
-import {IHooks} from "v4-core/interfaces/IHooks.sol";
 import {IPoolManager} from "v4-core/interfaces/IPoolManager.sol";
 
 /**
@@ -15,7 +14,7 @@ contract LiquidityDeployerModuleTest is Test {
     LiquidityDeployerModule public module;
 
     function setUp() public {
-        module = new LiquidityDeployerModule();
+        module = new LiquidityDeployerModule(3000, 60);
     }
 
     // -----------------------------------------------------------------------
@@ -35,9 +34,6 @@ contract LiquidityDeployerModuleTest is Test {
             weth: address(0x3),
             token: address(0x4),
             instance: address(0x4),
-            poolFee: 3000,
-            tickSpacing: 60,
-            v4Hook: IHooks(address(0)),
             v4PoolManager: IPoolManager(address(0))
         });
     }
@@ -89,5 +85,28 @@ contract LiquidityDeployerModuleTest is Test {
     function test_unlockCallback_revertsIfNotPoolManager() public {
         vm.expectRevert("Not pool manager");
         module.unlockCallback(bytes(""));
+    }
+
+    // ── Hook removal tests (TDD) ──────────────────────────────────────────────
+
+    function test_module_hasImmutablePoolConfig() public view {
+        // Module must expose poolFee and tickSpacing as immutables
+        assertEq(module.poolFee(), 3000);
+        assertEq(module.tickSpacing(), 60);
+    }
+
+    function test_deployParams_noPoolConfigFields() public pure {
+        // DeployParams must compile without poolFee/tickSpacing/v4Hook
+        LiquidityDeployerModule.DeployParams memory p = LiquidityDeployerModule.DeployParams({
+            ethReserve: 1 ether,
+            tokenReserve: 100 ether,
+            protocolTreasury: address(0x1),
+            vault: address(0x5),
+            weth: address(0x3),
+            token: address(0x4),
+            instance: address(0x4),
+            v4PoolManager: IPoolManager(address(0))
+        }); // no poolFee/tickSpacing/v4Hook
+        assertEq(p.ethReserve, 1 ether);
     }
 }

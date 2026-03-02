@@ -18,7 +18,6 @@ import {FeaturedQueueManager} from "../../master/FeaturedQueueManager.sol";
 contract ERC721AuctionFactory is Ownable, ReentrancyGuard, IFactory {
     IMasterRegistry public masterRegistry;
     address public immutable globalMessageRegistry;
-    uint256 public instanceCreationFee;
 
     // Protocol revenue
     address public protocolTreasury;
@@ -41,7 +40,6 @@ contract ERC721AuctionFactory is Ownable, ReentrancyGuard, IFactory {
     }
 
     struct TierConfig {
-        uint256 fee;
         uint256 featuredDuration;
         uint256 featuredRankBoost;   // ETH allocated to rank score (0 = duration only)
         PromotionBadges.BadgeType badge;
@@ -59,12 +57,11 @@ contract ERC721AuctionFactory is Ownable, ReentrancyGuard, IFactory {
         address indexed vault
     );
 
-    event InstanceCreationFeeUpdated(uint256 newFee);
     event VaultCapabilityWarning(address indexed vault, bytes32 indexed capability);
     event ProtocolTreasuryUpdated(address indexed oldTreasury, address indexed newTreasury);
     event ProtocolFeesWithdrawn(address indexed treasury, uint256 amount);
-    event TierConfigUpdated(CreationTier tier, uint256 fee);
-    event InstanceCreatedWithTier(address indexed instance, CreationTier tier, uint256 fee);
+    event TierConfigUpdated(CreationTier tier);
+    event InstanceCreatedWithTier(address indexed instance, CreationTier tier);
 
     constructor(
         address _masterRegistry,
@@ -74,7 +71,6 @@ contract ERC721AuctionFactory is Ownable, ReentrancyGuard, IFactory {
         require(_globalMessageRegistry != address(0), "Invalid global message registry");
         masterRegistry = IMasterRegistry(_masterRegistry);
         globalMessageRegistry = _globalMessageRegistry;
-        instanceCreationFee = 0.01 ether;
     }
 
     /**
@@ -124,9 +120,9 @@ contract ERC721AuctionFactory is Ownable, ReentrancyGuard, IFactory {
         internal returns (address instance)
     {
         TierConfig memory config = tierConfigs[creationTier];
-        (uint256 fee, uint256 featuredCost) = _computeTierFee(config, creationTier);
-        require(msg.value >= fee, "Insufficient fee");
-        _accumulateFees(fee, featuredCost);
+        uint256 featuredCost = _computeFeaturedCost(config);
+        require(msg.value >= featuredCost, "Insufficient featured fee");
+        accumulatedProtocolFees += msg.value - featuredCost;
 
         require(bytes(args.name).length > 0, "Invalid name");
         require(args.creator != address(0), "Invalid creator");
@@ -149,34 +145,19 @@ contract ERC721AuctionFactory is Ownable, ReentrancyGuard, IFactory {
 
         _applyTierPerks(instance, args.creator, config, featuredCost);
 
-        if (msg.value > fee) {
-            SafeTransferLib.safeTransferETH(msg.sender, msg.value - fee);
-        }
-
         emit InstanceCreated(instance, args.creator, args.name, args.vault);
 
         if (creationTier != CreationTier.STANDARD) {
-            emit InstanceCreatedWithTier(instance, creationTier, fee);
+            emit InstanceCreatedWithTier(instance, creationTier);
         }
     }
 
-    function _computeTierFee(TierConfig memory config, CreationTier tier)
-        private view returns (uint256 fee, uint256 featuredCost)
+    function _computeFeaturedCost(TierConfig memory config)
+        private view returns (uint256 featuredCost)
     {
-        if (config.fee > 0) {
-            fee = config.fee;
-        } else if (tier == CreationTier.STANDARD) {
-            fee = instanceCreationFee;
-        } else {
-            revert("Tier not configured");
-        }
         if (config.featuredDuration > 0 && address(featuredQueueManager) != address(0)) {
             featuredCost = featuredQueueManager.quoteDurationCost(config.featuredDuration) + config.featuredRankBoost;
         }
-    }
-
-    function _accumulateFees(uint256 fee, uint256 featuredCost) private {
-        accumulatedProtocolFees += fee - featuredCost;
     }
 
     function _deployInstance(CreateArgs memory args) private returns (address) {
@@ -207,15 +188,9 @@ contract ERC721AuctionFactory is Ownable, ReentrancyGuard, IFactory {
     // │     Admin Functions     │
     // └─────────────────────────┘
 
-    function setInstanceCreationFee(uint256 _fee) external onlyOwner {
-        instanceCreationFee = _fee;
-        emit InstanceCreationFeeUpdated(_fee);
-    }
-
     function setTierConfig(CreationTier tier, TierConfig calldata config) external onlyOwner {
-        require(config.fee > 0, "Fee must be positive");
         tierConfigs[tier] = config;
-        emit TierConfigUpdated(tier, config.fee);
+        emit TierConfigUpdated(tier);
     }
 
     function setPromotionBadges(address _promotionBadges) external onlyOwner {
@@ -244,5 +219,9 @@ contract ERC721AuctionFactory is Ownable, ReentrancyGuard, IFactory {
 
     function protocol() external view returns (address) {
         return owner();
+    }
+
+    function features() external view returns (bytes32[] memory) {
+        return new bytes32[](0);
     }
 }

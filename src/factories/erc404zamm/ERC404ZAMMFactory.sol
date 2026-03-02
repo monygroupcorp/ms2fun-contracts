@@ -31,7 +31,6 @@ contract ERC404ZAMMFactory is OwnableRoles, ReentrancyGuard, IFactory {
         address zamm;
         address zRouter;
         uint256 feeOrHook;
-        uint256 taxBps;
         address protocol;
     }
     struct ModuleConfig {
@@ -51,7 +50,6 @@ contract ERC404ZAMMFactory is OwnableRoles, ReentrancyGuard, IFactory {
     address public zamm;
     address public zRouter;
     uint256 public feeOrHook;
-    uint256 public taxBps;
     address public protocolTreasury;
     uint256 public accumulatedProtocolFees;
 
@@ -72,13 +70,12 @@ contract ERC404ZAMMFactory is OwnableRoles, ReentrancyGuard, IFactory {
     mapping(uint256 => GraduationProfile) public profiles;
 
     // Features
-    bytes32[] public features;
+    bytes32[] internal _features;
 
     // ── Events ────────────────────────────────────────────────────────────────
     event InstanceCreated(address indexed instance, address indexed instanceCreator, string name, string symbol, address indexed vault);
     event ProfileUpdated(uint256 indexed profileId, uint256 targetETH, bool active);
     event ProtocolTreasuryUpdated(address indexed old, address indexed next);
-    event TaxBpsUpdated(uint256 newBps);
 
     constructor(CoreConfig memory core, ModuleConfig memory modules) {
         require(core.implementation != address(0), "Invalid implementation");
@@ -96,17 +93,13 @@ contract ERC404ZAMMFactory is OwnableRoles, ReentrancyGuard, IFactory {
         zamm = core.zamm;
         zRouter = core.zRouter;
         feeOrHook = core.feeOrHook;
-        taxBps = core.taxBps;
         liquidityDeployer = ZAMMLiquidityDeployerModule(payable(modules.liquidityDeployer));
         globalMessageRegistry = modules.globalMessageRegistry;
         curveComputer = CurveParamsComputer(modules.curveComputer);
         tierGatingModule = PasswordTierGatingModule(modules.tierGatingModule);
         componentRegistry = IComponentRegistry(modules.componentRegistry);
 
-        features.push(FeatureUtils.BONDING_CURVE);
-        features.push(FeatureUtils.LIQUIDITY_POOL);
-        features.push(FeatureUtils.CHAT);
-        features.push(FeatureUtils.PORTFOLIO);
+        _features.push(FeatureUtils.GATING);
     }
 
     /**
@@ -265,12 +258,6 @@ contract ERC404ZAMMFactory is OwnableRoles, ReentrancyGuard, IFactory {
         protocolTreasury = t;
     }
 
-    function setTaxBps(uint256 bps) external onlyRoles(PROTOCOL_ROLE) {
-        require(bps <= 300, "Max 3%");
-        taxBps = bps;
-        emit TaxBpsUpdated(bps);
-    }
-
     function withdrawProtocolFees() external onlyRoles(PROTOCOL_ROLE) {
         require(protocolTreasury != address(0), "No treasury");
         uint256 amt = accumulatedProtocolFees;
@@ -279,6 +266,8 @@ contract ERC404ZAMMFactory is OwnableRoles, ReentrancyGuard, IFactory {
         SafeTransferLib.safeTransferETH(protocolTreasury, amt);
     }
 
-    function getFeatures() external view returns (bytes32[] memory) { return features; }
+    function getFeatures() external view returns (bytes32[] memory) { return _features; }
     function protocol() external view returns (address) { return owner(); }
+
+    function features() external view returns (bytes32[] memory) { return _features; }
 }

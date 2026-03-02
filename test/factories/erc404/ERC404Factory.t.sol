@@ -32,6 +32,12 @@ contract MockVaultNoHook {
     receive() external payable {}
 }
 
+/// @dev Plain vault with no hook() function — factory must accept it after hook removal
+contract PlainVault {
+    function supportsCapability(bytes32) external pure returns (bool) { return true; }
+    receive() external payable {}
+}
+
 contract MockMasterRegistryForStakingF {
     mapping(address => bool) public instances;
     function setInstance(address a, bool v) external { instances[a] = v; }
@@ -68,8 +74,7 @@ contract ERC404FactoryTest is Test {
         address indexed creator,
         string name,
         string symbol,
-        address indexed vault,
-        address hook
+        address indexed vault
     );
 
     function setUp() public {
@@ -179,27 +184,6 @@ contract ERC404FactoryTest is Test {
                 nftCount: DEFAULT_NFT_COUNT,
                 profileId: uint8(DEFAULT_PROFILE_ID),
                 vault: address(0), // no vault
-                name: "TestToken",
-                symbol: "TEST",
-                styleUri: ""
-            }),
-            "ipfs://metadata",
-            ERC404Factory.CreationTier.STANDARD
-        );
-        vm.stopPrank();
-    }
-
-    function test_createInstance_hookRequired() public {
-        MockVaultNoHook noHookVault = new MockVaultNoHook();
-        vm.deal(creator1, 1 ether);
-        vm.startPrank(creator1);
-        vm.expectRevert("Vault hook required");
-        factory.createInstance{value: INSTANCE_CREATION_FEE}(
-            IdentityParams({
-                owner: creator1,
-                nftCount: DEFAULT_NFT_COUNT,
-                profileId: uint8(DEFAULT_PROFILE_ID),
-                vault: address(noHookVault), // vault returns hook = address(0)
                 name: "TestToken",
                 symbol: "TEST",
                 styleUri: ""
@@ -406,7 +390,7 @@ contract ERC404FactoryTest is Test {
         vm.deal(creator1, 1 ether);
         vm.startPrank(creator1);
         vm.expectEmit(false, true, true, false);
-        emit InstanceCreated(address(0), creator1, "EventToken", "EVT", address(mockVault), address(mockHook));
+        emit InstanceCreated(address(0), creator1, "EventToken", "EVT", address(mockVault));
         factory.createInstance{value: INSTANCE_CREATION_FEE}(
             _identity("EventToken", "EVT", creator1),
             "ipfs://metadata",
@@ -796,8 +780,6 @@ contract ERC404FactoryTest is Test {
         ERC404BondingInstance inst = ERC404BondingInstance(payable(instance));
         assertEq(inst.MAX_SUPPLY(), 100 * 1e6 * 1e18);
         assertEq(inst.UNIT(), 1e6 * 1e18);
-        assertEq(inst.poolFee(), 3000);
-        assertEq(inst.tickSpacing(), 60);
         vm.stopPrank();
     }
 
@@ -903,6 +885,31 @@ contract ERC404FactoryTest is Test {
             ERC404Factory.CreationTier.STANDARD
         );
 
+        assertTrue(instance != address(0));
+    }
+
+    /// @dev A plain vault with no hook() function must be accepted after hook resolution is removed.
+    function test_createInstance_noHookRequired() public {
+        _setupStandardProfile();
+        // Deploy a minimal vault with no hook() function at all
+        address plainVault = address(new PlainVault());
+
+        vm.deal(creator1, 1 ether);
+        vm.prank(creator1);
+        // This must succeed — factory must not require a hook
+        address instance = factory.createInstance{value: INSTANCE_CREATION_FEE}(
+            IdentityParams({
+                owner: creator1,
+                nftCount: DEFAULT_NFT_COUNT,
+                profileId: uint8(DEFAULT_PROFILE_ID),
+                vault: plainVault,
+                name: "PlainVaultToken",
+                symbol: "PVT",
+                styleUri: ""
+            }),
+            "ipfs://metadata",
+            ERC404Factory.CreationTier.STANDARD
+        );
         assertTrue(instance != address(0));
     }
 }

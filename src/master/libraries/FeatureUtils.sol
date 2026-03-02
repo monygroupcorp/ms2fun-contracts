@@ -13,6 +13,9 @@ library FeatureUtils {
     bytes32 public constant BALANCE_MINT = keccak256("BALANCE_MINT");
     bytes32 public constant PORTFOLIO = keccak256("PORTFOLIO");
 
+    // Pluggable component tag categories (matched by ComponentRegistry)
+    bytes32 public constant GATING = keccak256("gating");
+
     /**
      * @notice Check if a feature array contains a specific feature
      * @param features Array of feature IDs

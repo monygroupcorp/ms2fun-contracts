@@ -113,7 +113,6 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
     function test_FactoryCreation() public {
         // Factory should have been created with mock registry
         assertEq(address(factory.instanceTemplate()), mockInstanceTemplate);
-        assertEq(factory.instanceCreationFee(), 0.01 ether);
     }
 
     function test_CreateInstance() public {
@@ -138,19 +137,20 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
         vm.stopPrank();
     }
 
-    function test_CreateInstance_InsufficientFee() public {
+    function test_CreateInstance_NoFeeRequired() public {
         vm.deal(creator, 1 ether);
         vm.startPrank(creator);
-        
-        vm.expectRevert("Insufficient fee");
-        factory.createInstance{value: 0.001 ether}(
+
+        // No fee required for STANDARD tier (no featured placement)
+        address instance = factory.createInstance{value: 0}(
             "Test Collection",
             "ipfs://test",
             creator,
             address(vault),
             "" // styleUri
         );
-        
+        assertTrue(instance != address(0));
+
         vm.stopPrank();
     }
 
@@ -864,7 +864,8 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
         uint256 factoryBalance = address(factory).balance;
         assertEq(factoryBalance, 0.01 ether);
 
-        // All creation fees go to protocol
+        // All creation fees go to protocol (no creator split)
+        assertEq(factory.accumulatedProtocolFees(), 0.01 ether);
         factory.withdrawProtocolFees();
         assertEq(factory.accumulatedProtocolFees(), 0);
         assertEq(treasury.balance, 0.01 ether);
@@ -947,7 +948,6 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
         vm.startPrank(owner);
 
         ERC1155Factory.TierConfig memory config = ERC1155Factory.TierConfig({
-            fee: 0.05 ether,
             featuredDuration: 7 days,
             featuredRankBoost: 10,
             badge: PromotionBadges.BadgeType.NONE,
@@ -956,10 +956,9 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
 
         factory.setTierConfig(ERC1155Factory.CreationTier.PREMIUM, config);
 
-        (uint256 fee, uint256 featuredDuration, uint256 featuredRankBoost, PromotionBadges.BadgeType badge, uint256 badgeDuration) =
+        (uint256 featuredDuration, uint256 featuredRankBoost, PromotionBadges.BadgeType badge, uint256 badgeDuration) =
             factory.tierConfigs(ERC1155Factory.CreationTier.PREMIUM);
 
-        assertEq(fee, 0.05 ether);
         assertEq(featuredDuration, 7 days);
         assertEq(featuredRankBoost, 10);
         assertEq(uint256(badge), uint256(PromotionBadges.BadgeType.NONE));
@@ -968,28 +967,10 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
         vm.stopPrank();
     }
 
-    function test_setTierConfig_revertZeroFee() public {
-        vm.startPrank(owner);
-
-        ERC1155Factory.TierConfig memory config = ERC1155Factory.TierConfig({
-            fee: 0,
-            featuredDuration: 0,
-            featuredRankBoost: 0,
-            badge: PromotionBadges.BadgeType.NONE,
-            badgeDuration: 0
-        });
-
-        vm.expectRevert("Fee must be positive");
-        factory.setTierConfig(ERC1155Factory.CreationTier.PREMIUM, config);
-
-        vm.stopPrank();
-    }
-
     function test_setTierConfig_revertNonOwner() public {
         vm.startPrank(creator);
 
         ERC1155Factory.TierConfig memory config = ERC1155Factory.TierConfig({
-            fee: 0.05 ether,
             featuredDuration: 0,
             featuredRankBoost: 0,
             badge: PromotionBadges.BadgeType.NONE,
@@ -1003,11 +984,11 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
     }
 
     function test_createInstance_standardTierBackwardCompat() public {
-        // Old createInstance signature should still work
+        // Old createInstance signature should still work (no fee required)
         vm.deal(creator, 1 ether);
         vm.startPrank(creator);
 
-        address instance = factory.createInstance{value: 0.01 ether}(
+        address instance = factory.createInstance{value: 0}(
             "Standard Collection",
             "ipfs://test",
             creator,
@@ -1025,7 +1006,6 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
         factory.setTierConfig(
             ERC1155Factory.CreationTier.PREMIUM,
             ERC1155Factory.TierConfig({
-                fee: 0.05 ether,
                 featuredDuration: 0,
                 featuredRankBoost: 0,
                 badge: PromotionBadges.BadgeType.NONE,
@@ -1037,7 +1017,7 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
         vm.deal(creator, 1 ether);
         vm.startPrank(creator);
 
-        address instance = factory.createInstance{value: 0.05 ether}(
+        address instance = factory.createInstance{value: 0}(
             "Premium Collection",
             "ipfs://test",
             creator,
@@ -1047,47 +1027,16 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
         );
 
         assertTrue(instance != address(0), "Premium tier should create instance");
-        assertEq(address(factory).balance, 0.05 ether, "Factory should hold premium fee");
 
         vm.stopPrank();
     }
 
-    function test_createInstance_premiumTier_insufficientFee() public {
-        vm.startPrank(owner);
-        factory.setTierConfig(
-            ERC1155Factory.CreationTier.PREMIUM,
-            ERC1155Factory.TierConfig({
-                fee: 0.05 ether,
-                featuredDuration: 0,
-                featuredRankBoost: 0,
-                badge: PromotionBadges.BadgeType.NONE,
-                badgeDuration: 0
-            })
-        );
-        vm.stopPrank();
-
+    function test_createInstance_tierNotConfigured_nowSucceeds() public {
+        // LAUNCH tier with no config has 0 featuredCost → should succeed (no revert)
         vm.deal(creator, 1 ether);
         vm.startPrank(creator);
 
-        vm.expectRevert("Insufficient fee");
-        factory.createInstance{value: 0.01 ether}(
-            "Premium Collection",
-            "ipfs://test",
-            creator,
-            address(vault),
-            "",
-            ERC1155Factory.CreationTier.PREMIUM
-        );
-
-        vm.stopPrank();
-    }
-
-    function test_createInstance_tierNotConfigured() public {
-        vm.deal(creator, 1 ether);
-        vm.startPrank(creator);
-
-        vm.expectRevert("Tier not configured");
-        factory.createInstance{value: 0.1 ether}(
+        address instance = factory.createInstance{value: 0}(
             "Launch Collection",
             "ipfs://test",
             creator,
@@ -1095,6 +1044,7 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
             "",
             ERC1155Factory.CreationTier.LAUNCH
         );
+        assertTrue(instance != address(0), "Unconfigured tier should succeed (free)");
 
         vm.stopPrank();
     }
@@ -1104,7 +1054,6 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
         factory.setTierConfig(
             ERC1155Factory.CreationTier.PREMIUM,
             ERC1155Factory.TierConfig({
-                fee: 0.05 ether,
                 featuredDuration: 0,
                 featuredRankBoost: 0,
                 badge: PromotionBadges.BadgeType.NONE,
@@ -1128,7 +1077,8 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
         );
         vm.stopPrank();
 
-        assertEq(creator.balance, balanceBefore - 0.05 ether, "Excess should be refunded");
+        // All sent ETH is accumulated as protocol fees (no refund since no featured cost)
+        assertEq(factory.accumulatedProtocolFees(), sent, "All sent ETH accumulated as protocol fees");
     }
 
     function test_createInstance_gracefulDegradation_noQueueOrBadges() public {
@@ -1136,7 +1086,6 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
         factory.setTierConfig(
             ERC1155Factory.CreationTier.LAUNCH,
             ERC1155Factory.TierConfig({
-                fee: 0.1 ether,
                 featuredDuration: 14 days,
                 featuredRankBoost: 5,
                 badge: PromotionBadges.BadgeType.HIGHLIGHT,
@@ -1148,8 +1097,8 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
         vm.deal(creator, 1 ether);
         vm.startPrank(creator);
 
-        // Should succeed — perks are skipped when contracts not set
-        address instance = factory.createInstance{value: 0.1 ether}(
+        // Should succeed — perks are skipped when contracts not set (featuredCost = 0 since no queue manager)
+        address instance = factory.createInstance{value: 0}(
             "Launch Collection",
             "ipfs://test",
             creator,
@@ -1172,7 +1121,6 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
         factory.setTierConfig(
             ERC1155Factory.CreationTier.LAUNCH,
             ERC1155Factory.TierConfig({
-                fee: 0.1 ether,
                 featuredDuration: 0,
                 featuredRankBoost: 0,
                 badge: PromotionBadges.BadgeType.HIGHLIGHT,
@@ -1184,7 +1132,7 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
         vm.deal(creator, 1 ether);
         vm.startPrank(creator);
 
-        address instance = factory.createInstance{value: 0.1 ether}(
+        address instance = factory.createInstance{value: 0}(
             "Badge Collection",
             "ipfs://test",
             creator,
@@ -1212,7 +1160,7 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
 
         vm.deal(artist, 1 ether);
         vm.prank(artist);
-        instance = factory.createInstance{value: factory.instanceCreationFee()}(
+        instance = factory.createInstance{value: 0}(
             "GatedProject",
             "ipfs://Qm",
             artist,
@@ -1301,10 +1249,9 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
         address unapprovedModule = address(0xBAD);
 
         vm.deal(artist, 1 ether);
-        uint256 fee = factory.instanceCreationFee();
         vm.prank(artist);
         vm.expectRevert("Unapproved component");
-        factory.createInstance{value: fee}(
+        factory.createInstance{value: 0}(
             "TestProject",
             "ipfs://Qm",
             artist,
@@ -1322,7 +1269,7 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
 
         vm.deal(artist, 1 ether);
         vm.prank(artist);
-        address instance = factory.createInstance{value: factory.instanceCreationFee()}(
+        address instance = factory.createInstance{value: 0}(
             "GatedProject",
             "ipfs://Qm",
             artist,
@@ -1338,7 +1285,7 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
     function test_factory_createInstance_noGating_backwardCompat() public {
         vm.deal(artist, 1 ether);
         vm.prank(artist);
-        address instance = factory.createInstance{value: factory.instanceCreationFee()}(
+        address instance = factory.createInstance{value: 0}(
             "OpenProject",
             "ipfs://Qm",
             artist,
@@ -1352,7 +1299,7 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
     function test_factory_addEdition_withOpenTime() public {
         vm.deal(artist, 1 ether);
         vm.prank(artist);
-        address instance = factory.createInstance{value: factory.instanceCreationFee()}(
+        address instance = factory.createInstance{value: 0}(
             "Project",
             "ipfs://Qm",
             artist,

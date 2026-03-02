@@ -14,7 +14,6 @@ import {IGlobalMessageRegistry} from "../../registry/interfaces/IGlobalMessageRe
 import {IInstanceLifecycle, TYPE_ERC404, STATE_BONDING, STATE_PAUSED, STATE_GRADUATED} from "../../interfaces/IInstanceLifecycle.sol";
 import {ZAMMLiquidityDeployerModule} from "./ZAMMLiquidityDeployerModule.sol";
 import {IGatingModule} from "../../gating/IGatingModule.sol";
-import {Currency} from "v4-core/types/Currency.sol";
 
 // ── Errors ────────────────────────────────────────────────────────────────────
 error AlreadyInitialized();
@@ -46,32 +45,10 @@ error TransactionExpired();
 error AmountMustBePositive();
 error InvalidRefund();
 error NotGraduated();
-error ZeroAccumulatedTax();
-
-interface IZAMM_Swap {
-    struct PoolKey {
-        uint256 id0;
-        uint256 id1;
-        address token0;
-        address token1;
-        uint256 feeOrHook;
-    }
-
-    function swapExactIn(
-        PoolKey calldata poolKey,
-        uint256 amountIn,
-        uint256 amountOutMin,
-        bool zeroForOne,
-        address to,
-        uint256 deadline
-    ) external returns (uint256 amountOut);
-}
 
 /**
  * @title ERC404ZAMMBondingInstance
  * @notice ERC404 bonding token that graduates into a ZAMM pool.
- *         Post-graduation, transfer taxes on ZAMM swaps accumulate in this contract
- *         and are swept to the vault via sweepTax().
  */
 contract ERC404ZAMMBondingInstance is DN404, Ownable, ReentrancyGuard, IInstanceLifecycle {
 
@@ -129,16 +106,12 @@ contract ERC404ZAMMBondingInstance is DN404, Ownable, ReentrancyGuard, IInstance
     ZAMMLiquidityDeployerModule public liquidityDeployer;
     CurveParamsComputer public curveComputer;
 
-    // ── Graduation / Tax state ─────────────────────────────────────────────────
+    // ── Graduation state ───────────────────────────────────────────────────────
     bool public graduated;
     address public zamm;                     // ZAMM singleton address (set at graduation)
     ZAMMLiquidityDeployerModule.ZAMMPoolKey public zammPoolKey; // pool key (set at graduation)
     uint256 public zammPoolId;              // keccak256(abi.encode(zammPoolKey))
     bool public tokenIsZero;               // whether this token is token0 in the ZAMM pool
-    uint256 public taxBps;                 // transfer tax bps (set at graduation from factory)
-    uint256 public accumulatedTax;         // tax tokens sitting in this contract
-
-    mapping(address => bool) public transferExempt;
 
     // ── Events ────────────────────────────────────────────────────────────────
     event BondingSale(address indexed user, uint256 amount, uint256 cost, bool isBuy);
@@ -146,7 +119,6 @@ contract ERC404ZAMMBondingInstance is DN404, Ownable, ReentrancyGuard, IInstance
     event BondingMaturityTimeSet(uint256 maturityTime);
     event BondingActiveChanged(bool active);
     event LiquidityDeployed(address indexed zamm, uint256 amountToken, uint256 amountETH);
-    event TaxSwept(uint256 tokenAmount, uint256 ethReceived);
     event BondingFeePaid(address indexed buyer, uint256 feeAmount);
 
     // ── Constructor ───────────────────────────────────────────────────────────
@@ -352,14 +324,12 @@ contract ERC404ZAMMBondingInstance is DN404, Ownable, ReentrancyGuard, IInstance
     /**
      * @notice Deploy ZAMM liquidity. Permissionless when curve is full or matured;
      *         owner-only otherwise.
-     * @param _zamm   ZAMM singleton address
+     * @param _zamm       ZAMM singleton address
      * @param _feeOrHook  ZAMM pool feeOrHook config (e.g. 30 = 0.3%)
-     * @param _taxBps Post-graduation transfer tax in bps (e.g. 100 = 1%)
      */
     function deployLiquidity(
         address _zamm,
-        uint256 _feeOrHook,
-        uint256 _taxBps
+        uint256 _feeOrHook
     ) external nonReentrant returns (uint256 lpMinted) {
         if (bondingOpenTime == 0) revert BondingNotConfigured();
         if (block.timestamp < bondingOpenTime) revert TooEarly();
@@ -395,88 +365,14 @@ contract ERC404ZAMMBondingInstance is DN404, Ownable, ReentrancyGuard, IInstance
         ZAMMLiquidityDeployerModule.ZAMMPoolKey memory poolKey;
         (poolKey, lpMinted) = liquidityDeployer.deployLiquidity{value: ethToSend}(p);
 
-        // Store graduation state
         graduated = true;
         zamm = _zamm;
         zammPoolKey = poolKey;
         zammPoolId = uint256(keccak256(abi.encode(poolKey)));
         tokenIsZero = poolKey.token0 == address(this);
-        taxBps = _taxBps;
-
-        // Set transfer exemptions
-        transferExempt[address(this)] = true;
-        transferExempt[address(liquidityDeployer)] = true;
-        transferExempt[address(vault)] = true;
 
         emit LiquidityDeployed(_zamm, LIQUIDITY_RESERVE, ethToSend);
         emit StateChanged(STATE_GRADUATED);
-    }
-
-    // ── Transfer tax ──────────────────────────────────────────────────────────────
-
-    /**
-     * @dev Override DN404 _transfer to apply ZAMM swap tax post-graduation.
-     *      Tax fires when from == zamm (buy) or to == zamm (sell),
-     *      unless either party is in transferExempt.
-     */
-    function _transfer(address from, address to, uint256 amount) internal override {
-        if (
-            graduated &&
-            (from == zamm || to == zamm) &&
-            !transferExempt[from] &&
-            !transferExempt[to] &&
-            amount > 0
-        ) {
-            uint256 taxAmount = (amount * taxBps) / 10000;
-            if (taxAmount > 0) {
-                accumulatedTax += taxAmount;
-                super._transfer(from, address(this), taxAmount);
-                super._transfer(from, to, amount - taxAmount);
-                return;
-            }
-        }
-        super._transfer(from, to, amount);
-    }
-
-    /**
-     * @notice Swap accumulated tax tokens → ETH → vault.receiveContribution().
-     *         Public, no reward. Frontend surfaces this as "sweep for better price".
-     */
-    function sweepTax() external nonReentrant {
-        uint256 toSwap = accumulatedTax;
-        if (toSwap == 0) return;
-        accumulatedTax = 0;
-
-        // Approve ZAMM to pull our tax tokens
-        _approve(address(this), zamm, toSwap);
-
-        // zeroForOne: selling our token → ETH
-        // If tokenIsZero, selling token0 → token1(ETH): zeroForOne = true
-        // If !tokenIsZero, selling token1(this) → token0(ETH): zeroForOne = false
-        bool zeroForOne = tokenIsZero;
-
-        IZAMM_Swap.PoolKey memory pk = IZAMM_Swap.PoolKey({
-            id0: zammPoolKey.id0,
-            id1: zammPoolKey.id1,
-            token0: zammPoolKey.token0,
-            token1: zammPoolKey.token1,
-            feeOrHook: zammPoolKey.feeOrHook
-        });
-
-        uint256 ethReceived = IZAMM_Swap(zamm).swapExactIn(
-            pk,
-            toSwap,
-            0,              // no slippage protection (tax sweep, small amounts)
-            zeroForOne,
-            address(this),  // ETH lands here
-            type(uint256).max
-        );
-
-        if (ethReceived > 0) {
-            vault.receiveContribution{value: ethReceived}(Currency.wrap(address(0)), ethReceived, address(this));
-        }
-
-        emit TaxSwept(toSwap, ethReceived);
     }
 
     // ── IInstanceLifecycle ────────────────────────────────────────────────────

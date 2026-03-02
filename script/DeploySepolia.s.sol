@@ -29,8 +29,6 @@ import {PromotionBadges} from "../src/promotion/PromotionBadges.sol";
 import {ERC404CypherFactory} from "../src/factories/erc404cypher/ERC404CypherFactory.sol";
 import {ERC404CypherBondingInstance} from "../src/factories/erc404cypher/ERC404CypherBondingInstance.sol";
 import {CypherLiquidityDeployerModule} from "../src/factories/erc404cypher/CypherLiquidityDeployerModule.sol";
-import {CypherAlignmentVault} from "../src/vaults/cypher/CypherAlignmentVault.sol";
-import {CypherAlignmentVaultFactory} from "../src/vaults/cypher/CypherAlignmentVaultFactory.sol";
 import {MockSafe} from "../test/mocks/MockSafe.sol";
 import {MockERC20} from "../test/mocks/MockERC20.sol";
 
@@ -82,8 +80,6 @@ contract DeploySepolia is Script {
     ERC721AuctionFactory public erc721Factory;
     ERC404CypherFactory public erc404CypherFactory;
     CypherLiquidityDeployerModule public cypherLiquidityDeployer;
-    CypherAlignmentVaultFactory public cypherVaultFactory;
-
     PromotionBadges public promotionBadges;
 
     function run() public {
@@ -258,7 +254,7 @@ contract DeploySepolia is Script {
         // Phase 5: ERC404Factory
         ERC404BondingInstance erc404Impl = new ERC404BondingInstance();
         ERC404StakingModule erc404StakingModule = new ERC404StakingModule(masterRegistry);
-        LiquidityDeployerModule erc404LiquidityDeployer = new LiquidityDeployerModule();
+        LiquidityDeployerModule erc404LiquidityDeployer = new LiquidityDeployerModule(3000, 60);
         launchManager = new LaunchManager(deployer);
         curveParamsComputer = new CurveParamsComputer(deployer);
         erc404Factory = new ERC404Factory(
@@ -307,8 +303,6 @@ contract DeploySepolia is Script {
     }
 
     function _deployCypherFactory(address deployer, address weth) private {
-        CypherAlignmentVault cypherVaultImpl = new CypherAlignmentVault();
-        cypherVaultFactory = new CypherAlignmentVaultFactory(address(cypherVaultImpl));
         cypherLiquidityDeployer = new CypherLiquidityDeployerModule();
 
         ERC404CypherBondingInstance erc404CypherImpl = new ERC404CypherBondingInstance();
@@ -316,7 +310,6 @@ contract DeploySepolia is Script {
             ERC404CypherFactory.CoreConfig({
                 implementation: address(erc404CypherImpl),
                 masterRegistry: masterRegistry,
-                vaultFactory: address(cypherVaultFactory),
                 liquidityDeployer: address(cypherLiquidityDeployer),
                 algebraFactory: vm.envOr("ALGEBRA_FACTORY",  SEPOLIA_ALGEBRA_FACTORY),
                 positionManager: vm.envOr("POSITION_MANAGER", SEPOLIA_POSITION_MANAGER),
@@ -363,7 +356,6 @@ contract DeploySepolia is Script {
         console.log("ERC721AuctionFactory:", address(erc721Factory));
         console.log("ERC404CypherFactory:", address(erc404CypherFactory));
         console.log("CypherLiquidityDeployer:", address(cypherLiquidityDeployer));
-        console.log("CypherVaultFactory:", address(cypherVaultFactory));
         console.log("PromotionBadges:", address(promotionBadges));
         console.log("");
         console.log("=== POST-DEPLOY CHECKLIST ===");

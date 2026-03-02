@@ -119,7 +119,7 @@ contract FactoryInstanceIndexingTest is Test {
         assertEq(info.displayTitle, "Featured Factory");
         assertEq(info.metadataURI, "https://example.com/featured.json");
         assertEq(info.features.length, 3);
-        assertEq(info.creator, owner); // Creator stores protocol() address since creator() was removed
+        assertEq(info.creator, address(0)); // Creator field unused (set to address(0))
         assertTrue(info.active);
         assertGt(info.registeredAt, 0);
     }
