@@ -5,19 +5,21 @@ import {Test} from "forge-std/Test.sol";
 import {ZAMMLiquidityDeployerModule} from "../../../src/factories/erc404zamm/ZAMMLiquidityDeployerModule.sol";
 import {MockZAMM} from "../../mocks/MockZAMM.sol";
 import {MockERC20} from "../../mocks/MockERC20.sol";
+import {MockVault} from "../../mocks/MockVault.sol";
 
 contract ZAMMLiquidityDeployerModuleTest is Test {
     ZAMMLiquidityDeployerModule module;
     MockZAMM zamm;
     MockERC20 token;
+    MockVault vault;
 
     address treasury = address(0xBEEF);
-    address factoryCreator = address(0xCAFE);
     address instance = address(0xDEAD);
 
     function setUp() public {
         zamm = new MockZAMM();
         token = new MockERC20("Test", "TST");
+        vault = new MockVault();
         module = new ZAMMLiquidityDeployerModule();
     }
 
@@ -31,11 +33,8 @@ contract ZAMMLiquidityDeployerModuleTest is Test {
         ZAMMLiquidityDeployerModule.DeployParams memory p = ZAMMLiquidityDeployerModule.DeployParams({
             ethReserve: ethReserve,
             tokenReserve: tokenReserve,
-            graduationFeeBps: 200,   // 2%
-            creatorGraduationFeeBps: 50, // 0.5%
-            polBps: 0,
             protocolTreasury: treasury,
-            factoryCreator: factoryCreator,
+            vault: address(vault),
             token: address(token),
             instance: instance,
             zamm: address(zamm),
@@ -50,11 +49,11 @@ contract ZAMMLiquidityDeployerModuleTest is Test {
         assertEq(poolKey.feeOrHook, 30);
         assertGt(liquidity, 0);
 
-        // Graduation fees paid
-        uint256 expectedGradFee = (ethReserve * 200) / 10000;
-        uint256 expectedCreatorCut = (ethReserve * 50) / 10000;
-        assertEq(treasury.balance, expectedGradFee - expectedCreatorCut);
-        assertEq(factoryCreator.balance, expectedCreatorCut);
+        // Fixed 1/19/80 split
+        uint256 expectedProtocolFee = ethReserve / 100;
+        uint256 expectedVaultCut    = (ethReserve * 19) / 100;
+        assertEq(treasury.balance, expectedProtocolFee, "Protocol should receive 1%");
+        assertEq(address(vault).balance, expectedVaultCut, "Vault should receive 19%");
     }
 
     function test_deployLiquidity_revertsOnETHMismatch() public {
@@ -62,11 +61,8 @@ contract ZAMMLiquidityDeployerModuleTest is Test {
         ZAMMLiquidityDeployerModule.DeployParams memory p = ZAMMLiquidityDeployerModule.DeployParams({
             ethReserve: 10 ether,
             tokenReserve: 1000 ether,
-            graduationFeeBps: 200,
-            creatorGraduationFeeBps: 0,
-            polBps: 0,
             protocolTreasury: treasury,
-            factoryCreator: factoryCreator,
+            vault: address(vault),
             token: address(token),
             instance: instance,
             zamm: address(zamm),

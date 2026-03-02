@@ -197,8 +197,6 @@ contract DeploySepolia is Script {
             weth,
             poolManager,
             address(testToken),
-            deployer,       // factoryCreator
-            100,            // creatorYieldCutBps (1%)
             SEPOLIA_ZROUTER,
             ZROUTER_FEE,
             ZROUTER_TICK_SPACING,
@@ -270,10 +268,7 @@ contract DeploySepolia is Script {
                 instanceTemplate: address(0),
                 v4PoolManager: poolManager,
                 weth: weth,
-                protocol: deployer,
-                creator: deployer,
-                creatorFeeBps: 500,
-                creatorGraduationFeeBps: 100
+                protocol: deployer
             }),
             ERC404Factory.ModuleConfig({
                 stakingModule: address(erc404StakingModule),
@@ -297,13 +292,13 @@ contract DeploySepolia is Script {
 
         // Phase 5: ERC1155Factory
         erc1155Factory = new ERC1155Factory(
-            masterRegistry, address(0), deployer, 500, address(globalMessageRegistry), address(0)
+            masterRegistry, address(0), address(globalMessageRegistry), address(0)
         );
         erc1155Factory.setProtocolTreasury(address(treasury));
 
         // Phase 5: ERC721AuctionFactory
         erc721Factory = new ERC721AuctionFactory(
-            masterRegistry, deployer, 500, address(globalMessageRegistry)
+            masterRegistry, address(globalMessageRegistry)
         );
         erc721Factory.setProtocolTreasury(address(treasury));
 
@@ -330,9 +325,6 @@ contract DeploySepolia is Script {
                 protocol: deployer
             }),
             ERC404CypherFactory.ModuleConfig({
-                creator: deployer,
-                creatorFeeBps: 500,
-                creatorGraduationFeeBps: 100,
                 globalMessageRegistry: address(globalMessageRegistry),
                 curveComputer: address(curveParamsComputer),
                 tierGatingModule: address(0),

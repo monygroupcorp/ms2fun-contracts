@@ -107,8 +107,9 @@ contract ERC1155Instance is Ownable, ReentrancyGuard, IInstanceLifecycle {
 
     event Withdrawn(
         address indexed creator,
-        uint256 amount,
-        uint256 taxAmount
+        uint256 artistAmount,
+        uint256 vaultCut,
+        uint256 protocolCut
     );
 
     event EditionMetadataUpdated(uint256 indexed editionId, string metadataURI);
@@ -349,8 +350,8 @@ contract ERC1155Instance is Ownable, ReentrancyGuard, IInstanceLifecycle {
     // └─────────────────────────┘
 
     /**
-     * @notice Withdraw proceeds (20% tithe to vault)
-     * @dev Sends 20% tithe to vault for alignment target conversion and project tracking
+     * @notice Withdraw proceeds (1% protocol, 19% vault, 80% artist)
+     * @dev Applies 1/19/80 split: protocol treasury, alignment vault, artist
      * @param amount Amount to withdraw
      */
     function withdraw(uint256 amount) external nonReentrant {
@@ -358,18 +359,23 @@ contract ERC1155Instance is Ownable, ReentrancyGuard, IInstanceLifecycle {
         require(amount > 0, "Invalid amount");
         require(amount <= address(this).balance, "Insufficient balance");
 
-        // Calculate tithe (20%)
-        uint256 taxAmount = (amount * 20) / 100;
-        uint256 ownerAmount = amount - taxAmount;
+        // 1/19/80 split
+        uint256 protocolCut = amount / 100;                    // 1%
+        uint256 vaultCut    = (amount * 19) / 100;             // 19%
+        uint256 ownerAmount = amount - protocolCut - vaultCut; // ~80%
 
-        // Send tithe to vault via explicit attribution path
-        // Uses receiveContribution() so the vault tracks this instance as the benefactor
-        vault.receiveContribution{value: taxAmount}(Currency.wrap(address(0)), taxAmount, address(this));
+        // Protocol cut to treasury
+        if (protocolCut > 0 && protocolTreasury != address(0)) {
+            SafeTransferLib.safeTransferETH(protocolTreasury, protocolCut);
+        }
 
-        // Transfer remainder to owner
+        // Vault cut — tracks this instance as benefactor
+        vault.receiveContribution{value: vaultCut}(Currency.wrap(address(0)), vaultCut, address(this));
+
+        // Transfer remainder to artist
         SafeTransferLib.safeTransferETH(owner(), ownerAmount);
 
-        emit Withdrawn(owner(), ownerAmount, taxAmount);
+        emit Withdrawn(owner(), ownerAmount, vaultCut, protocolCut);
     }
 
     /**

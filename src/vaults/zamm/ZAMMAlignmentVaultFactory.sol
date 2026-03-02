@@ -12,7 +12,7 @@ contract ZAMMAlignmentVaultFactory {
     address public immutable zRouter;
     address public immutable protocolTreasury;
 
-    event VaultDeployed(address indexed vault, address indexed alignmentToken, address indexed creator);
+    event VaultDeployed(address indexed vault, address indexed alignmentToken);
 
     constructor(address _zamm, address _zRouter, address _protocolTreasury) {
         zamm = _zamm;
@@ -24,14 +24,10 @@ contract ZAMMAlignmentVaultFactory {
     /// @notice Deploy a new ZAMM-backed vault clone
     /// @param alignmentToken The token this vault aligns to
     /// @param poolKey ZAMM pool key for the ETH/alignmentToken pool
-    /// @param factoryCreator Address receiving the creator yield cut
-    /// @param creatorYieldCutBps Creator yield cut in bps (max 500)
     /// @return vault Address of the deployed vault clone
     function deployVault(
         address alignmentToken,
-        IZAMM.PoolKey calldata poolKey,
-        address factoryCreator,
-        uint256 creatorYieldCutBps
+        IZAMM.PoolKey calldata poolKey
     ) external returns (address vault) {
         vault = LibClone.clone(vaultImplementation);
         ZAMMAlignmentVault(payable(vault)).initialize(
@@ -39,10 +35,8 @@ contract ZAMMAlignmentVaultFactory {
             zRouter,
             alignmentToken,
             poolKey,
-            factoryCreator,
-            creatorYieldCutBps,
             protocolTreasury
         );
-        emit VaultDeployed(vault, alignmentToken, factoryCreator);
+        emit VaultDeployed(vault, alignmentToken);
     }
 }

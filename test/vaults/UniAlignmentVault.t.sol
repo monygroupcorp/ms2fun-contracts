@@ -68,8 +68,6 @@ contract UniAlignmentVaultTest is Test {
             mockWETH,
             mockPoolManager,
             address(alignmentToken),
-            address(0xC1EA),
-            100,
             address(mockZRouter),
             3000,
             60,
@@ -121,7 +119,7 @@ contract UniAlignmentVaultTest is Test {
         TestableUniAlignmentVault v = _freshClone();
         vm.expectRevert("Invalid WETH");
         v.initialize(address(0), mockPoolManager,
-            address(alignmentToken), address(0xC1EA), 100,
+            address(alignmentToken),
             address(mockZRouter), 3000, 60,
             IVaultPriceValidator(address(mockValidator)));
     }
@@ -130,7 +128,7 @@ contract UniAlignmentVaultTest is Test {
         TestableUniAlignmentVault v = _freshClone();
         vm.expectRevert("Invalid pool manager");
         v.initialize(mockWETH, address(0),
-            address(alignmentToken), address(0xC1EA), 100,
+            address(alignmentToken),
             address(mockZRouter), 3000, 60,
             IVaultPriceValidator(address(mockValidator)));
     }
@@ -139,7 +137,7 @@ contract UniAlignmentVaultTest is Test {
         TestableUniAlignmentVault v = _freshClone();
         vm.expectRevert("Invalid alignment token");
         v.initialize(mockWETH, mockPoolManager,
-            address(0), address(0xC1EA), 100,
+            address(0),
             address(mockZRouter), 3000, 60,
             IVaultPriceValidator(address(mockValidator)));
     }
@@ -147,12 +145,12 @@ contract UniAlignmentVaultTest is Test {
     function test_Initialize_RevertsOnDoubleInit() public {
         TestableUniAlignmentVault v = _freshClone();
         v.initialize(mockWETH, mockPoolManager,
-            address(alignmentToken), address(0xC1EA), 100,
+            address(alignmentToken),
             address(mockZRouter), 3000, 60,
             IVaultPriceValidator(address(mockValidator)));
         vm.expectRevert("Already initialized");
         v.initialize(mockWETH, mockPoolManager,
-            address(alignmentToken), address(0xC1EA), 100,
+            address(alignmentToken),
             address(mockZRouter), 3000, 60,
             IVaultPriceValidator(address(mockValidator)));
     }
@@ -457,7 +455,7 @@ contract UniAlignmentVaultTest is Test {
         TestableUniAlignmentVault newVault = _freshClone();
         newVault.initialize(
             mockWETH, mockPoolManager,
-            address(alignmentToken), address(0xC1EA), 100,
+            address(alignmentToken),
             address(mockZRouter), 3000, 60,
             IVaultPriceValidator(address(mockValidator))
         );
@@ -1115,8 +1113,8 @@ contract UniAlignmentVaultTest is Test {
     event ProtocolTreasuryUpdated(address indexed newTreasury);
     event ProtocolFeesWithdrawn(uint256 amount);
 
-    function test_YieldCut_DefaultIs500Bps() public view {
-        assertEq(vault.protocolYieldCutBps(), 500, "Default yield cut should be 5%");
+    function test_YieldCut_DefaultIs100Bps() public view {
+        assertEq(vault.protocolYieldCutBps(), 100, "Default yield cut should be 1%");
     }
 
     function test_YieldCut_DepositFeesNotTaxed() public {
@@ -1323,7 +1321,7 @@ contract UniAlignmentVaultTest is Test {
         // Protocol treasury not set — fees should still accumulate
         // (withdrawable after treasury is set later)
         assertEq(vault.protocolTreasury(), address(0), "Treasury not set initially");
-        assertEq(vault.protocolYieldCutBps(), 500, "Default 5% cut");
+        assertEq(vault.protocolYieldCutBps(), 100, "Default 1% cut");
 
         // The yield cut math works regardless of treasury being set.
         // It accumulates in accumulatedProtocolFees and is only sent on withdrawal.

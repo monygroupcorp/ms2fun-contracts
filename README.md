@@ -10,13 +10,13 @@ Solidity contracts for the ms2.fun protocol — a curated launchpad for derivati
 4. **Users buy/mint** — fees flow to the vault
 5. **Vault converts fees** to the alignment token and deposits full-range V4 LP — creating permanent buying pressure and liquidity
 
-Every participant earns: vault factory creators get yield cuts, artists get project revenue + vault fee shares, the protocol treasury captures fees at every layer, and the aligned community benefits from buying pressure on their token.
+A single fee rule applies at every settlement: **1% protocol treasury, 19% alignment vault, 80% artist**. Artists contribute 20% toward the community they're aligned with and earn back vault LP yield proportional to their contributions over time.
 
 ## Repository Structure
 
 ```
 src/
-├── dao/                # GrandCentral (Moloch DAO) + StipendConductor
+├── dao/                # GrandCentral (Mol*** DAO) + StipendConductor
 ├── master/             # MasterRegistryV1 (UUPS), FeaturedQueueManager
 ├── factories/          # ERC404, ERC1155, ERC721 factories and instances
 ├── vaults/             # UltraAlignmentVault (share-based fee hub)
@@ -83,22 +83,22 @@ registry.registerVault(address(vault), "Remilia Vault", "ipfs://...", targetId);
 
 Fee equation:
 ```
-LP Yield → 5% protocol cut (includes factory creator sub-cut) + 95% benefactors
+LP Yield → 1% protocol cut + 99% benefactors (proportional to contributions)
 ```
 
 ### Factory System
 
 | Factory | Token Standard | Fee Model |
 |---------|---------------|-----------|
-| **ERC404 Bonding** | Hybrid ERC20/ERC721 | 1% bonding fee, 2% graduation fee, V4 hook swap tax |
-| **ERC1155 Edition** | ERC1155 multi-token | 20% tithe on artist withdrawals |
-| **ERC721 Auction** | ERC721 | Auction proceeds |
+| **ERC404 Bonding** | Hybrid ERC20/ERC721 | 1% bonding fee (in reserve), 1/19/80 at graduation, V4 hook swap tax → vault |
+| **ERC1155 Edition** | ERC1155 multi-token | 1% protocol + 19% vault + 80% artist on withdrawal |
+| **ERC721 Auction** | ERC721 | 1% protocol + 19% vault + 80% artist on settlement |
 
 All instances have an **immutable** vault reference set at construction.
 
 ### Governance (GrandCentral + Timelock)
 
-Moloch-pattern DAO governing the protocol through a Gnosis Safe with a 48-hour timelock:
+Mol***-pattern DAO governing the protocol through a Gnosis Safe with a 48-hour timelock:
 - **Shares** = voting power, **Loot** = non-voting economic rights
 - Proposal lifecycle: Submit → Sponsor → Vote → Grace → Process
 - **Timelock**: all owner-gated operations (upgrades, registrations, parameter changes) must pass through a 48-hour delay before execution — giving users a credible exit window
@@ -128,7 +128,7 @@ Moloch-pattern DAO governing the protocol through a Gnosis Safe with a 48-hour t
 ## Development
 
 ```bash
-# Run all tests (~840)
+# Run all tests (~1130)
 forge test
 
 # Run specific test suite

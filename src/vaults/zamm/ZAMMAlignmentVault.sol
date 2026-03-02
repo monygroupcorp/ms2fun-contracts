@@ -75,7 +75,6 @@ contract ZAMMAlignmentVault is IAlignmentVault, Ownable, ReentrancyGuard {
     // ── Errors ────────────────────────────────────────────────────────────
     error VaultAlreadyInitialized();
     error ETHOnly();
-    error CreatorCutTooHigh();
     error NoPendingETH();
     error NotDelegate();
     error ZeroContributions();
@@ -95,10 +94,7 @@ contract ZAMMAlignmentVault is IAlignmentVault, Ownable, ReentrancyGuard {
 
     // ── Protocol economics ────────────────────────────────────────────────
     address public protocolTreasury;
-    address public factoryCreator;
-    address public pendingFactoryCreator;
-    uint256 public protocolYieldCutBps;  // default 500 (5%)
-    uint256 public creatorYieldCutBps;   // max 500, sub-share of protocol cut
+    uint256 public protocolYieldCutBps;  // default 100 (1%)
 
     // ── Principal tracking ────────────────────────────────────────────────
     uint256 public principalETH;
@@ -118,9 +114,8 @@ contract ZAMMAlignmentVault is IAlignmentVault, Ownable, ReentrancyGuard {
     // ── Delegation ────────────────────────────────────────────────────────
     mapping(address => address) public _benefactorDelegate;
 
-    // ── Protocol / creator fee buckets ────────────────────────────────────
+    // ── Protocol fee bucket ───────────────────────────────────────────────
     uint256 public accumulatedProtocolFees;
-    uint256 public accumulatedCreatorFees;
 
     // ── Caller incentives ─────────────────────────────────────────────────
     uint256 public conversionReward;
@@ -136,12 +131,9 @@ contract ZAMMAlignmentVault is IAlignmentVault, Ownable, ReentrancyGuard {
         address _zRouter,
         address _alignmentToken,
         IZAMM.PoolKey calldata key,
-        address _factoryCreator,
-        uint256 _creatorYieldCutBps,
         address _protocolTreasury
     ) external {
         if (_initialized) revert VaultAlreadyInitialized();
-        if (_creatorYieldCutBps > 500) revert CreatorCutTooHigh();
         _initialized = true;
 
         zamm = _zamm;
@@ -150,10 +142,8 @@ contract ZAMMAlignmentVault is IAlignmentVault, Ownable, ReentrancyGuard {
         _poolKey = key;
         poolId = uint256(keccak256(abi.encode(key)));
 
-        factoryCreator = _factoryCreator;
-        creatorYieldCutBps = _creatorYieldCutBps;
         protocolTreasury = _protocolTreasury;
-        protocolYieldCutBps = 500;
+        protocolYieldCutBps = 100;
 
         _initializeOwner(msg.sender);
     }
@@ -309,11 +299,9 @@ contract ZAMMAlignmentVault is IAlignmentVault, Ownable, ReentrancyGuard {
         uint256 afterReward = feesCollected - reward;
 
         uint256 protocolCut = afterReward * protocolYieldCutBps / 10000;
-        uint256 creatorCut = afterReward * creatorYieldCutBps / 10000;
-        uint256 benefactorFees = afterReward - protocolCut - creatorCut;
+        uint256 benefactorFees = afterReward - protocolCut;
 
         accumulatedProtocolFees += protocolCut;
-        accumulatedCreatorFees += creatorCut;
 
         if (benefactorFees > 0 && totalContributions > 0) {
             accRewardPerContribution += benefactorFees * 1e18 / totalContributions;
@@ -412,27 +400,6 @@ contract ZAMMAlignmentVault is IAlignmentVault, Ownable, ReentrancyGuard {
         uint256 amount = accumulatedProtocolFees;
         accumulatedProtocolFees = 0;
         (bool ok,) = protocolTreasury.call{value: amount}("");
-        require(ok);
-    }
-
-    // ── Factory creator ───────────────────────────────────────────────────
-
-    function transferFactoryCreator(address newCreator) external {
-        require(msg.sender == factoryCreator);
-        pendingFactoryCreator = newCreator;
-    }
-
-    function acceptFactoryCreator() external {
-        require(msg.sender == pendingFactoryCreator);
-        factoryCreator = pendingFactoryCreator;
-        pendingFactoryCreator = address(0);
-    }
-
-    function withdrawCreatorFees() external {
-        require(msg.sender == factoryCreator);
-        uint256 amount = accumulatedCreatorFees;
-        accumulatedCreatorFees = 0;
-        (bool ok,) = factoryCreator.call{value: amount}("");
         require(ok);
     }
 

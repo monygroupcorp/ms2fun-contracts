@@ -20,7 +20,7 @@ contract UniAlignmentVaultFactoryTest is Test {
     MockZRouter public mockZRouter;
     MockVaultPriceValidator public mockPriceValidator;
 
-    event VaultDeployed(address indexed vault, address indexed alignmentToken, address indexed creator);
+    event VaultDeployed(address indexed vault, address indexed alignmentToken);
 
     function setUp() public {
         owner = address(this);
@@ -45,8 +45,6 @@ contract UniAlignmentVaultFactoryTest is Test {
     function test_deployVault_setsAlignmentToken() public {
         address vault = factory.deployVault(
             address(alignmentToken),
-            owner,
-            100,
             IVaultPriceValidator(address(0))
         );
 
@@ -56,8 +54,6 @@ contract UniAlignmentVaultFactoryTest is Test {
     function test_deployVault_usesFactoryZRouterConfig() public {
         address vault = factory.deployVault(
             address(alignmentToken),
-            owner,
-            100,
             IVaultPriceValidator(address(0))
         );
 
@@ -76,8 +72,6 @@ contract UniAlignmentVaultFactoryTest is Test {
 
         address vault = factory.deployVault(
             address(alignmentToken),
-            owner,
-            100,
             IVaultPriceValidator(address(customValidator))
         );
 
@@ -93,33 +87,25 @@ contract UniAlignmentVaultFactoryTest is Test {
 
         address vault1 = factory.deployVault(
             address(alignmentToken),
-            owner,
-            100,
             IVaultPriceValidator(address(0))
         );
 
         address vault2 = factory.deployVault(
             address(token2),
-            owner,
-            200,
             IVaultPriceValidator(address(0))
         );
 
         assertTrue(vault1 != vault2, "Vaults should be different addresses");
         assertEq(UniAlignmentVault(payable(vault1)).alignmentToken(), address(alignmentToken));
         assertEq(UniAlignmentVault(payable(vault2)).alignmentToken(), address(token2));
-        assertEq(UniAlignmentVault(payable(vault1)).creatorYieldCutBps(), 100);
-        assertEq(UniAlignmentVault(payable(vault2)).creatorYieldCutBps(), 200);
     }
 
     function test_deployVault_emitsVaultDeployed() public {
-        vm.expectEmit(false, true, true, false);
-        emit VaultDeployed(address(0), address(alignmentToken), owner);
+        vm.expectEmit(false, true, false, false);
+        emit VaultDeployed(address(0), address(alignmentToken));
 
         factory.deployVault(
             address(alignmentToken),
-            owner,
-            100,
             IVaultPriceValidator(address(0))
         );
     }

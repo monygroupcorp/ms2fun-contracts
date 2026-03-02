@@ -101,10 +101,6 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IInstanceLife
         address v4PoolManager;
         address weth;
         uint256 bondingFeeBps;
-        uint256 graduationFeeBps;
-        uint256 polBps;
-        address factoryCreator;
-        uint256 creatorGraduationFeeBps;
     }
 
 
@@ -138,12 +134,6 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IInstanceLife
     // Protocol revenue
     address public protocolTreasury;
     uint256 public bondingFeeBps;
-    uint256 public graduationFeeBps;
-    uint256 public polBps;
-
-    // Creator incentives (factory creator's share of graduation fee)
-    address public factoryCreator;
-    uint256 public creatorGraduationFeeBps;
 
     // Customization
     string public styleUri;
@@ -254,10 +244,6 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IInstanceLife
         weth = protocol.weth;
         protocolTreasury = protocol.protocolTreasury;
         bondingFeeBps = protocol.bondingFeeBps;
-        graduationFeeBps = protocol.graduationFeeBps;
-        polBps = protocol.polBps;
-        factoryCreator = protocol.factoryCreator;
-        creatorGraduationFeeBps = protocol.creatorGraduationFeeBps;
 
         stakingModule = ERC404StakingModule(protocol.stakingModule);
         liquidityDeployer = LiquidityDeployerModule(payable(protocol.liquidityDeployer));
@@ -668,11 +654,8 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IInstanceLife
         LiquidityDeployerModule.DeployParams memory p = LiquidityDeployerModule.DeployParams({
             ethReserve: ethToSend,
             tokenReserve: LIQUIDITY_RESERVE,
-            graduationFeeBps: graduationFeeBps,
-            creatorGraduationFeeBps: creatorGraduationFeeBps,
-            polBps: polBps,
             protocolTreasury: protocolTreasury,
-            factoryCreator: factoryCreator,
+            vault: address(vault),
             weth: weth,
             token: address(this),
             instance: address(this),

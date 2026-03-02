@@ -3,6 +3,8 @@ pragma solidity ^0.8.24;
 
 import {SafeTransferLib} from "solady/utils/SafeTransferLib.sol";
 import {IERC20} from "../../shared/interfaces/IERC20.sol";
+import {IAlignmentVault} from "../../interfaces/IAlignmentVault.sol";
+import {Currency} from "v4-core/types/Currency.sol";
 
 interface IZAMM {
     struct PoolKey {
@@ -42,11 +44,8 @@ contract ZAMMLiquidityDeployerModule {
     struct DeployParams {
         uint256 ethReserve;
         uint256 tokenReserve;
-        uint256 graduationFeeBps;
-        uint256 creatorGraduationFeeBps;
-        uint256 polBps;          // reserved for future use, pass 0
         address protocolTreasury;
-        address factoryCreator;
+        address vault;           // alignment vault (receives 19% of raise)
         address token;           // ERC404 token (instance address)
         address instance;        // same as token; LP recipient
         address zamm;            // ZAMM singleton
@@ -55,8 +54,8 @@ contract ZAMMLiquidityDeployerModule {
 
     struct PoolResult {
         uint256 ethForPool;
-        uint256 graduationFee;
-        uint256 creatorCut;
+        uint256 protocolFee;  // 1% of raise → protocol treasury
+        uint256 vaultCut;     // 19% of raise → alignment vault
         bool ethIsToken0;
         ZAMMPoolKey poolKey;
         uint256 liquidity;
@@ -64,7 +63,7 @@ contract ZAMMLiquidityDeployerModule {
 
     event LiquidityDeployed(address indexed zamm, address token0, address token1, uint256 liquidity);
     event GraduationFeePaid(address indexed treasury, uint256 amount);
-    event CreatorGraduationFeePaid(address indexed creator, uint256 amount);
+    event GraduationVaultContribution(address indexed vault, uint256 amount);
 
     /**
      * @notice Deploy ZAMM liquidity on behalf of an ERC404ZAMMBondingInstance.
@@ -86,15 +85,10 @@ contract ZAMMLiquidityDeployerModule {
     }
 
     function _deployPool(DeployParams calldata p) private returns (PoolResult memory r) {
-        // Compute fee splits
-        if (p.graduationFeeBps > 0 && p.protocolTreasury != address(0)) {
-            r.graduationFee = (p.ethReserve * p.graduationFeeBps) / 10000;
-            if (p.creatorGraduationFeeBps > 0 && p.factoryCreator != address(0)) {
-                r.creatorCut = (p.ethReserve * p.creatorGraduationFeeBps) / 10000;
-                if (r.creatorCut > r.graduationFee) r.creatorCut = r.graduationFee;
-            }
-        }
-        r.ethForPool = p.ethReserve - r.graduationFee;
+        // Fixed 1/19/80 split: 1% protocol, 19% vault, 80% LP
+        r.protocolFee = p.ethReserve / 100;
+        r.vaultCut    = (p.ethReserve * 19) / 100;
+        r.ethForPool  = p.ethReserve - r.protocolFee - r.vaultCut;
         require(r.ethForPool > 0, "No ETH for pool");
         require(p.tokenReserve > 0, "No tokens for pool");
 
@@ -124,16 +118,17 @@ contract ZAMMLiquidityDeployerModule {
     }
 
     function _payFees(DeployParams calldata p, PoolResult memory r) private {
-        if (r.graduationFee > 0) {
-            uint256 protocolCut = r.graduationFee - r.creatorCut;
-            if (protocolCut > 0) {
-                SafeTransferLib.safeTransferETH(p.protocolTreasury, protocolCut);
-                emit GraduationFeePaid(p.protocolTreasury, protocolCut);
-            }
-            if (r.creatorCut > 0) {
-                SafeTransferLib.safeTransferETH(p.factoryCreator, r.creatorCut);
-                emit CreatorGraduationFeePaid(p.factoryCreator, r.creatorCut);
-            }
+        // 1% → protocol treasury
+        if (r.protocolFee > 0 && p.protocolTreasury != address(0)) {
+            SafeTransferLib.safeTransferETH(p.protocolTreasury, r.protocolFee);
+            emit GraduationFeePaid(p.protocolTreasury, r.protocolFee);
+        }
+        // 19% → alignment vault
+        if (r.vaultCut > 0 && p.vault != address(0)) {
+            IAlignmentVault(payable(p.vault)).receiveContribution{value: r.vaultCut}(
+                Currency.wrap(address(0)), r.vaultCut, p.instance
+            );
+            emit GraduationVaultContribution(p.vault, r.vaultCut);
         }
         emit LiquidityDeployed(p.zamm, r.poolKey.token0, r.poolKey.token1, r.liquidity);
     }

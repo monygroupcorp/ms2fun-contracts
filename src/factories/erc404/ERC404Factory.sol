@@ -32,7 +32,6 @@ interface IUniAlignmentVaultV1 {
  */
 contract ERC404Factory is OwnableRoles, ReentrancyGuard, IFactory {
     uint256 public constant PROTOCOL_ROLE = _ROLE_0;  // 1 << 0 = 1
-    uint256 public constant CREATOR_ROLE = _ROLE_1;   // 1 << 1 = 2
 
     /// @dev Packs constructor params into structs to stay within the 16-local Yul stack limit.
     struct CoreConfig {
@@ -42,9 +41,6 @@ contract ERC404Factory is OwnableRoles, ReentrancyGuard, IFactory {
         address v4PoolManager;
         address weth;
         address protocol;
-        address creator;
-        uint256 creatorFeeBps;
-        uint256 creatorGraduationFeeBps;
     }
     struct ModuleConfig {
         address stakingModule;
@@ -53,28 +49,19 @@ contract ERC404Factory is OwnableRoles, ReentrancyGuard, IFactory {
         address launchManager;
         address curveComputer;
         address tierGatingModule;
-        address componentRegistry;   // NEW
+        address componentRegistry;
     }
 
     IMasterRegistry public masterRegistry;
     address public immutable globalMessageRegistry;
     address public instanceTemplate;
     address public implementation;
-    uint256 public instanceCreationFee;
     address public v4PoolManager;
     address public weth;
 
     // Protocol revenue
     address public protocolTreasury;
     uint256 public bondingFeeBps = 100; // 1% default
-    uint256 public graduationFeeBps = 200; // 2% default
-    uint256 public polBps = 100; // 1% default — protocol-owned liquidity
-
-    // Creator incentives
-    address public immutable creator;
-    uint256 public immutable creatorFeeBps;
-    uint256 public immutable creatorGraduationFeeBps;
-    uint256 public accumulatedCreatorFees;
     uint256 public accumulatedProtocolFees;
 
     // Modules
@@ -117,15 +104,11 @@ contract ERC404Factory is OwnableRoles, ReentrancyGuard, IFactory {
         address indexed vault,
         address hook
     );
-    event InstanceCreationFeeUpdated(uint256 newFee);
     event VaultCapabilityWarning(address indexed vault, bytes32 indexed capability);
     event ProtocolTreasuryUpdated(address indexed oldTreasury, address indexed newTreasury);
     event ProtocolFeesWithdrawn(address indexed treasury, uint256 amount);
-    event CreatorFeesWithdrawn(address indexed creator, uint256 amount);
     event BondingFeeUpdated(uint256 newBps);
-    event GraduationFeeUpdated(uint256 newBps);
-    event POLConfigUpdated(uint256 newBps);
-    event InstanceCreatedWithTier(address indexed instance, CreationTier tier, uint256 fee);
+    event InstanceCreatedWithTier(address indexed instance, CreationTier tier);
 
     constructor(CoreConfig memory core, ModuleConfig memory modules) {
         require(core.implementation != address(0), "Invalid implementation");
@@ -137,19 +120,12 @@ contract ERC404Factory is OwnableRoles, ReentrancyGuard, IFactory {
         require(modules.curveComputer != address(0), "Invalid curve computer");
         _initializeOwner(core.protocol);
         _grantRoles(core.protocol, PROTOCOL_ROLE);
-        _grantRoles(core.creator, CREATOR_ROLE);
-        require(core.creatorFeeBps <= 10000, "Invalid creator fee bps");
-        require(core.creatorGraduationFeeBps <= graduationFeeBps, "Creator grad fee exceeds graduation fee");
         implementation = core.implementation;
-        creator = core.creator;
-        creatorFeeBps = core.creatorFeeBps;
-        creatorGraduationFeeBps = core.creatorGraduationFeeBps;
         masterRegistry = IMasterRegistry(core.masterRegistry);
         globalMessageRegistry = modules.globalMessageRegistry;
         instanceTemplate = core.instanceTemplate;
         v4PoolManager = core.v4PoolManager;
         weth = core.weth;
-        instanceCreationFee = 0.01 ether;
         stakingModule = ERC404StakingModule(modules.stakingModule);
         liquidityDeployer = LiquidityDeployerModule(payable(modules.liquidityDeployer));
         launchManager = LaunchManager(modules.launchManager);
@@ -200,18 +176,8 @@ contract ERC404Factory is OwnableRoles, ReentrancyGuard, IFactory {
         address gatingModule,
         CreationTier creationTier
     ) internal returns (address instance) {
-        // Fee
-        uint256 fee = launchManager.getTierFee(
-            LaunchManager.CreationTier(uint8(creationTier)),
-            instanceCreationFee
-        );
-        require(msg.value >= fee, "Insufficient fee");
-        {
-            uint256 creatorCut = (fee * creatorFeeBps) / 10000;
-            uint256 protocolCut = fee - creatorCut;
-            accumulatedCreatorFees += creatorCut;
-            accumulatedProtocolFees += protocolCut;
-        }
+        // All payment goes to protocol
+        accumulatedProtocolFees += msg.value;
 
         // Validate identity
         require(identity.nftCount > 0, "Invalid NFT count");
@@ -249,7 +215,7 @@ contract ERC404Factory is OwnableRoles, ReentrancyGuard, IFactory {
         // gatingModule is pre-resolved — no _configureGating call needed
         _initializeInstance(instance, identity.owner, identity.vault, bonding, protocol, hook, gatingModule);
         _setMetadata(instance, identity);
-        _finalizeInstance(instance, identity, metadataURI, hook, creationTier, fee);
+        _finalizeInstance(instance, identity, metadataURI, hook, creationTier);
     }
 
     /// @dev Legacy path: accepts TierConfig, calls _configureGating after clone deployment.
@@ -259,18 +225,8 @@ contract ERC404Factory is OwnableRoles, ReentrancyGuard, IFactory {
         PasswordTierGatingModule.TierConfig memory tiers,
         CreationTier creationTier
     ) internal returns (address instance) {
-        // Fee
-        uint256 fee = launchManager.getTierFee(
-            LaunchManager.CreationTier(uint8(creationTier)),
-            instanceCreationFee
-        );
-        require(msg.value >= fee, "Insufficient fee");
-        {
-            uint256 creatorCut = (fee * creatorFeeBps) / 10000;
-            uint256 protocolCut = fee - creatorCut;
-            accumulatedCreatorFees += creatorCut;
-            accumulatedProtocolFees += protocolCut;
-        }
+        // All payment goes to protocol
+        accumulatedProtocolFees += msg.value;
 
         // Validate identity
         require(identity.nftCount > 0, "Invalid NFT count");
@@ -310,7 +266,7 @@ contract ERC404Factory is OwnableRoles, ReentrancyGuard, IFactory {
 
         _initializeInstance(instance, identity.owner, identity.vault, bonding, protocol, hook, gatingModuleAddr);
         _setMetadata(instance, identity);
-        _finalizeInstance(instance, identity, metadataURI, hook, creationTier, fee);
+        _finalizeInstance(instance, identity, metadataURI, hook, creationTier);
     }
 
     function _finalizeInstance(
@@ -318,19 +274,15 @@ contract ERC404Factory is OwnableRoles, ReentrancyGuard, IFactory {
         IdentityParams calldata identity,
         string calldata metadataURI,
         address hook,
-        CreationTier creationTier,
-        uint256 fee
+        CreationTier creationTier
     ) private {
         masterRegistry.registerInstance(
             instance, address(this), identity.owner, identity.name, metadataURI, identity.vault
         );
         launchManager.applyTierPerks(instance, LaunchManager.CreationTier(uint8(creationTier)), identity.owner);
-        if (msg.value > fee) {
-            SafeTransferLib.safeTransferETH(msg.sender, msg.value - fee);
-        }
         emit InstanceCreated(instance, identity.owner, identity.name, identity.symbol, identity.vault, hook);
         if (creationTier != CreationTier.STANDARD) {
-            emit InstanceCreatedWithTier(instance, creationTier, fee);
+            emit InstanceCreatedWithTier(instance, creationTier);
         }
     }
 
@@ -392,11 +344,7 @@ contract ERC404Factory is OwnableRoles, ReentrancyGuard, IFactory {
             curveComputer: address(curveComputer),
             v4PoolManager: v4PoolManager,
             weth: weth,
-            bondingFeeBps: bondingFeeBps,
-            graduationFeeBps: graduationFeeBps,
-            polBps: polBps,
-            factoryCreator: creator,
-            creatorGraduationFeeBps: creatorGraduationFeeBps
+            bondingFeeBps: bondingFeeBps
         });
     }
 
@@ -405,14 +353,6 @@ contract ERC404Factory is OwnableRoles, ReentrancyGuard, IFactory {
      */
     function getFeatures() external view returns (bytes32[] memory) {
         return features;
-    }
-
-    /**
-     * @notice Set instance creation fee (owner only)
-     */
-    function setInstanceCreationFee(uint256 _fee) external onlyRoles(PROTOCOL_ROLE) {
-        instanceCreationFee = _fee;
-        emit InstanceCreationFeeUpdated(_fee);
     }
 
     function setProtocolTreasury(address _treasury) external onlyRoles(PROTOCOL_ROLE) {
@@ -431,14 +371,6 @@ contract ERC404Factory is OwnableRoles, ReentrancyGuard, IFactory {
         emit ProtocolFeesWithdrawn(protocolTreasury, amount);
     }
 
-    function withdrawCreatorFees() external onlyRoles(CREATOR_ROLE) {
-        uint256 amount = accumulatedCreatorFees;
-        require(amount > 0, "No creator fees");
-        accumulatedCreatorFees = 0;
-        SafeTransferLib.safeTransferETH(creator, amount);
-        emit CreatorFeesWithdrawn(creator, amount);
-    }
-
     function protocol() external view returns (address) {
         return owner();
     }
@@ -447,18 +379,6 @@ contract ERC404Factory is OwnableRoles, ReentrancyGuard, IFactory {
         require(_bps <= 300, "Max 3%");
         bondingFeeBps = _bps;
         emit BondingFeeUpdated(_bps);
-    }
-
-    function setGraduationFeeBps(uint256 _bps) external onlyRoles(PROTOCOL_ROLE) {
-        require(_bps <= 500, "Max 5%");
-        graduationFeeBps = _bps;
-        emit GraduationFeeUpdated(_bps);
-    }
-
-    function setPolBps(uint256 _bps) external onlyRoles(PROTOCOL_ROLE) {
-        require(_bps <= 300, "Max 3%");
-        polBps = _bps;
-        emit POLConfigUpdated(_bps);
     }
 
     function setProfile(uint256 profileId, GraduationProfile calldata profile) external onlyRoles(PROTOCOL_ROLE) {

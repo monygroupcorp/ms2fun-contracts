@@ -62,8 +62,6 @@ contract UniAlignmentHookFactoryTest is Test {
                 wethAddr,
                 address(poolManager),
                 address(token),
-                address(0xC1EA),
-                100,
                 address(new MockZRouter()),
                 3000,
                 60,

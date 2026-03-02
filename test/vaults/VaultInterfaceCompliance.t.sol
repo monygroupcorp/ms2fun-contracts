@@ -46,8 +46,6 @@ contract VaultInterfaceComplianceTest is Test {
             MOCK_WETH,
             MOCK_POOL_MANAGER,
             MOCK_ALIGNMENT_TOKEN,
-            address(0xC1EA),
-            100,
             address(ultraMockZRouter),
             3000,
             60,
@@ -76,8 +74,6 @@ contract VaultInterfaceComplianceTest is Test {
             address(mockZRouter),
             address(alignmentToken),
             poolKey,
-            address(0xC1EA),
-            100,
             address(0x99)
         );
 

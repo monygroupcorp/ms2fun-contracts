@@ -22,11 +22,6 @@ contract ERC721AuctionFactory is Ownable, ReentrancyGuard, IFactory {
 
     // Protocol revenue
     address public protocolTreasury;
-
-    // Creator incentives
-    address public immutable creator;
-    uint256 public immutable creatorFeeBps;
-    uint256 public accumulatedCreatorFees;
     uint256 public accumulatedProtocolFees;
 
     // Tiered creation
@@ -68,21 +63,15 @@ contract ERC721AuctionFactory is Ownable, ReentrancyGuard, IFactory {
     event VaultCapabilityWarning(address indexed vault, bytes32 indexed capability);
     event ProtocolTreasuryUpdated(address indexed oldTreasury, address indexed newTreasury);
     event ProtocolFeesWithdrawn(address indexed treasury, uint256 amount);
-    event CreatorFeesWithdrawn(address indexed creator, uint256 amount);
     event TierConfigUpdated(CreationTier tier, uint256 fee);
     event InstanceCreatedWithTier(address indexed instance, CreationTier tier, uint256 fee);
 
     constructor(
         address _masterRegistry,
-        address _creator,
-        uint256 _creatorFeeBps,
         address _globalMessageRegistry
     ) {
         _initializeOwner(msg.sender);
-        require(_creatorFeeBps <= 10000, "Invalid creator fee bps");
         require(_globalMessageRegistry != address(0), "Invalid global message registry");
-        creator = _creator;
-        creatorFeeBps = _creatorFeeBps;
         masterRegistry = IMasterRegistry(_masterRegistry);
         globalMessageRegistry = _globalMessageRegistry;
         instanceCreationFee = 0.01 ether;
@@ -187,9 +176,7 @@ contract ERC721AuctionFactory is Ownable, ReentrancyGuard, IFactory {
     }
 
     function _accumulateFees(uint256 fee, uint256 featuredCost) private {
-        uint256 creatorCut = ((fee - featuredCost) * creatorFeeBps) / 10000;
-        accumulatedCreatorFees += creatorCut;
-        accumulatedProtocolFees += fee - featuredCost - creatorCut;
+        accumulatedProtocolFees += fee - featuredCost;
     }
 
     function _deployInstance(CreateArgs memory args) private returns (address) {
@@ -253,15 +240,6 @@ contract ERC721AuctionFactory is Ownable, ReentrancyGuard, IFactory {
         accumulatedProtocolFees = 0;
         SafeTransferLib.safeTransferETH(protocolTreasury, amount);
         emit ProtocolFeesWithdrawn(protocolTreasury, amount);
-    }
-
-    function withdrawCreatorFees() external {
-        require(msg.sender == creator, "Only creator");
-        uint256 amount = accumulatedCreatorFees;
-        require(amount > 0, "No creator fees");
-        accumulatedCreatorFees = 0;
-        SafeTransferLib.safeTransferETH(creator, amount);
-        emit CreatorFeesWithdrawn(creator, amount);
     }
 
     function protocol() external view returns (address) {

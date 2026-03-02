@@ -66,8 +66,6 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
                 address(0x2222222222222222222222222222222222222222),  // WETH
                 address(0x4444444444444444444444444444444444444444),  // V4 pool manager
                 address(token),                                       // alignment target
-                address(0xC1EA),                                      // vault creator
-                100,                                                  // creator yield cut (1%)
                 address(new MockZRouter()),
                 3000,
                 60,
@@ -100,7 +98,7 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
         componentRegistry.initialize(registryOwner);
 
         // Deploy factory
-        factory = new ERC1155Factory(mockRegistry, mockInstanceTemplate, address(0xC1EA), 2000, address(globalRegistry), address(componentRegistry));
+        factory = new ERC1155Factory(mockRegistry, mockInstanceTemplate, address(globalRegistry), address(componentRegistry));
 
         // Authorize creator and artist as agents for addEdition calls
         factory.setAgent(creator, true);
@@ -866,12 +864,10 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
         uint256 factoryBalance = address(factory).balance;
         assertEq(factoryBalance, 0.01 ether);
 
-        // With 20% creator fee, protocol gets 80% = 0.008 ether
+        // All creation fees go to protocol
         factory.withdrawProtocolFees();
         assertEq(factory.accumulatedProtocolFees(), 0);
-        assertEq(treasury.balance, 0.008 ether);
-        // Creator fees remain in factory
-        assertEq(factory.accumulatedCreatorFees(), 0.002 ether);
+        assertEq(treasury.balance, 0.01 ether);
         vm.stopPrank();
     }
 

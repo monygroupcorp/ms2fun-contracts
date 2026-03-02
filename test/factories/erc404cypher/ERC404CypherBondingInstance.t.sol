@@ -54,7 +54,7 @@ contract ERC404CypherBondingInstanceTest is Test {
         // Initialize vault with liquidityDeployer = deployer module
         vault.initialize(
             address(positionManager), address(swapRouter), address(weth),
-            address(instance), factoryCreator, 100, treasury,
+            address(instance), treasury,
             address(liquidityDeployer)
         );
 
@@ -88,10 +88,7 @@ contract ERC404CypherBondingInstanceTest is Test {
             weth: address(weth),
             algebraFactory: address(algebraFactory),
             positionManager: address(positionManager),
-            bondingFeeBps: 100,
-            graduationFeeBps: 200,
-            creatorGraduationFeeBps: 50,
-            factoryCreator: factoryCreator
+            bondingFeeBps: 100
         }));
 
         instance.initializeMetadata("CypherToken", "CYPH", "");

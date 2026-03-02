@@ -93,8 +93,6 @@ contract MasterRegistryV1 is UUPSUpgradeable, Ownable, IMasterRegistry {
         require(MetadataUtils.isValidName(title), "Invalid title");
         require(MetadataUtils.isValidURI(metadataURI), "Invalid metadata URI");
 
-        address factoryCreator = IFactory(factoryAddress).creator();
-        require(factoryCreator != address(0), "Factory has no creator");
         address factoryProtocol = IFactory(factoryAddress).protocol();
         require(factoryProtocol != address(0), "Factory has no protocol");
 
@@ -109,7 +107,7 @@ contract MasterRegistryV1 is UUPSUpgradeable, Ownable, IMasterRegistry {
             displayTitle: displayTitle,
             metadataURI: metadataURI,
             features: features,
-            creator: factoryCreator,
+            creator: factoryProtocol,
             active: true,
             registeredAt: block.timestamp
         });

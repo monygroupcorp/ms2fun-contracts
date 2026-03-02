@@ -17,7 +17,7 @@ contract UniAlignmentVaultFactory {
     uint24  public immutable zRouterFee;
     int24   public immutable zRouterTickSpacing;
 
-    event VaultDeployed(address indexed vault, address indexed alignmentToken, address indexed creator);
+    event VaultDeployed(address indexed vault, address indexed alignmentToken);
 
     constructor(
         address _weth,
@@ -38,14 +38,10 @@ contract UniAlignmentVaultFactory {
 
     /// @notice Deploy a new vault clone
     /// @param alignmentToken The token this vault aligns to
-    /// @param factoryCreator Address that receives creator yield cut
-    /// @param creatorYieldCutBps Creator yield cut in basis points (max 500)
     /// @param priceValidator Custom price validator; uses defaultPriceValidator if address(0)
     /// @return vault Address of the deployed vault clone
     function deployVault(
         address alignmentToken,
-        address factoryCreator,
-        uint256 creatorYieldCutBps,
         IVaultPriceValidator priceValidator
     ) external returns (address vault) {
         vault = LibClone.clone(vaultImplementation);
@@ -54,14 +50,12 @@ contract UniAlignmentVaultFactory {
             weth,
             poolManager,
             alignmentToken,
-            factoryCreator,
-            creatorYieldCutBps,
             zRouter,
             zRouterFee,
             zRouterTickSpacing,
             priceValidator == IVaultPriceValidator(address(0)) ? defaultPriceValidator : priceValidator
         );
 
-        emit VaultDeployed(vault, alignmentToken, factoryCreator);
+        emit VaultDeployed(vault, alignmentToken);
     }
 }

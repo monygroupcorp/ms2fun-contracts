@@ -5,6 +5,7 @@ import {SafeTransferLib} from "solady/utils/SafeTransferLib.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IAlgebraFactory, IAlgebraPool, IAlgebraNFTPositionManager} from "../../interfaces/algebra/IAlgebra.sol";
 import {CypherAlignmentVault} from "../../vaults/cypher/CypherAlignmentVault.sol";
+import {Currency} from "v4-core/types/Currency.sol";
 
 /// @title CypherLiquidityDeployerModule
 /// @notice Called by ERC404CypherBondingInstance at graduation.
@@ -15,10 +16,7 @@ contract CypherLiquidityDeployerModule {
         uint256 ethReserve;
         uint256 tokenReserve;
         uint160 sqrtPriceX96;          // initial pool price
-        uint256 graduationFeeBps;
-        uint256 creatorGraduationFeeBps;
         address protocolTreasury;
-        address factoryCreator;
         address token;                  // ERC404 token address (bonding instance)
         address weth;                   // WETH address
         address vault;                  // CypherAlignmentVault address
@@ -36,14 +34,14 @@ contract CypherLiquidityDeployerModule {
         uint256 ethToLP, uint256 tokenToLP
     );
     event GraduationFeePaid(address indexed treasury, uint256 amount);
-    event CreatorGraduationFeePaid(address indexed creator, uint256 amount);
+    event GraduationVaultContribution(address indexed vault, uint256 amount);
 
     struct PoolSetupResult {
         uint256 tokenId;
         address pool;
         uint256 ethToLP;
-        uint256 protocolFee;
-        uint256 creatorFee;
+        uint256 protocolFee;  // 1% of raise
+        uint256 vaultCut;     // 19% of raise
         bool tokenIsZero;
     }
 
@@ -64,14 +62,10 @@ contract CypherLiquidityDeployerModule {
     }
 
     function _setupPool(DeployParams calldata p) private returns (PoolSetupResult memory r) {
-        // ── Compute fee splits ──
-        if (p.graduationFeeBps > 0 && p.protocolTreasury != address(0)) {
-            r.protocolFee = p.ethReserve * p.graduationFeeBps / 10000;
-            if (p.creatorGraduationFeeBps > 0 && p.factoryCreator != address(0)) {
-                r.creatorFee = p.ethReserve * p.creatorGraduationFeeBps / 10000;
-            }
-        }
-        r.ethToLP = p.ethReserve - r.protocolFee - r.creatorFee;
+        // Fixed 1/19/80 split: 1% protocol, 19% vault, 80% LP
+        r.protocolFee = p.ethReserve / 100;
+        r.vaultCut    = (p.ethReserve * 19) / 100;
+        r.ethToLP     = p.ethReserve - r.protocolFee - r.vaultCut;
 
         // ── Wrap ETH to WETH for LP ──
         address weth = p.weth;
@@ -115,13 +109,17 @@ contract CypherLiquidityDeployerModule {
         CypherAlignmentVault(payable(p.vault)).registerPosition(
             r.tokenId, r.pool, r.tokenIsZero, p.instance, r.ethToLP
         );
-        if (r.protocolFee > 0) {
+        // 1% → protocol treasury
+        if (r.protocolFee > 0 && p.protocolTreasury != address(0)) {
             SafeTransferLib.safeTransferETH(p.protocolTreasury, r.protocolFee);
             emit GraduationFeePaid(p.protocolTreasury, r.protocolFee);
         }
-        if (r.creatorFee > 0) {
-            SafeTransferLib.safeTransferETH(p.factoryCreator, r.creatorFee);
-            emit CreatorGraduationFeePaid(p.factoryCreator, r.creatorFee);
+        // 19% → alignment vault via receiveContribution
+        if (r.vaultCut > 0) {
+            CypherAlignmentVault(payable(p.vault)).receiveContribution{value: r.vaultCut}(
+                Currency.wrap(address(0)), r.vaultCut, p.instance
+            );
+            emit GraduationVaultContribution(p.vault, r.vaultCut);
         }
         emit LiquidityDeployed(p.vault, r.pool, r.tokenId, r.ethToLP, p.tokenReserve);
     }
