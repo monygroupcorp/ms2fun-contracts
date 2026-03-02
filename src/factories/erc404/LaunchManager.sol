@@ -26,9 +26,22 @@ contract LaunchManager is Ownable {
     PromotionBadges public promotionBadges;
     FeaturedQueueManager public featuredQueueManager;
 
+    /// @notice Economic parameters for a graduation preset.
+    ///         Subsumes the factory's GraduationProfile — stores curve computer address too.
+    struct Preset {
+        uint256 targetETH;
+        uint256 unitPerNFT;
+        uint256 liquidityReserveBps;
+        address curveComputer;      // DAO-approved ICurveComputer for this preset
+        bool active;
+    }
+
+    mapping(uint256 => Preset) private _presets;
+
     event TierConfigUpdated(CreationTier tier, uint256 fee);
     event PromotionBadgesUpdated(address indexed promotionBadges);
     event FeaturedQueueManagerUpdated(address indexed featuredQueueManager);
+    event PresetUpdated(uint256 indexed presetId, uint256 targetETH, address curveComputer, bool active);
 
     constructor(address _protocol) {
         require(_protocol != address(0), "Invalid protocol");
@@ -81,6 +94,23 @@ contract LaunchManager is Ownable {
         if (config.badge != PromotionBadges.BadgeType.NONE && address(promotionBadges) != address(0)) {
             promotionBadges.assignBadgeFor(instance, config.badge, config.badgeDuration);
         }
+    }
+
+    /// @notice Set or update a graduation preset. Only callable by owner (DAO).
+    function setPreset(uint256 presetId, Preset calldata preset) external onlyOwner {
+        require(preset.targetETH > 0, "Invalid targetETH");
+        require(preset.unitPerNFT > 0, "Invalid unitPerNFT");
+        require(preset.liquidityReserveBps > 0 && preset.liquidityReserveBps < 10000, "Invalid reserve bps");
+        require(preset.curveComputer != address(0), "Invalid curveComputer");
+        _presets[presetId] = preset;
+        emit PresetUpdated(presetId, preset.targetETH, preset.curveComputer, preset.active);
+    }
+
+    /// @notice Get a graduation preset. Reverts if not active.
+    function getPreset(uint256 presetId) external view returns (Preset memory) {
+        Preset memory p = _presets[presetId];
+        require(p.active, "Preset not active");
+        return p;
     }
 
     /**
