@@ -19,16 +19,11 @@ import {UniswapVaultPriceValidator} from "../src/peripherals/UniswapVaultPriceVa
 import {IVaultPriceValidator} from "../src/interfaces/IVaultPriceValidator.sol";
 import {ERC404Factory} from "../src/factories/erc404/ERC404Factory.sol";
 import {ERC404BondingInstance} from "../src/factories/erc404/ERC404BondingInstance.sol";
-import {ERC404StakingModule} from "../src/factories/erc404/ERC404StakingModule.sol";
-import {LiquidityDeployerModule} from "../src/factories/erc404/LiquidityDeployerModule.sol";
 import {LaunchManager} from "../src/factories/erc404/LaunchManager.sol";
 import {CurveParamsComputer} from "../src/factories/erc404/CurveParamsComputer.sol";
 import {ERC1155Factory} from "../src/factories/erc1155/ERC1155Factory.sol";
 import {ERC721AuctionFactory} from "../src/factories/erc721/ERC721AuctionFactory.sol";
 import {PromotionBadges} from "../src/promotion/PromotionBadges.sol";
-import {ERC404CypherFactory} from "../src/factories/erc404cypher/ERC404CypherFactory.sol";
-import {ERC404CypherBondingInstance} from "../src/factories/erc404cypher/ERC404CypherBondingInstance.sol";
-import {CypherLiquidityDeployerModule} from "../src/factories/erc404cypher/CypherLiquidityDeployerModule.sol";
 import {MockSafe} from "../test/mocks/MockSafe.sol";
 import {MockERC20} from "../test/mocks/MockERC20.sol";
 
@@ -78,8 +73,6 @@ contract DeploySepolia is Script {
     ERC404Factory public erc404Factory;
     ERC1155Factory public erc1155Factory;
     ERC721AuctionFactory public erc721Factory;
-    ERC404CypherFactory public erc404CypherFactory;
-    CypherLiquidityDeployerModule public cypherLiquidityDeployer;
     PromotionBadges public promotionBadges;
 
     function run() public {
@@ -284,43 +277,6 @@ contract DeploySepolia is Script {
         );
         erc721Factory.setProtocolTreasury(address(treasury));
 
-        // Phase 5b: Cypher Factory
-        _deployCypherFactory(deployer, weth);
-    }
-
-    function _deployCypherFactory(address deployer, address weth) private {
-        cypherLiquidityDeployer = new CypherLiquidityDeployerModule(
-            vm.envOr("ALGEBRA_FACTORY", SEPOLIA_ALGEBRA_FACTORY),
-            vm.envOr("POSITION_MANAGER", SEPOLIA_POSITION_MANAGER),
-            weth
-        );
-
-        ERC404CypherBondingInstance erc404CypherImpl = new ERC404CypherBondingInstance();
-        erc404CypherFactory = new ERC404CypherFactory(
-            ERC404CypherFactory.CoreConfig({
-                implementation: address(erc404CypherImpl),
-                masterRegistry: masterRegistry,
-                liquidityDeployer: address(cypherLiquidityDeployer),
-                algebraFactory: vm.envOr("ALGEBRA_FACTORY",  SEPOLIA_ALGEBRA_FACTORY),
-                positionManager: vm.envOr("POSITION_MANAGER", SEPOLIA_POSITION_MANAGER),
-                swapRouter: vm.envOr("ALGEBRA_ROUTER",   SEPOLIA_ALGEBRA_ROUTER),
-                weth: weth,
-                protocol: deployer
-            }),
-            ERC404CypherFactory.ModuleConfig({
-                globalMessageRegistry: address(globalMessageRegistry),
-                curveComputer: address(curveParamsComputer),
-                tierGatingModule: address(0),
-                componentRegistry: address(0)
-            })
-        );
-        erc404CypherFactory.setProtocolTreasury(address(treasury));
-        erc404CypherFactory.setProfile(1, ERC404CypherFactory.GraduationProfile({
-            targetETH: 15 ether,
-            unitPerNFT: 1_000_000,
-            liquidityReserveBps: 1000,
-            active: true
-        }));
     }
 
     function _logAddresses() internal view {
@@ -344,8 +300,6 @@ contract DeploySepolia is Script {
         console.log("ERC404Factory:", address(erc404Factory));
         console.log("ERC1155Factory:", address(erc1155Factory));
         console.log("ERC721AuctionFactory:", address(erc721Factory));
-        console.log("ERC404CypherFactory:", address(erc404CypherFactory));
-        console.log("CypherLiquidityDeployer:", address(cypherLiquidityDeployer));
         console.log("PromotionBadges:", address(promotionBadges));
         console.log("");
         console.log("=== POST-DEPLOY CHECKLIST ===");

@@ -7,32 +7,17 @@ import {FeatureUtils} from "../../src/master/libraries/FeatureUtils.sol";
 
 // Factories under test
 import {ERC404Factory} from "../../src/factories/erc404/ERC404Factory.sol";
-import {ERC404ZAMMFactory} from "../../src/factories/erc404zamm/ERC404ZAMMFactory.sol";
-import {ERC404CypherFactory} from "../../src/factories/erc404cypher/ERC404CypherFactory.sol";
 import {ERC1155Factory} from "../../src/factories/erc1155/ERC1155Factory.sol";
 import {ERC721AuctionFactory} from "../../src/factories/erc721/ERC721AuctionFactory.sol";
 
 // Supporting contracts needed to construct factories
 import {ERC404BondingInstance} from "../../src/factories/erc404/ERC404BondingInstance.sol";
-import {ERC404StakingModule} from "../../src/factories/erc404/ERC404StakingModule.sol";
 import {LaunchManager} from "../../src/factories/erc404/LaunchManager.sol";
 import {CurveParamsComputer} from "../../src/factories/erc404/CurveParamsComputer.sol";
-import {ERC404ZAMMBondingInstance} from "../../src/factories/erc404zamm/ERC404ZAMMBondingInstance.sol";
-import {ZAMMLiquidityDeployerModule} from "../../src/factories/erc404zamm/ZAMMLiquidityDeployerModule.sol";
-import {ERC404CypherBondingInstance} from "../../src/factories/erc404cypher/ERC404CypherBondingInstance.sol";
-import {CypherLiquidityDeployerModule} from "../../src/factories/erc404cypher/CypherLiquidityDeployerModule.sol";
 import {PasswordTierGatingModule} from "../../src/gating/PasswordTierGatingModule.sol";
 import {ComponentRegistry} from "../../src/registry/ComponentRegistry.sol";
-import {MockZAMM} from "../mocks/MockZAMM.sol";
-import {MockWETH} from "../mocks/MockWETH.sol";
-import {MockAlgebraFactory, MockAlgebraPositionManager, MockAlgebraSwapRouter} from "../mocks/MockCypherAlgebra.sol";
 import {MockMasterRegistry} from "../mocks/MockMasterRegistry.sol";
 import {LibClone} from "solady/utils/LibClone.sol";
-
-// Minimal mock for staking registry (used by ERC404StakingModule)
-contract MockStakingRegistry {
-    function isRegisteredInstance(address) external pure returns (bool) { return false; }
-}
 
 /// @title FactoryFeaturesTest
 /// @notice Verifies that every factory implements IFactory.features() correctly and
@@ -99,82 +84,6 @@ contract FactoryFeaturesTest is Test {
         bytes32[] memory feats = IFactory(address(factory)).features();
         assertEq(feats.length, 1, "ERC404Factory: features() must have exactly 1 element");
         assertEq(feats[0], FeatureUtils.GATING, "ERC404Factory: features()[0] must be GATING");
-    }
-
-    // ─────────────────────────────────────────────────────────────────────────
-    // ERC404ZAMMFactory
-    // ─────────────────────────────────────────────────────────────────────────
-
-    function test_ERC404ZAMMFactory_features_returnsArrayViaInterface() public {
-        MockZAMM zamm = new MockZAMM();
-        ZAMMLiquidityDeployerModule deployer = new ZAMMLiquidityDeployerModule(address(zamm), 30);
-        ERC404ZAMMBondingInstance impl = new ERC404ZAMMBondingInstance();
-        CurveParamsComputer curveComp = new CurveParamsComputer(protocol);
-        PasswordTierGatingModule tierGating = new PasswordTierGatingModule();
-        ComponentRegistry compReg = _deployComponentRegistry();
-
-        ERC404ZAMMFactory factory = new ERC404ZAMMFactory(
-            ERC404ZAMMFactory.CoreConfig({
-                implementation: address(impl),
-                masterRegistry: makeAddr("mr"),
-                zamm: address(zamm),
-                zRouter: address(0),
-                feeOrHook: 30,
-                protocol: protocol
-            }),
-            ERC404ZAMMFactory.ModuleConfig({
-                globalMessageRegistry: makeAddr("gmr"),
-                curveComputer: address(curveComp),
-                liquidityDeployer: address(deployer),
-                tierGatingModule: address(tierGating),
-                componentRegistry: address(compReg)
-            })
-        );
-
-        bytes32[] memory feats = IFactory(address(factory)).features();
-        assertEq(feats.length, 1, "ERC404ZAMMFactory: features() must have exactly 1 element");
-        assertEq(feats[0], FeatureUtils.GATING, "ERC404ZAMMFactory: features()[0] must be GATING");
-    }
-
-    // ─────────────────────────────────────────────────────────────────────────
-    // ERC404CypherFactory
-    // ─────────────────────────────────────────────────────────────────────────
-
-    function test_ERC404CypherFactory_features_returnsArrayViaInterface() public {
-        ERC404CypherBondingInstance impl = new ERC404CypherBondingInstance();
-        CurveParamsComputer curveComp = new CurveParamsComputer(protocol);
-        PasswordTierGatingModule tierGating = new PasswordTierGatingModule();
-        MockAlgebraFactory algebraFactory = new MockAlgebraFactory();
-        MockAlgebraPositionManager positionManager = new MockAlgebraPositionManager();
-        MockAlgebraSwapRouter swapRouter = new MockAlgebraSwapRouter();
-        MockWETH weth = new MockWETH();
-        CypherLiquidityDeployerModule deployer = new CypherLiquidityDeployerModule(
-            address(algebraFactory), address(positionManager), address(weth)
-        );
-        ComponentRegistry compReg = _deployComponentRegistry();
-
-        ERC404CypherFactory factory = new ERC404CypherFactory(
-            ERC404CypherFactory.CoreConfig({
-                implementation: address(impl),
-                masterRegistry: makeAddr("mr"),
-                liquidityDeployer: address(deployer),
-                algebraFactory: address(algebraFactory),
-                positionManager: address(positionManager),
-                swapRouter: address(swapRouter),
-                weth: address(weth),
-                protocol: protocol
-            }),
-            ERC404CypherFactory.ModuleConfig({
-                globalMessageRegistry: makeAddr("gmr"),
-                curveComputer: address(curveComp),
-                tierGatingModule: address(tierGating),
-                componentRegistry: address(compReg)
-            })
-        );
-
-        bytes32[] memory feats = IFactory(address(factory)).features();
-        assertEq(feats.length, 1, "ERC404CypherFactory: features() must have exactly 1 element");
-        assertEq(feats[0], FeatureUtils.GATING, "ERC404CypherFactory: features()[0] must be GATING");
     }
 
     // ─────────────────────────────────────────────────────────────────────────
