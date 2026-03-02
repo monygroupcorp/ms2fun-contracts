@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-/// @notice Pluggable gating interface for ERC404 bonding instances.
+/// @notice Pluggable gating interface for ms2.fun instances (ERC404 and ERC1155).
 /// address(0) means open gating — no module deployed.
+/// Implementations are registered in ComponentRegistry under tag keccak256("gating").
 interface IGatingModule {
     /// @notice Returns true if `user` is allowed to mint `amount` tokens.
     /// @param user    The buyer address.
