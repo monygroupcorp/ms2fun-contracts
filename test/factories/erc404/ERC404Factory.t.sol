@@ -796,8 +796,6 @@ contract ERC404FactoryTest is Test {
         ERC404BondingInstance inst = ERC404BondingInstance(payable(instance));
         assertEq(inst.MAX_SUPPLY(), 100 * 1e6 * 1e18);
         assertEq(inst.UNIT(), 1e6 * 1e18);
-        assertEq(inst.poolFee(), 3000);
-        assertEq(inst.tickSpacing(), 60);
         vm.stopPrank();
     }
 

@@ -163,11 +163,9 @@ contract ERC404StakingIntegrationTest is Test {
             maxSupply: MAX_SUPPLY,
             unit: TOKEN_UNIT,
             liquidityReservePercent: LIQUIDITY_RESERVE_PERCENT,
-            curve: curveParams,
-            poolFee: 3000,
-            tickSpacing: 60
+            curve: curveParams
         });
-        instance.initialize(owner, address(mockVault), bonding, address(0), address(0));
+        instance.initialize(owner, address(mockVault), bonding, address(0));
 
         instance.initializeProtocol(ERC404BondingInstance.ProtocolParams({
             globalMessageRegistry: address(0x700),
@@ -203,7 +201,6 @@ contract ERC404StakingIntegrationTest is Test {
         vm.startPrank(owner);
         uint256 openTime = block.timestamp + 1 days;
         instance.setBondingOpenTime(openTime);
-        instance.setV4Hook(address(0x200)); // mock hook address
         instance.setBondingActive(true);
         vm.stopPrank();
 

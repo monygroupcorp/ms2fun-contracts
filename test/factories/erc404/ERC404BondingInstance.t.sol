@@ -2,7 +2,7 @@
 pragma solidity ^0.8.24;
 
 import {Test, console} from "forge-std/Test.sol";
-import {ERC404BondingInstance, MaxCostExceeded, BondingNotConfigured, OnlyOwnerBeforeMaturity, HookNotSet, NoReserve} from "../../../src/factories/erc404/ERC404BondingInstance.sol";
+import {ERC404BondingInstance, MaxCostExceeded, BondingNotConfigured, OnlyOwnerBeforeMaturity, NoReserve} from "../../../src/factories/erc404/ERC404BondingInstance.sol";
 import {ERC404Factory} from "../../../src/factories/erc404/ERC404Factory.sol";
 import {ERC404StakingModule} from "../../../src/factories/erc404/ERC404StakingModule.sol";
 import {CurveParamsComputer} from "../../../src/factories/erc404/CurveParamsComputer.sol";
@@ -73,7 +73,7 @@ contract ERC404BondingInstanceTest is Test {
         // must occur within this prank context
         ERC404BondingInstance impl = new ERC404BondingInstance();
         instance = ERC404BondingInstance(payable(LibClone.clone(address(impl))));
-        _initInstance(instance, address(0xBEEF), address(0xFEE), 100, address(0));
+        _initInstance(instance, address(0xBEEF), address(0xFEE), 100);
         instance.initializeMetadata("Test Token", "TEST", "");
 
         vm.stopPrank();
@@ -94,18 +94,15 @@ contract ERC404BondingInstanceTest is Test {
         ERC404BondingInstance inst,
         address vault_,
         address treasury_,
-        uint256 bondingFeeBps_,
-        address hook_
+        uint256 bondingFeeBps_
     ) internal {
         ERC404BondingInstance.BondingParams memory bonding = ERC404BondingInstance.BondingParams({
             maxSupply: MAX_SUPPLY,
             unit: 1_000_000 ether,
             liquidityReservePercent: LIQUIDITY_RESERVE_PERCENT,
-            curve: curveParams,
-            poolFee: 3000,
-            tickSpacing: 60
+            curve: curveParams
         });
-        inst.initialize(owner, vault_, bonding, hook_, address(0));
+        inst.initialize(owner, vault_, bonding, address(0));
 
         ERC404BondingInstance.ProtocolParams memory proto = ERC404BondingInstance.ProtocolParams({
             globalMessageRegistry: mockGlobalMsgRegistry,
@@ -147,7 +144,7 @@ contract ERC404BondingInstanceTest is Test {
         vm.startPrank(owner);
         uint256 futureTime = block.timestamp + 1 days;
         instance.setBondingOpenTime(futureTime);
-        instance.setV4Hook(mockV4Hook);
+
         instance.setBondingActive(true);
         assertTrue(instance.bondingActive());
         vm.stopPrank();
@@ -159,7 +156,7 @@ contract ERC404BondingInstanceTest is Test {
         vm.startPrank(owner);
         uint256 futureTime = block.timestamp + 1 days;
         instance.setBondingOpenTime(futureTime);
-        instance.setV4Hook(mockV4Hook);
+
         instance.setBondingActive(true);
         vm.stopPrank();
 
@@ -187,7 +184,7 @@ contract ERC404BondingInstanceTest is Test {
         vm.startPrank(owner);
         uint256 futureTime = block.timestamp + 1 days;
         instance.setBondingOpenTime(futureTime);
-        instance.setV4Hook(mockV4Hook);
+
         instance.setBondingActive(true);
         vm.stopPrank();
 
@@ -247,7 +244,7 @@ contract ERC404BondingInstanceTest is Test {
         vm.startPrank(owner);
         uint256 futureTime = block.timestamp + 1 days;
         instance.setBondingOpenTime(futureTime);
-        instance.setV4Hook(mockV4Hook);
+
         instance.setBondingActive(true);
         vm.stopPrank();
         vm.warp(futureTime);
@@ -326,11 +323,11 @@ contract ERC404BondingInstanceTest is Test {
         vm.startPrank(owner);
         ERC404BondingInstance zeroFeeImpl = new ERC404BondingInstance();
         ERC404BondingInstance zeroFeeInstance = ERC404BondingInstance(payable(LibClone.clone(address(zeroFeeImpl))));
-        _initInstance(zeroFeeInstance, address(0xBEEF), address(0xFEE), 0, address(0));
+        _initInstance(zeroFeeInstance, address(0xBEEF), address(0xFEE), 0);
         zeroFeeInstance.initializeMetadata("Zero Fee Token", "ZFT", "");
         uint256 futureTime = block.timestamp + 1 days;
         zeroFeeInstance.setBondingOpenTime(futureTime);
-        zeroFeeInstance.setV4Hook(mockV4Hook);
+
         zeroFeeInstance.setBondingActive(true);
         vm.stopPrank();
         vm.warp(futureTime);
@@ -353,11 +350,11 @@ contract ERC404BondingInstanceTest is Test {
         vm.startPrank(owner);
         ERC404BondingInstance noTreasuryImplInst = new ERC404BondingInstance();
         ERC404BondingInstance noTreasuryInstance = ERC404BondingInstance(payable(LibClone.clone(address(noTreasuryImplInst))));
-        _initInstance(noTreasuryInstance, address(0xBEEF), address(0), 100, address(0));
+        _initInstance(noTreasuryInstance, address(0xBEEF), address(0), 100);
         noTreasuryInstance.initializeMetadata("No Treasury Token", "NTT", "");
         uint256 futureTime = block.timestamp + 1 days;
         noTreasuryInstance.setBondingOpenTime(futureTime);
-        noTreasuryInstance.setV4Hook(mockV4Hook);
+
         noTreasuryInstance.setBondingActive(true);
         vm.stopPrank();
         vm.warp(futureTime);
@@ -482,29 +479,10 @@ contract ERC404BondingInstanceTest is Test {
         vm.stopPrank();
     }
 
-    function test_deployLiquidity_requiresHook() public {
-        // Deploy instance with no hook
-        vm.startPrank(owner);
-        ERC404BondingInstance noHookImpl = new ERC404BondingInstance();
-        ERC404BondingInstance noHookInstance = ERC404BondingInstance(payable(LibClone.clone(address(noHookImpl))));
-        _initInstance(noHookInstance, address(0xBEEF), address(0xFEE), 100, address(0));
-        noHookInstance.initializeMetadata("No Hook", "NH", "");
-        uint256 futureTime = block.timestamp + 1 days;
-        noHookInstance.setBondingOpenTime(futureTime);
-        // Note: cannot setBondingActive without hook, but deployLiquidity
-        // checks hook independently. Set maturity so it's permissionless.
-        noHookInstance.setBondingMaturityTime(futureTime + 1);
-        vm.stopPrank();
-        vm.warp(futureTime + 1);
-
-        vm.prank(owner);
-        vm.expectRevert(HookNotSet.selector);
-        noHookInstance.deployLiquidity();
-    }
-
-    function test_deployLiquidity_requiresReserve() public {
+    function test_deployLiquidity_requiresReserve_notHook() public {
+        // deployLiquidity() does NOT require a hook — it only requires reserve > 0
         _activateBonding();
-        // Instance has no reserve (no buys happened), so reserve == 0
+        // No buys → reserve == 0 → revert NoReserve (not HookNotSet)
         vm.prank(owner);
         vm.expectRevert(NoReserve.selector);
         instance.deployLiquidity();
@@ -549,5 +527,42 @@ contract ERC404BondingInstanceTest is Test {
         vm.prank(user1);
         vm.expectRevert();
         instance.migrateVault(makeAddr("newVault"));
+    }
+
+    // ── Hook removal tests (TDD) ──────────────────────────────────────────────
+
+    function test_initialize_noHookParam() public {
+        // initialize() must compile without hook address parameter
+        // Will compile once hook param is removed
+        vm.startPrank(owner);
+        ERC404BondingInstance impl2 = new ERC404BondingInstance();
+        ERC404BondingInstance inst2 = ERC404BondingInstance(payable(LibClone.clone(address(impl2))));
+        ERC404BondingInstance.BondingParams memory bonding = ERC404BondingInstance.BondingParams({
+            maxSupply: MAX_SUPPLY,
+            unit: 1_000_000 ether,
+            liquidityReservePercent: LIQUIDITY_RESERVE_PERCENT,
+            curve: curveParams
+        });
+        inst2.initialize(owner, address(0xBEEF), bonding, address(0)); // no hook param
+        vm.stopPrank();
+    }
+
+    function test_buy_doesNotRequireHook() public {
+        // Buy should succeed without v4Hook being set
+        vm.startPrank(owner);
+        uint256 futureTime = block.timestamp + 1 days;
+        instance.setBondingOpenTime(futureTime);
+        instance.setBondingActive(true); // no setV4Hook needed
+        vm.stopPrank();
+        vm.warp(futureTime);
+
+        vm.deal(user1, 10 ether);
+        vm.startPrank(user1);
+        uint256 buyAmount = 1000 * 1e18;
+        uint256 cost = _getCost(instance, buyAmount);
+        uint256 fee = (cost * instance.bondingFeeBps()) / 10000;
+        instance.buyBonding{value: cost + fee}(buyAmount, cost + fee, false, bytes32(0), bytes(""), 0);
+        vm.stopPrank();
+        assertGt(instance.balanceOf(user1), 0);
     }
 }

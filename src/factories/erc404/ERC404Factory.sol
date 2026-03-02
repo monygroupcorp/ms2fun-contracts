@@ -306,7 +306,7 @@ contract ERC404Factory is OwnableRoles, ReentrancyGuard, IFactory {
         address hook,
         address gatingModuleAddr
     ) private {
-        ERC404BondingInstance(payable(instance)).initialize(owner, vault_, bonding, hook, gatingModuleAddr);
+        ERC404BondingInstance(payable(instance)).initialize(owner, vault_, bonding, gatingModuleAddr);
         ERC404BondingInstance(payable(instance)).initializeProtocol(protocol);
     }
 
@@ -329,9 +329,7 @@ contract ERC404Factory is OwnableRoles, ReentrancyGuard, IFactory {
             liquidityReservePercent: profile.liquidityReserveBps / 100,
             curve: curveComputer.computeCurveParams(
                 nftCount, profile.targetETH, profile.unitPerNFT, profile.liquidityReserveBps
-            ),
-            poolFee: profile.poolFee,
-            tickSpacing: profile.tickSpacing
+            )
         });
     }
 

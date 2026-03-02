@@ -28,12 +28,21 @@ interface IWETH {
  * @notice Singleton contract that handles all Uniswap V4 liquidity deployment.
  *         Called externally by ERC404BondingInstance at graduation time.
  *         Owns the unlockCallback so V4 bytecode is not embedded in the instance.
+ *         Pool fee and tick spacing are fixed at construction time.
  */
 contract LiquidityDeployerModule is IUnlockCallback {
     using CurrencyLibrary for Currency;
     using StateLibrary for IPoolManager;
     using CurrencySettler for Currency;
     using FixedPointMathLib for uint256;
+
+    uint24 public immutable poolFee;
+    int24 public immutable tickSpacing;
+
+    constructor(uint24 _poolFee, int24 _tickSpacing) {
+        poolFee = _poolFee;
+        tickSpacing = _tickSpacing;
+    }
 
     struct DeployParams {
         uint256 ethReserve;
@@ -43,9 +52,6 @@ contract LiquidityDeployerModule is IUnlockCallback {
         address weth;
         address token;        // the ERC404 token (instance address)
         address instance;     // same as token, needed for token transfers
-        uint24 poolFee;
-        int24 tickSpacing;
-        IHooks v4Hook;
         IPoolManager v4PoolManager;
     }
 
@@ -109,15 +115,15 @@ contract LiquidityDeployerModule is IUnlockCallback {
 
         uint160 sqrtPriceX96 = _computeSqrtPrice(r.ethForPool, r.tokensForPool, setup.token0IsThis);
 
-        setup.tickLower = TickMath.minUsableTick(p.tickSpacing);
-        setup.tickUpper = TickMath.maxUsableTick(p.tickSpacing);
+        setup.tickLower = TickMath.minUsableTick(tickSpacing);
+        setup.tickUpper = TickMath.maxUsableTick(tickSpacing);
 
         setup.poolKey = PoolKey({
             currency0:   currency0,
             currency1:   currency1,
-            fee:         p.poolFee,
-            tickSpacing: p.tickSpacing,
-            hooks:       p.v4Hook
+            fee:         poolFee,
+            tickSpacing: tickSpacing,
+            hooks:       IHooks(address(0))
         });
 
         // Wrap ETH and approve pool manager

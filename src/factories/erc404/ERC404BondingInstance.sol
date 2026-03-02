@@ -11,7 +11,6 @@ import { CurveParamsComputer } from "./CurveParamsComputer.sol";
 import { ERC404StakingModule } from "./ERC404StakingModule.sol";
 import { LiquidityDeployerModule } from "./LiquidityDeployerModule.sol";
 import { IPoolManager } from "v4-core/interfaces/IPoolManager.sol";
-import { IHooks } from "v4-core/interfaces/IHooks.sol";
 import { IAlignmentVault } from "../../interfaces/IAlignmentVault.sol";
 import {IMasterRegistry} from "../../master/interfaces/IMasterRegistry.sol";
 import { IGlobalMessageRegistry } from "../../registry/interfaces/IGlobalMessageRegistry.sol";
@@ -27,16 +26,11 @@ error BondingNotActive();
 error BondingNotConfigured();
 error CannotActivateAfterLiquidityDeployed();
 error ExceedsBonding();
-error HookAlreadySet();
-error HookMustBeSetFirst();
-error HookNotConfigured();
-error HookNotSet();
 error InsufficientBalance();
 error InsufficientTokenBalance();
 error InvalidCurveComputer();
 error InvalidFactory();
 error InvalidGlobalMessageRegistry();
-error InvalidHook();
 error InvalidLiquidityDeployer();
 error InvalidMaxSupply();
 error InvalidOwner();
@@ -86,8 +80,6 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IInstanceLife
         uint256 unit;
         uint256 liquidityReservePercent;
         BondingCurveMath.Params curve;
-        uint24  poolFee;
-        int24   tickSpacing;
     }
 
     /// @dev Factory's own config — protocol-controlled.
@@ -118,13 +110,9 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IInstanceLife
     uint256 public LIQUIDITY_RESERVE;
     BondingCurveMath.Params public curveParams; // Storage (set in initialize, never changed)
 
-    // Pool configuration (from graduation profile)
-    uint24 public poolFee;
-    int24 public tickSpacing;
     uint256 public UNIT;
 
     address public v4PoolManager;
-    address public v4Hook; // Can be set after deployment
     address public factory;
     address public weth;
     IAlignmentVault public vault;
@@ -168,7 +156,6 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IInstanceLife
     event StakingEnabled();
     event StakerRewardsClaimed(address indexed user, uint256 rewardAmount);
     event BondingFeePaid(address indexed buyer, uint256 feeAmount);
-    event V4HookSet(address indexed hook);
 
     // ┌─────────────────────────┐
     // │      Constructor        │
@@ -193,7 +180,6 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IInstanceLife
         address owner,
         address vault_,
         BondingParams calldata bonding,
-        address hook,
         address _gatingModule
     ) external {
         if (_initialized) revert AlreadyInitialized();
@@ -211,11 +197,8 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IInstanceLife
         MAX_SUPPLY = bonding.maxSupply;
         LIQUIDITY_RESERVE = (bonding.maxSupply * bonding.liquidityReservePercent) / 100;
         curveParams = bonding.curve;
-        poolFee = bonding.poolFee;
-        tickSpacing = bonding.tickSpacing;
         UNIT = bonding.unit;
 
-        v4Hook = hook;
         gatingModule = IGatingModule(_gatingModule);
 
         // Deploy DN404 mirror and initialize
@@ -301,25 +284,10 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IInstanceLife
      */
     function setBondingActive(bool _active) external onlyOwner {
         if (bondingOpenTime == 0) revert OpenTimeNotSet();
-        if (_active) {
-            if (v4Hook == address(0)) revert HookMustBeSetFirst();
-            if (liquidityPool != address(0)) revert CannotActivateAfterLiquidityDeployed();
-        }
+        if (_active && liquidityPool != address(0)) revert CannotActivateAfterLiquidityDeployed();
         bondingActive = _active;
         emit BondingActiveChanged(_active);
         emit StateChanged(_active ? STATE_BONDING : STATE_PAUSED);
-    }
-
-    /**
-     * @notice Set V4 hook address
-     * @dev Can be called after deployment to set hook
-     * @param _hook Hook address
-     */
-    function setV4Hook(address _hook) external onlyOwner {
-        if (_hook == address(0)) revert InvalidHook();
-        if (v4Hook != address(0)) revert HookAlreadySet();
-        v4Hook = _hook;
-        emit V4HookSet(_hook);
     }
 
     /// @notice Migrate to a new vault. New vault must share this instance's alignment target.
@@ -369,7 +337,6 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IInstanceLife
         if (deadline != 0 && block.timestamp > deadline) revert TransactionExpired();
         if (!bondingActive) revert BondingNotActive();
         if (liquidityPool != address(0)) revert BondingEnded();
-        if (v4Hook == address(0)) revert HookNotConfigured();
         if (totalBondingSupply + amount > MAX_SUPPLY - LIQUIDITY_RESERVE) revert ExceedsBonding();
 
         // Gating check (address(0) = open gating)
@@ -439,7 +406,6 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IInstanceLife
         if (deadline != 0 && block.timestamp > deadline) revert TransactionExpired();
         if (!bondingActive) revert BondingNotActive();
         if (liquidityPool != address(0)) revert BondingEnded();
-        if (v4Hook == address(0)) revert HookNotConfigured();
 
         // Lock sells when bonding curve is full to preserve best case scenario for liquidity deployment
         /// @dev Sells are intentionally blocked when bonding curve is full. This ensures
@@ -634,7 +600,6 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IInstanceLife
         if (bondingOpenTime == 0) revert BondingNotConfigured();
         if (block.timestamp < bondingOpenTime) revert TooEarly();
         if (liquidityPool != address(0)) revert AlreadyDeployed();
-        if (v4Hook == address(0)) revert HookNotSet();
         if (reserve == 0) revert NoReserve();
 
         uint256 maxBondingSupply = MAX_SUPPLY - LIQUIDITY_RESERVE;
@@ -659,9 +624,6 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IInstanceLife
             weth: weth,
             token: address(this),
             instance: address(this),
-            poolFee: poolFee,
-            tickSpacing: tickSpacing,
-            v4Hook: IHooks(v4Hook),
             v4PoolManager: IPoolManager(v4PoolManager)
         });
 
