@@ -28,9 +28,12 @@ MasterRegistry holds a reference to AlignmentRegistry for vault registration val
 
 ## Revenue Flow
 
-- ERC404: bonding fee (1%) → treasury. Graduation fee (2%) → split protocol + factory creator. Post-graduation V4 hook tax → vault.
-- ERC1155: 20% tithe on artist withdrawals → vault.
-- Vault LP yield: 5% protocol cut (includes factory creator sub-cut), 95% to benefactors.
+A single rule applies at every settlement: **1% → protocol treasury, 19% → alignment vault, 80% → artist**.
+
+- ERC404: bonding fee (1%) accumulates in reserve. At graduation: 1% protocol + 19% vault + 80% LP. Post-graduation hook tax → vault accumulates.
+- ERC1155: on withdrawal: 1% protocol + 19% vault + 80% artist.
+- ERC721: on settlement: 1% protocol + 19% vault + 80% artist (+ deposit refunded).
+- Vault LP yield: 1% protocol cut, 99% to benefactors proportional to contributions.
 
 ## Governance
 
@@ -38,7 +41,7 @@ GrandCentral is a Mol***-pattern DAO. Shares = voting power, loot = economic rig
 
 ## Tech Stack
 
-Solidity 0.8.20, Foundry/Forge, Solady (Ownable, UUPS), Uniswap V4 (hooks, LP), DN404 (ERC404). Run `forge test` for full suite (~1009 tests).
+Solidity 0.8.20, Foundry/Forge, Solady (Ownable, UUPS), Uniswap V4 (hooks, LP), DN404 (ERC404). Run `forge test` for full suite (~1130 tests).
 
 ## Build & Test Performance
 

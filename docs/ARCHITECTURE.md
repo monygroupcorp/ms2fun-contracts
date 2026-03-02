@@ -1,6 +1,6 @@
 # ms2.fun Protocol Architecture
 
-**Last Updated:** 2026-03-01
+**Last Updated:** 2026-03-02
 
 ---
 
@@ -10,7 +10,7 @@ ms2.fun is a curated launchpad for derivative art and tokens aligned to establis
 
 The protocol curates which communities receive vaults through DAO governance. At launch, the team selects initial alignment targets (e.g., Remilia/CULT, Pudgy Penguins). Over time, DAO shareholders propose and vote on new targets. Projects that don't merit alignment don't get vault space.
 
-Every participant in the system earns from the value they contribute: vault factory creators earn yield cuts for building infrastructure, artists earn from their project sales and vault fee shares, and the protocol treasury captures fees at every layer.
+A single fee rule applies across all product types: **1% → protocol treasury, 19% → alignment vault, 80% → artist**. This is applied at every settlement event. No creation fees. The 20% alignment contribution is the protocol's cultural and economic contract with artists — tithing toward the community they're aligned with.
 
 ---
 
@@ -132,7 +132,6 @@ Vaults are the economic engine of the protocol. They collect fees from all proje
 | Term | Definition |
 |------|-----------|
 | **Vault Factory** | Code template for a vault strategy |
-| **Vault Factory Creator** | Developer who wrote the vault factory. Permanently in fee structure |
 | **Vault Instance** | Deployed vault configured for a specific alignment target |
 | **Benefactor** | A project instance that contributes fees to the vault |
 
@@ -172,10 +171,8 @@ claimableAmount = (accumulatedFees × benefactorShares / totalShares) - previous
 
 **Fee splits on LP yield:**
 ```
-protocolYieldCutBps (default 500 = 5%)
-  ├── factoryCreator yield cut (≤ protocolYieldCutBps)
-  └── remaining → protocol treasury
-benefactors get the rest (95%)
+protocolYieldCutBps (default 100 = 1%) → protocol treasury
+benefactors get the rest (99%)
 ```
 
 **V4 Integration:** All `modifyLiquidity` calls occur within `unlockCallback`. Full-range positions (min/max usable ticks). Currency settlement via `CurrencySettler` library.
@@ -187,10 +184,6 @@ ZAMM-based LP vault. Simplified dragnet conversion — same benefactor share acc
 ### CypherAlignmentVault (`src/vaults/cypher/`)
 
 Algebra V2 LP vault for the Cypher chain. Same benefactor share model; targets Algebra V2 pools. Deployed via `CypherAlignmentVaultFactory`, which is used by `ERC404CypherFactory`.
-
-### Factory Creator Transfer
-
-The `factoryCreator` address is transferable via a two-step pattern (`transferFactoryCreator` → `acceptFactoryCreator`) for wallet management. Applies to all vault types.
 
 ### Benefactor Delegation
 
@@ -223,11 +216,10 @@ Creates hybrid ERC20/ERC721 tokens with bonding curves.
 **Instance lifecycle:**
 1. Artist deploys instance via factory with vault binding
 2. Users buy tokens on the bonding curve (`buyBonding()`)
-3. Bonding fees (default 1%) go to protocol treasury
+3. Bonding fees (1%) accumulate in the reserve (not extracted)
 4. At maturity, anyone triggers `deployLiquidity()` (graduation)
-5. Graduation fee (default 2%) split between protocol and factory creator
-6. Remaining ETH swaps to alignment token, mints V4 LP position
-7. Post-graduation: tokens trade on V4 pool with hook-based swap tax
+5. 1% of raise → protocol treasury, 19% → vault via `receiveContribution`, 80% → LP pool
+6. Post-graduation: tokens trade on V4/ZAMM/Algebra pool with hook-based swap tax → vault
 
 **Key features:**
 - Tier system: password-protected or time-gated access
@@ -237,10 +229,7 @@ Creates hybrid ERC20/ERC721 tokens with bonding curves.
 - V4 Hook: `afterSwap()` tax routed to vault with project attribution
 
 **Fee parameters (immutable per instance):**
-- `bondingFeeBps` — fee on bonding purchases (default 100 = 1%)
-- `graduationFeeBps` — fee on liquidity deployment (default 200 = 2%)
-- `creatorGraduationFeeBps` — factory creator's share of graduation fee
-- `polBps` — protocol-owned liquidity percentage (default 100 = 1%)
+- `bondingFeeBps` — fee on bonding purchases (default 100 = 1%), accumulates in reserve
 
 **Factory family components:**
 - `ERC404StakingModule` — factory-scoped singleton accounting backend for vault yield delegation to token stakers. Holds no ETH or tokens — pure accounting keyed by instance address. Authorized via `MasterRegistry.isRegisteredInstance(msg.sender)`, same pattern as `GlobalMessageRegistry`. Deployed once alongside the factory; address passed immutably into every instance at construction. Enabling staking is irreversible — uses `rewardPerTokenStored` accounting (Synthetix model) to correctly handle stakers joining at different times.
@@ -255,7 +244,7 @@ Creates open-edition or limited-edition NFTs for artists.
 **Instance lifecycle:**
 1. Artist deploys edition with pricing model and vault binding
 2. Users mint editions at configured price
-3. Artist withdraws proceeds — 20% tithe automatically sent to vault
+3. Artist withdraws proceeds — 1% to protocol treasury, 19% to vault, 80% to artist
 4. Artist can claim proportional vault fees via `claimVaultFees()`
 
 **Pricing models:**
@@ -285,7 +274,7 @@ This binding is permanent — instances cannot migrate between vaults.
 
 ## 6. Revenue Architecture
 
-Revenue flows through multiple layers, each with its own fee structure.
+A single rule governs all revenue: **1% protocol treasury, 19% alignment vault, 80% artist**, applied at every settlement event. The cultural precedent is tithing — artists contribute 20% of proceeds toward the community they're aligned with. The 1/19 split ensures protocol sustainability without obscuring the alignment story.
 
 ### Fee Flow Diagram
 
@@ -293,39 +282,45 @@ Revenue flows through multiple layers, each with its own fee structure.
 User Activity
 │
 ├── ERC404 Bonding Purchase
-│     ├── bondingFeeBps (1%) ──────────────► Protocol Treasury
+│     ├── bondingFeeBps (1%) ──────────────► Instance reserve (not extracted)
 │     └── remainder ──────────────────────► Instance reserve
 │
 ├── ERC404 Graduation (liquidity deployment)
-│     ├── graduationFeeBps (2%)
-│     │     ├── creatorGraduationFeeBps ──► Factory Creator
-│     │     └── remainder ────────────────► Protocol Treasury
-│     ├── polBps (1%) ────────────────────► Protocol-Owned Liquidity
-│     └── remainder ──────────────────────► V4 LP position
+│     ├── 1% of raise ────────────────────► Protocol Treasury
+│     ├── 19% of raise ───────────────────► Vault (receiveContribution)
+│     └── 80% of raise ───────────────────► LP pool
 │
 ├── ERC404 Post-Graduation Swaps
-│     └── V4 Hook Tax ────────────────────► Vault (via receiveInstance)
+│     └── Hook Tax ───────────────────────► Vault (accumulates; no extraction)
 │
-├── ERC1155 Mint
-│     └── proceeds ───────────────────────► Instance balance
-│           └── on withdraw: 20% tithe ──► Vault (via receiveInstance)
+├── ERC1155 Withdrawal
+│     ├── 1% ─────────────────────────────► Protocol Treasury
+│     ├── 19% ────────────────────────────► Vault (receiveContribution)
+│     └── 80% ────────────────────────────► Artist
+│
+├── ERC721 Auction Settlement
+│     ├── 1% of winning bid ──────────────► Protocol Treasury
+│     ├── 19% of winning bid ─────────────► Vault (receiveContribution)
+│     └── 80% of winning bid ─────────────► Artist
+│           + creator deposit refunded
 │
 └── Vault LP Yield
-      ├── protocolYieldCutBps (5%)
-      │     ├── factoryCreator cut ───────► Vault Factory Creator
-      │     └── remainder ────────────────► Protocol Treasury
-      └── benefactor share (95%) ─────────► Project Instances (proportional)
+      ├── protocolYieldCutBps (1%) ───────► Protocol Treasury
+      └── benefactor share (99%) ─────────► Project Instances (proportional)
 ```
 
 ### Who Gets Paid
 
 | Participant | Revenue Source | Mechanism |
 |-------------|--------------|-----------|
-| **Protocol Treasury** | Bonding fees, graduation fees, LP yield cut | Direct transfers, accumulated fees |
-| **Vault Factory Creator** | LP yield sub-cut | `withdrawCreatorFees()` on vault |
-| **Project Factory Creator** | Graduation fee share, creation fee share | `creatorGraduationFeeBps`, `creatorFeeBps` |
-| **Artist (instance creator)** | ERC1155: 80% of mint proceeds. ERC404: graduation fee share, vault fee claims via staking | Instance-level extraction |
+| **Protocol Treasury** | 1% of every settlement, 1% of vault LP yield | Direct transfers |
+| **Alignment Vault** | 19% of every settlement | `receiveContribution()`, earns LP yield |
+| **Artist** | 80% of every settlement + vault fee claims proportional to contributions | Instance-level extraction |
 | **Alignment Target** | No direct fee. Vault buying pressure on their token IS the upside | Structural benefit |
+
+### Serial Creator Yield Model
+
+Artists tithe 19% of proceeds from each project to the vault. The vault deploys contributions as LP for the alignment target's token. Artists earn back 99% of vault LP yield proportional to their benefactor shares. At 10–20% APY across 12+ projects, this becomes a genuine passive income stream — the tithing model rewards prolific creators who build a body of aligned work.
 
 ### Protocol Treasury
 
@@ -435,7 +430,7 @@ The registration layer for the protocol. Owner is the DAO (via Timelock). Holds 
 - Featured queue → FeaturedQueueManager (standalone)
 
 **Enforcement at registration:**
-- Factories: must implement `IFactory` with `creator()` and `protocol()`
+- Factories: must implement `IFactory` with `protocol()`
 - Instances: must have immutable vault matching declaration, must have protocol treasury, factory must be active
 - Vaults: must point to approved and active alignment target (checked via AlignmentRegistry) with matching token
 
@@ -552,9 +547,7 @@ All protocol contracts with `onlyOwner` functions are owned by a Solady Timelock
 
 - Instance → Vault binding is **immutable** (set at construction)
 - Instance → GlobalMessageRegistry reference is **immutable** (set at construction via factory)
-- Factory creator address in instances is **immutable**
 - External protocol references in vaults (WETH, PoolManager, routers) are **immutable**
-- Vault factory creator address is **transferable** (two-step)
 
 ### What's Upgradeable vs Permanent
 
