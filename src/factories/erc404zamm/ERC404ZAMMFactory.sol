@@ -14,6 +14,7 @@ import {CurveParamsComputer} from "../erc404/CurveParamsComputer.sol";
 import {BondingCurveMath} from "../erc404/libraries/BondingCurveMath.sol";
 import {IdentityParams} from "../../interfaces/IFactoryTypes.sol";
 import {PasswordTierGatingModule} from "../../gating/PasswordTierGatingModule.sol";
+import {IComponentRegistry} from "../../registry/interfaces/IComponentRegistry.sol";
 
 /**
  * @title ERC404ZAMMFactory
@@ -42,6 +43,7 @@ contract ERC404ZAMMFactory is OwnableRoles, ReentrancyGuard, IFactory {
         address curveComputer;
         address liquidityDeployer;
         address tierGatingModule;
+        address componentRegistry;   // NEW
     }
 
     // ── Immutables ────────────────────────────────────────────────────────────
@@ -66,6 +68,7 @@ contract ERC404ZAMMFactory is OwnableRoles, ReentrancyGuard, IFactory {
     ZAMMLiquidityDeployerModule public immutable liquidityDeployer;
     CurveParamsComputer public immutable curveComputer;
     PasswordTierGatingModule public immutable tierGatingModule;
+    IComponentRegistry public immutable componentRegistry;
 
     // Accumulated fees
     uint256 public accumulatedCreatorFees;
@@ -118,6 +121,7 @@ contract ERC404ZAMMFactory is OwnableRoles, ReentrancyGuard, IFactory {
         globalMessageRegistry = modules.globalMessageRegistry;
         curveComputer = CurveParamsComputer(modules.curveComputer);
         tierGatingModule = PasswordTierGatingModule(modules.tierGatingModule);
+        componentRegistry = IComponentRegistry(modules.componentRegistry);
 
         features.push(FeatureUtils.BONDING_CURVE);
         features.push(FeatureUtils.LIQUIDITY_POOL);
@@ -133,8 +137,23 @@ contract ERC404ZAMMFactory is OwnableRoles, ReentrancyGuard, IFactory {
         string calldata metadataURI,
         address vault
     ) external payable nonReentrant returns (address instance) {
-        PasswordTierGatingModule.TierConfig memory emptyConfig;
-        return _createInstanceInternal(identity, metadataURI, vault, emptyConfig);
+        return _createInstanceCore(identity, metadataURI, address(0), vault);
+    }
+
+    /**
+     * @notice Create a new ERC404 ZAMM bonding instance with any DAO-approved gating component.
+     * @param gatingModule address(0) = open gating; otherwise must be approved in ComponentRegistry.
+     */
+    function createInstance(
+        IdentityParams calldata identity,
+        string calldata metadataURI,
+        address gatingModule,
+        address vault
+    ) external payable nonReentrant returns (address instance) {
+        if (gatingModule != address(0)) {
+            require(componentRegistry.isApprovedComponent(gatingModule), "Unapproved component");
+        }
+        return _createInstanceCore(identity, metadataURI, gatingModule, vault);
     }
 
     /**
@@ -146,10 +165,42 @@ contract ERC404ZAMMFactory is OwnableRoles, ReentrancyGuard, IFactory {
         address vault,
         PasswordTierGatingModule.TierConfig calldata tiers
     ) external payable nonReentrant returns (address instance) {
-        return _createInstanceInternal(identity, metadataURI, vault, tiers);
+        return _createInstanceInternalWithTiers(identity, metadataURI, vault, tiers);
     }
 
-    function _createInstanceInternal(
+    /// @dev New path: accepts a pre-resolved gatingModule address, skips configureFor.
+    function _createInstanceCore(
+        IdentityParams calldata identity,
+        string calldata metadataURI,
+        address gatingModule,
+        address vault
+    ) internal returns (address instance) {
+        require(msg.value >= instanceCreationFee, "Insufficient fee");
+        require(identity.nftCount > 0, "Invalid NFT count");
+        require(bytes(identity.name).length > 0, "Invalid name");
+        require(identity.owner != address(0), "Invalid creator");
+        require(vault != address(0), "Vault required");
+        require(vault.code.length > 0, "Vault must be contract");
+        require(!masterRegistry.isNameTaken(identity.name), "Name taken");
+
+        {
+            uint256 creatorCut = (instanceCreationFee * creatorFeeBps) / 10000;
+            accumulatedCreatorFees += creatorCut;
+            accumulatedProtocolFees += instanceCreationFee - creatorCut;
+        }
+
+        ERC404ZAMMBondingInstance.BondingParams memory bonding = _computeBondingParams(identity.nftCount, identity.profileId);
+        instance = LibClone.clone(implementation);
+
+        // gatingModule is pre-resolved — no configureFor call
+        ERC404ZAMMBondingInstance(payable(instance)).initialize(identity.owner, vault, bonding, gatingModule);
+        ERC404ZAMMBondingInstance(payable(instance)).initializeProtocol(_buildProtocolParams());
+        _setMetadata(instance, identity);
+        _finalizeInstance(instance, identity, metadataURI, vault);
+    }
+
+    /// @dev Legacy path: accepts TierConfig, calls configureFor after clone deployment.
+    function _createInstanceInternalWithTiers(
         IdentityParams calldata identity,
         string calldata metadataURI,
         address vault,
@@ -170,7 +221,6 @@ contract ERC404ZAMMFactory is OwnableRoles, ReentrancyGuard, IFactory {
         }
 
         ERC404ZAMMBondingInstance.BondingParams memory bonding = _computeBondingParams(identity.nftCount, identity.profileId);
-
         instance = LibClone.clone(implementation);
 
         address gatingModuleAddr;

@@ -9,6 +9,8 @@ import {CurveParamsComputer} from "../../../src/factories/erc404/CurveParamsComp
 import {PasswordTierGatingModule} from "../../../src/gating/PasswordTierGatingModule.sol";
 import {MockZAMM} from "../../mocks/MockZAMM.sol";
 import {IdentityParams} from "../../../src/interfaces/IFactoryTypes.sol";
+import {ComponentRegistry} from "../../../src/registry/ComponentRegistry.sol";
+import {LibClone} from "solady/utils/LibClone.sol";
 
 // Minimal mock MasterRegistry
 contract MockMasterRegistryZ {
@@ -38,6 +40,7 @@ contract ERC404ZAMMFactoryTest is Test {
     ERC404ZAMMBondingInstance implementation;
     CurveParamsComputer curveComputer;
     PasswordTierGatingModule tierGatingModule;
+    ComponentRegistry componentRegistry;
 
     address protocol = makeAddr("protocol");
     address creator = makeAddr("creator");
@@ -53,6 +56,11 @@ contract ERC404ZAMMFactoryTest is Test {
         implementation = new ERC404ZAMMBondingInstance();
         curveComputer = new CurveParamsComputer(protocol);
         tierGatingModule = new PasswordTierGatingModule();
+
+        ComponentRegistry compRegImpl = new ComponentRegistry();
+        address compRegProxy = LibClone.deployERC1967(address(compRegImpl));
+        componentRegistry = ComponentRegistry(compRegProxy);
+        componentRegistry.initialize(protocol);
 
         factory = new ERC404ZAMMFactory(
             ERC404ZAMMFactory.CoreConfig({
@@ -71,7 +79,8 @@ contract ERC404ZAMMFactoryTest is Test {
                 globalMessageRegistry: globalMsgRegistry,
                 curveComputer: address(curveComputer),
                 liquidityDeployer: address(deployer),
-                tierGatingModule: address(tierGatingModule)
+                tierGatingModule: address(tierGatingModule),
+                componentRegistry: address(componentRegistry)
             })
         );
 
@@ -184,5 +193,30 @@ contract ERC404ZAMMFactoryTest is Test {
     function test_protocol_and_creator_view() public view {
         assertEq(factory.protocol(), protocol);
         assertEq(factory.creator(), creator);
+    }
+
+    // ── ComponentRegistry validation ──────────────────────────────────────────
+
+    function test_zammFactory_createInstanceWithGating_revertsOnUnapprovedModule() public {
+        address unapprovedModule = address(0xBAD);
+
+        vm.deal(address(this), 0.01 ether);
+        vm.expectRevert("Unapproved component");
+        factory.createInstance{value: 0.01 ether}(
+            _identity("GatedToken", "GATE"),
+            "",
+            unapprovedModule,
+            vault
+        );
+    }
+
+    function test_zammFactory_createInstance_noGating_stillWorks() public {
+        vm.deal(address(this), 0.01 ether);
+        address instance = factory.createInstance{value: 0.01 ether}(
+            _identity("OpenToken", "OPEN"),
+            "",
+            vault
+        );
+        assertTrue(instance != address(0));
     }
 }
