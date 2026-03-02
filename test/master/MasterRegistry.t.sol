@@ -275,4 +275,25 @@ contract MasterRegistryReworkTest is Test {
         vm.expectRevert("New vault not active");
         registry.migrateVault(instance, vault2);
     }
+
+    // ── ComponentRegistry wiring ──────────────────────────────────────────────
+
+    function test_setComponentRegistry_setsPointer() public {
+        // Deploy a mock ComponentRegistry address
+        address mockRegistry = address(0xC001);
+        vm.prank(daoOwner);
+        registry.setComponentRegistry(mockRegistry);
+        assertEq(address(registry.componentRegistry()), mockRegistry);
+    }
+
+    function test_setComponentRegistry_revertsOnZeroAddress() public {
+        vm.prank(daoOwner);
+        vm.expectRevert("Invalid registry");
+        registry.setComponentRegistry(address(0));
+    }
+
+    function test_setComponentRegistry_revertsIfNotOwner() public {
+        vm.expectRevert();
+        registry.setComponentRegistry(address(0xC001));
+    }
 }

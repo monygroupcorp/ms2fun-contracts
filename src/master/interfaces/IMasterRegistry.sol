@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
+import {IComponentRegistry} from "../../registry/interfaces/IComponentRegistry.sol";
+
 /**
  * @title IMasterRegistry
  * @notice Interface for the Master Registry contract
@@ -67,6 +69,8 @@ interface IMasterRegistry {
 
     event InstanceVaultMigrated(address indexed instance, address indexed newVault, uint256 vaultIndex);
 
+    event ComponentRegistrySet(address indexed componentRegistry);
+
     // Functions
     function registerInstance(
         address instance,
@@ -120,4 +124,8 @@ interface IMasterRegistry {
     function migrateVault(address instance, address newVault) external;
     function getInstanceVaults(address instance) external view returns (address[] memory);
     function getActiveVault(address instance) external view returns (address);
+
+    // ComponentRegistry
+    function componentRegistry() external view returns (IComponentRegistry);
+    function setComponentRegistry(address _componentRegistry) external;
 }

@@ -5,6 +5,7 @@ import {UUPSUpgradeable} from "solady/utils/UUPSUpgradeable.sol";
 import {Ownable} from "solady/auth/Ownable.sol";
 import {IMasterRegistry} from "./interfaces/IMasterRegistry.sol";
 import {IAlignmentRegistry} from "./interfaces/IAlignmentRegistry.sol";
+import {IComponentRegistry} from "../registry/interfaces/IComponentRegistry.sol";
 import {MetadataUtils} from "../shared/libraries/MetadataUtils.sol";
 import {IFactoryInstance} from "../interfaces/IFactoryInstance.sol";
 import {IFactory} from "../interfaces/IFactory.sol";
@@ -36,6 +37,7 @@ contract MasterRegistryV1 is UUPSUpgradeable, Ownable, IMasterRegistry {
 
     // ── External Modules ──
     IAlignmentRegistry public alignmentRegistry;
+    IComponentRegistry public componentRegistry;
 
     // Events
     event CreatorInstanceAdded(address indexed creator, address indexed instance);
@@ -62,6 +64,14 @@ contract MasterRegistryV1 is UUPSUpgradeable, Ownable, IMasterRegistry {
     function setAlignmentRegistry(address _alignmentRegistry) external onlyOwner {
         require(_alignmentRegistry != address(0), "Invalid registry");
         alignmentRegistry = IAlignmentRegistry(_alignmentRegistry);
+    }
+
+    // ============ ComponentRegistry Wiring ============
+
+    function setComponentRegistry(address _componentRegistry) external onlyOwner {
+        require(_componentRegistry != address(0), "Invalid registry");
+        componentRegistry = IComponentRegistry(_componentRegistry);
+        emit ComponentRegistrySet(_componentRegistry);
     }
 
     // ============ Factory Registration ============

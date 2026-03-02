@@ -2,6 +2,7 @@
 pragma solidity ^0.8.20;
 
 import {IMasterRegistry} from "../../src/master/interfaces/IMasterRegistry.sol";
+import {IComponentRegistry} from "../../src/registry/interfaces/IComponentRegistry.sol";
 
 /**
  * @title MockMasterRegistry
@@ -127,6 +128,12 @@ contract MockMasterRegistry is IMasterRegistry {
     function getActiveVault(address) external view override returns (address) {
         return address(0);
     }
+
+    function componentRegistry() external view override returns (IComponentRegistry) {
+        return IComponentRegistry(address(0));
+    }
+
+    function setComponentRegistry(address) external override {}
 
     // Namespace tracking for name collision tests
     mapping(bytes32 => bool) private _nameHashes;
