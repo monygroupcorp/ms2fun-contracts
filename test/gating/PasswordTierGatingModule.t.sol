@@ -54,30 +54,30 @@ contract PasswordTierGatingModuleTest is Test {
         module.configureFor(instance1, _volumeCapConfig());
         vm.prank(instance1);
         // open tier (no password) = unlimited
-        assertTrue(module.canMint(user1, 1e18, abi.encode(bytes32(0))));
+        assertTrue(module.canMint(user1, 1e18, abi.encode(bytes32(0), uint256(0))));
     }
 
     function test_canMint_correctPassword_withinCap() public {
         module.configureFor(instance1, _volumeCapConfig());
         vm.prank(instance1);
-        assertTrue(module.canMint(user1, 50e18, abi.encode(keccak256("tier1password"))));
+        assertTrue(module.canMint(user1, 50e18, abi.encode(keccak256("tier1password"), uint256(0))));
     }
 
     function test_canMint_wrongPassword_reverts() public {
         module.configureFor(instance1, _volumeCapConfig());
         vm.prank(instance1);
         vm.expectRevert(PasswordTierGatingModule.InvalidPassword.selector);
-        module.canMint(user1, 1e18, abi.encode(keccak256("wrongpassword")));
+        module.canMint(user1, 1e18, abi.encode(keccak256("wrongpassword"), uint256(0)));
     }
 
     function test_onMint_tracksVolume() public {
         module.configureFor(instance1, _volumeCapConfig());
         vm.startPrank(instance1);
-        module.canMint(user1, 50e18, abi.encode(keccak256("tier1password")));
+        module.canMint(user1, 50e18, abi.encode(keccak256("tier1password"), uint256(0)));
         module.onMint(user1, 50e18);
         // second buy: 50+60=110 > cap of 100 → should revert
         vm.expectRevert(PasswordTierGatingModule.VolumeCapExceeded.selector);
-        module.canMint(user1, 60e18, abi.encode(keccak256("tier1password")));
+        module.canMint(user1, 60e18, abi.encode(keccak256("tier1password"), uint256(0)));
         vm.stopPrank();
     }
 
@@ -88,6 +88,154 @@ contract PasswordTierGatingModuleTest is Test {
         module.onMint(user1, 90e18);
         // instance2's user1 should be unaffected
         vm.prank(instance2);
-        assertTrue(module.canMint(user1, 90e18, abi.encode(keccak256("tier1password"))));
+        assertTrue(module.canMint(user1, 90e18, abi.encode(keccak256("tier1password"), uint256(0))));
+    }
+
+    // ── TIME_BASED enforcement ────────────────────────────────────────────────
+
+    function _setupTimeBasedInstance(address instance) internal {
+        bytes32[] memory hashes = new bytes32[](2);
+        hashes[0] = keccak256("tier1pass");  // tier 1: unlocks after 1 hour
+        hashes[1] = keccak256("tier2pass");  // tier 2: unlocks after 24 hours
+
+        uint256[] memory unlockTimes = new uint256[](2);
+        unlockTimes[0] = 1 hours;
+        unlockTimes[1] = 24 hours;
+
+        PasswordTierGatingModule.TierConfig memory config = PasswordTierGatingModule.TierConfig({
+            tierType: PasswordTierGatingModule.TierType.TIME_BASED,
+            passwordHashes: hashes,
+            volumeCaps: new uint256[](0),
+            tierUnlockTimes: unlockTimes
+        });
+
+        vm.prank(instance);
+        module.configureFor(instance, config);
+    }
+
+    function test_timeBased_tier0_alwaysOpen() public {
+        address inst = address(0x1111);
+        _setupTimeBasedInstance(inst);
+
+        // openTime = now, tier 0 (no password) — always mintable
+        uint256 openTime = block.timestamp;
+        bytes memory data = abi.encode(bytes32(0), openTime);
+
+        vm.prank(inst);
+        assertTrue(module.canMint(address(0xAAAA1), 1, data));
+    }
+
+    function test_timeBased_tier1_lockedBeforeUnlock() public {
+        address inst = address(0x1111);
+        _setupTimeBasedInstance(inst);
+
+        uint256 openTime = block.timestamp;
+        bytes32 tier1Hash = keccak256("tier1pass");
+        bytes memory data = abi.encode(tier1Hash, openTime);
+
+        // 30 minutes after open — tier 1 requires 1 hour
+        vm.warp(block.timestamp + 30 minutes);
+
+        vm.prank(inst);
+        vm.expectRevert(PasswordTierGatingModule.TierTimeLocked.selector);
+        module.canMint(address(0xAAAA1), 1, data);
+    }
+
+    function test_timeBased_tier1_openAfterUnlock() public {
+        address inst = address(0x1111);
+        _setupTimeBasedInstance(inst);
+
+        uint256 openTime = block.timestamp;
+        bytes32 tier1Hash = keccak256("tier1pass");
+        bytes memory data = abi.encode(tier1Hash, openTime);
+
+        // 2 hours after open — tier 1 requires only 1 hour
+        vm.warp(block.timestamp + 2 hours);
+
+        vm.prank(inst);
+        assertTrue(module.canMint(address(0xAAAA1), 1, data));
+    }
+
+    function test_timeBased_tier2_lockedEvenAfterTier1Unlock() public {
+        address inst = address(0x1111);
+        _setupTimeBasedInstance(inst);
+
+        uint256 openTime = block.timestamp;
+        bytes32 tier2Hash = keccak256("tier2pass");
+        bytes memory data = abi.encode(tier2Hash, openTime);
+
+        // 2 hours after open — tier 2 requires 24 hours
+        vm.warp(block.timestamp + 2 hours);
+
+        vm.prank(inst);
+        vm.expectRevert(PasswordTierGatingModule.TierTimeLocked.selector);
+        module.canMint(address(0xAAAA1), 1, data);
+    }
+
+    function test_timeBased_tier2_openAfterFullUnlock() public {
+        address inst = address(0x1111);
+        _setupTimeBasedInstance(inst);
+
+        uint256 openTime = block.timestamp;
+        bytes32 tier2Hash = keccak256("tier2pass");
+        bytes memory data = abi.encode(tier2Hash, openTime);
+
+        // 25 hours after open
+        vm.warp(block.timestamp + 25 hours);
+
+        vm.prank(inst);
+        assertTrue(module.canMint(address(0xAAAA1), 1, data));
+    }
+
+    function test_timeBased_invalidPassword_reverts() public {
+        address inst = address(0x1111);
+        _setupTimeBasedInstance(inst);
+
+        uint256 openTime = block.timestamp;
+        bytes32 wrongHash = keccak256("wrongpass");
+        bytes memory data = abi.encode(wrongHash, openTime);
+
+        vm.warp(block.timestamp + 25 hours);
+
+        vm.prank(inst);
+        vm.expectRevert(PasswordTierGatingModule.InvalidPassword.selector);
+        module.canMint(address(0xAAAA1), 1, data);
+    }
+
+    // ── VOLUME_CAP backward compatibility with new encoding ───────────────────
+
+    function test_volumeCap_withOpenTimeInData_stillEnforcesCap() public {
+        address inst = address(0x2222);
+
+        bytes32[] memory hashes = new bytes32[](1);
+        hashes[0] = keccak256("vippass");
+        uint256[] memory caps = new uint256[](1);
+        caps[0] = 10;
+
+        PasswordTierGatingModule.TierConfig memory config = PasswordTierGatingModule.TierConfig({
+            tierType: PasswordTierGatingModule.TierType.VOLUME_CAP,
+            passwordHashes: hashes,
+            volumeCaps: caps,
+            tierUnlockTimes: new uint256[](0)
+        });
+
+        vm.prank(inst);
+        module.configureFor(inst, config);
+
+        bytes32 tier1Hash = keccak256("vippass");
+        bytes memory data = abi.encode(tier1Hash, uint256(block.timestamp));
+
+        // First mint within cap passes
+        vm.prank(inst);
+        assertTrue(module.canMint(address(0xAAAA1), 5, data));
+
+        // Record mint
+        vm.prank(inst);
+        module.onMint(address(0xAAAA1), 5);
+
+        // Second mint that would exceed cap reverts
+        vm.prank(inst);
+        vm.expectRevert(PasswordTierGatingModule.VolumeCapExceeded.selector);
+        module.canMint(address(0xAAAA1), 6, data);
     }
 }

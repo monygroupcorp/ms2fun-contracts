@@ -38,7 +38,8 @@ contract PasswordTierGatingModule is IGatingModule {
 
     // ── Configuration ──────────────────────────────────────────────────────────
 
-    /// @notice Called by factory right after deploying a clone. One-time per instance.
+    /// @notice Called by factory right after deploying an instance. One-time per instance.
+    /// @dev canMint data encoding: abi.encode(bytes32 passwordHash, uint256 openTime)
     function configureFor(address instance, TierConfig calldata config) external {
         if (configured[instance]) revert AlreadyConfigured();
         if (config.tierType == TierType.VOLUME_CAP
@@ -58,10 +59,12 @@ contract PasswordTierGatingModule is IGatingModule {
     // ── IGatingModule ──────────────────────────────────────────────────────────
 
     /// @dev msg.sender is the calling instance.
-    /// @param data abi.encode(bytes32 passwordHash)
+    /// @param data abi.encode(bytes32 passwordHash, uint256 openTime)
+    ///             passwordHash: bytes32(0) = open tier (no password).
+    ///             openTime: instance/edition open timestamp; used by TIME_BASED enforcement.
     function canMint(address user, uint256 amount, bytes calldata data) external override returns (bool) {
         TierConfig storage config = _configs[msg.sender];
-        bytes32 passwordHash = abi.decode(data, (bytes32));
+        (bytes32 passwordHash, uint256 openTime) = abi.decode(data, (bytes32, uint256));
 
         uint256 tier = passwordHash == bytes32(0) ? 0 : _tierByPasswordHash[msg.sender][passwordHash];
         if (tier == 0 && passwordHash != bytes32(0)) revert InvalidPassword();
@@ -69,8 +72,10 @@ contract PasswordTierGatingModule is IGatingModule {
         if (config.tierType == TierType.VOLUME_CAP) {
             uint256 cap = tier == 0 ? type(uint256).max : config.volumeCaps[tier - 1];
             if (userPurchaseVolume[msg.sender][user] + amount > cap) revert VolumeCapExceeded();
+        } else if (config.tierType == TierType.TIME_BASED && tier > 0) {
+            uint256 unlockAt = openTime + config.tierUnlockTimes[tier - 1];
+            if (block.timestamp < unlockAt) revert TierTimeLocked();
         }
-        // TIME_BASED: bondingOpenTime check remains in the instance; module has no time check here
         return true;
     }
 
