@@ -103,7 +103,8 @@ contract ERC404ZAMMFactoryTest is Test {
             owner: instanceOwner,
             vault: address(0), // vault passed separately
             nftCount: 100,
-            profileId: 0
+            presetId: 0,
+            creationTier: 0
         });
     }
 
@@ -128,7 +129,8 @@ contract ERC404ZAMMFactoryTest is Test {
             owner: instanceOwner,
             vault: address(0),
             nftCount: 100,
-            profileId: 99 // inactive profile
+            presetId: 99,
+            creationTier: 0 // inactive profile
         });
         vm.expectRevert();
         factory.createInstance{value: 0.01 ether}(id, "", vault);

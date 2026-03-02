@@ -75,8 +75,6 @@ contract FactoryFeaturesTest is Test {
     function test_ERC404Factory_features_returnsArrayViaInterface() public {
         vm.startPrank(protocol);
 
-        MockStakingRegistry stakingReg = new MockStakingRegistry();
-        ERC404StakingModule stakingModule = new ERC404StakingModule(address(stakingReg));
         LaunchManager launchMgr = new LaunchManager(protocol);
         CurveParamsComputer curveComp = new CurveParamsComputer(protocol);
         ComponentRegistry compReg = _deployComponentRegistry();
@@ -86,17 +84,11 @@ contract FactoryFeaturesTest is Test {
             ERC404Factory.CoreConfig({
                 implementation: address(impl),
                 masterRegistry: makeAddr("mr"),
-                instanceTemplate: makeAddr("tmpl"),
-                v4PoolManager: makeAddr("pm"),
-                weth: makeAddr("weth"),
                 protocol: protocol
             }),
             ERC404Factory.ModuleConfig({
-                stakingModule: address(stakingModule),
-                liquidityDeployer: makeAddr("ld"),
                 globalMessageRegistry: makeAddr("gmr"),
                 launchManager: address(launchMgr),
-                curveComputer: address(curveComp),
                 tierGatingModule: address(0),
                 componentRegistry: address(compReg)
             })

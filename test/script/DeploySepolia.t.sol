@@ -103,14 +103,7 @@ contract DeploySepoliaTest is Test {
         assertTrue(s.promotionBadges().authorizedFactories(address(s.erc721Factory())));
     }
 
-    function test_erc404GraduationProfile() public view {
-        (uint256 targetETH, uint256 unitPerNFT, uint24 poolFee, int24 tickSpacing, uint256 liquidityReserveBps, bool active) =
-            s.erc404Factory().profiles(1);
-        assertEq(targetETH, 15 ether);
-        assertEq(unitPerNFT, 1_000_000);
-        assertEq(poolFee, 3000);
-        assertEq(tickSpacing, 60);
-        assertEq(liquidityReserveBps, 1000);
-        assertTrue(active);
+    function test_erc404LaunchManager_deployed() public view {
+        assertTrue(address(s.launchManager()) != address(0), "LaunchManager should be deployed");
     }
 }

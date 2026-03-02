@@ -9,51 +9,41 @@ import {IMasterRegistry} from "../../master/interfaces/IMasterRegistry.sol";
 import {FeatureUtils} from "../../master/libraries/FeatureUtils.sol";
 import {IAlignmentVault} from "../../interfaces/IAlignmentVault.sol";
 import {IFactory} from "../../interfaces/IFactory.sol";
+import {ICurveComputer} from "../../interfaces/ICurveComputer.sol";
 import {ERC404BondingInstance} from "./ERC404BondingInstance.sol";
-import {ERC404StakingModule} from "./ERC404StakingModule.sol";
-import {LiquidityDeployerModule} from "./LiquidityDeployerModule.sol";
 import {LaunchManager} from "./LaunchManager.sol";
-import {CurveParamsComputer} from "./CurveParamsComputer.sol";
-import {BondingCurveMath} from "./libraries/BondingCurveMath.sol";
-import {LPFeeLibrary} from "v4-core/libraries/LPFeeLibrary.sol";
-import {IdentityParams} from "../../interfaces/IFactoryTypes.sol";
 import {PasswordTierGatingModule} from "../../gating/PasswordTierGatingModule.sol";
-import {IGatingModule} from "../../gating/IGatingModule.sol";
 import {IComponentRegistry} from "../../registry/interfaces/IComponentRegistry.sol";
+import {IdentityParams} from "../../interfaces/IFactoryTypes.sol";
 
 /**
  * @title ERC404Factory
- * @notice Factory contract for deploying ERC404 token instances with ultraalignment
- * @dev Requires vault to have its hook pre-configured (created via UniAlignmentHookFactory.createVaultWithHook)
+ * @notice Factory contract for deploying ERC404 token instances.
+ * @dev Artists supply their chosen liquidity deployer and optional gating module at call time.
+ *      Components are validated against ComponentRegistry. Bonding params are derived from
+ *      a LaunchManager preset identified by identity.presetId.
  */
 contract ERC404Factory is OwnableRoles, ReentrancyGuard, IFactory {
     uint256 public constant PROTOCOL_ROLE = _ROLE_0;  // 1 << 0 = 1
 
-    /// @dev Packs constructor params into structs to stay within the 16-local Yul stack limit.
+    /// @dev Infrastructure only — no AMM-specific addresses.
     struct CoreConfig {
         address implementation;
         address masterRegistry;
-        address instanceTemplate;
-        address v4PoolManager;
-        address weth;
         address protocol;
     }
+
+    /// @dev Module addresses — no deployer or curve computer (supplied per call).
     struct ModuleConfig {
-        address stakingModule;
-        address liquidityDeployer;
         address globalMessageRegistry;
-        address launchManager;
-        address curveComputer;
-        address tierGatingModule;
         address componentRegistry;
+        address launchManager;
+        address tierGatingModule;   // convenience — for createInstanceWithTiers
     }
 
     IMasterRegistry public masterRegistry;
     address public immutable globalMessageRegistry;
-    address public instanceTemplate;
     address public implementation;
-    address public v4PoolManager;
-    address public weth;
 
     // Protocol revenue
     address public protocolTreasury;
@@ -61,32 +51,13 @@ contract ERC404Factory is OwnableRoles, ReentrancyGuard, IFactory {
     uint256 public accumulatedProtocolFees;
 
     // Modules
-    ERC404StakingModule public immutable stakingModule;
-    LiquidityDeployerModule public immutable liquidityDeployer;
     LaunchManager public immutable launchManager;
-    CurveParamsComputer public immutable curveComputer;
     PasswordTierGatingModule public immutable tierGatingModule;
     IComponentRegistry public immutable componentRegistry;
-
-    // Tiered creation — enum kept here for backward-compatible external ABI
-    enum CreationTier { STANDARD, PREMIUM, LAUNCH }
 
     // Feature matrix
     bytes32[] internal _features = [FeatureUtils.GATING];
 
-    // Graduation profiles (protocol-defined)
-    struct GraduationProfile {
-        uint256 targetETH;
-        uint256 unitPerNFT;
-        uint24 poolFee;
-        int24 tickSpacing;
-        uint256 liquidityReserveBps;
-        bool active;
-    }
-
-    mapping(uint256 => GraduationProfile) public profiles;
-
-    event ProfileUpdated(uint256 indexed profileId, uint256 targetETH, bool active);
     event InstanceCreated(
         address indexed instance,
         address indexed creator,
@@ -98,75 +69,59 @@ contract ERC404Factory is OwnableRoles, ReentrancyGuard, IFactory {
     event ProtocolTreasuryUpdated(address indexed oldTreasury, address indexed newTreasury);
     event ProtocolFeesWithdrawn(address indexed treasury, uint256 amount);
     event BondingFeeUpdated(uint256 newBps);
-    event InstanceCreatedWithTier(address indexed instance, CreationTier tier);
 
     constructor(CoreConfig memory core, ModuleConfig memory modules) {
         require(core.implementation != address(0), "Invalid implementation");
         require(core.protocol != address(0), "Invalid protocol");
-        require(modules.stakingModule != address(0), "Invalid staking module");
-        require(modules.liquidityDeployer != address(0), "Invalid liquidity deployer");
         require(modules.globalMessageRegistry != address(0), "Invalid global message registry");
         require(modules.launchManager != address(0), "Invalid launch manager");
-        require(modules.curveComputer != address(0), "Invalid curve computer");
+        require(modules.componentRegistry != address(0), "Invalid component registry");
         _initializeOwner(core.protocol);
         _grantRoles(core.protocol, PROTOCOL_ROLE);
         implementation = core.implementation;
         masterRegistry = IMasterRegistry(core.masterRegistry);
         globalMessageRegistry = modules.globalMessageRegistry;
-        instanceTemplate = core.instanceTemplate;
-        v4PoolManager = core.v4PoolManager;
-        weth = core.weth;
-        stakingModule = ERC404StakingModule(modules.stakingModule);
-        liquidityDeployer = LiquidityDeployerModule(payable(modules.liquidityDeployer));
         launchManager = LaunchManager(modules.launchManager);
-        curveComputer = CurveParamsComputer(modules.curveComputer);
         tierGatingModule = PasswordTierGatingModule(modules.tierGatingModule);
         componentRegistry = IComponentRegistry(modules.componentRegistry);
     }
 
-    /// @notice Create an instance with open gating (no password tiers).
-    function createInstance(
-        IdentityParams calldata identity,
-        string calldata metadataURI,
-        CreationTier creationTier
-    ) external payable nonReentrant returns (address instance) {
-        return _createInstanceCore(identity, metadataURI, address(0), creationTier);
-    }
-
-    /// @notice Create an instance with any DAO-approved gating component.
+    /// @notice Create an instance with a caller-supplied liquidity deployer and optional gating module.
+    /// @param liquidityDeployer Must be approved in ComponentRegistry.
     /// @param gatingModule address(0) = open gating; otherwise must be approved in ComponentRegistry.
     function createInstance(
         IdentityParams calldata identity,
         string calldata metadataURI,
-        address gatingModule,
-        CreationTier creationTier
+        address liquidityDeployer,
+        address gatingModule
     ) external payable nonReentrant returns (address instance) {
         if (gatingModule != address(0)) {
-            require(componentRegistry.isApprovedComponent(gatingModule), "Unapproved component");
+            require(componentRegistry.isApprovedComponent(gatingModule), "Unapproved gating module");
         }
-        return _createInstanceCore(identity, metadataURI, gatingModule, creationTier);
+        return _createInstanceCore(identity, metadataURI, liquidityDeployer, gatingModule);
     }
 
-    /// @notice Create an instance with password-tier gating (convenience wrapper).
-    /// @dev Configures PasswordTierGatingModule for the new instance, then delegates to
-    ///      the original internal helper that calls _configureGating.
+    /// @notice Convenience wrapper: creates an instance with password-tier gating.
     function createInstanceWithTiers(
         IdentityParams calldata identity,
         string calldata metadataURI,
-        PasswordTierGatingModule.TierConfig calldata tiers,
-        CreationTier creationTier
+        address liquidityDeployer,
+        PasswordTierGatingModule.TierConfig calldata tiers
     ) external payable nonReentrant returns (address instance) {
-        return _createInstanceInternalWithTiers(identity, metadataURI, tiers, creationTier);
+        address gatingModuleAddr;
+        if (tiers.passwordHashes.length > 0) {
+            tierGatingModule.configureFor(address(0), tiers);
+            gatingModuleAddr = address(tierGatingModule);
+        }
+        return _createInstanceCore(identity, metadataURI, liquidityDeployer, gatingModuleAddr);
     }
 
-    /// @dev New path: accepts a pre-resolved gatingModule address, skips _configureGating.
     function _createInstanceCore(
         IdentityParams calldata identity,
         string calldata metadataURI,
-        address gatingModule,
-        CreationTier creationTier
+        address liquidityDeployer,
+        address gatingModule
     ) internal returns (address instance) {
-        // All payment goes to protocol
         accumulatedProtocolFees += msg.value;
 
         // Validate identity
@@ -178,47 +133,8 @@ contract ERC404Factory is OwnableRoles, ReentrancyGuard, IFactory {
         require(identity.vault.code.length > 0, "Vault must be a contract");
         require(!masterRegistry.isNameTaken(identity.name), "Name already taken");
 
-        // Soft vault capability check
-        try IAlignmentVault(payable(identity.vault)).supportsCapability(keccak256("YIELD_GENERATION"))
-            returns (bool supported) {
-            if (!supported) emit VaultCapabilityWarning(identity.vault, keccak256("YIELD_GENERATION"));
-        } catch {
-            emit VaultCapabilityWarning(identity.vault, keccak256("YIELD_GENERATION"));
-        }
-
-        // Compute BondingParams from profile
-        ERC404BondingInstance.BondingParams memory bonding = _computeBondingParams(identity.nftCount, identity.profileId);
-
-        // Assemble ProtocolParams
-        ERC404BondingInstance.ProtocolParams memory protocol = _getProtocolParams();
-
-        // Deploy clone
-        instance = LibClone.clone(implementation);
-
-        // gatingModule is pre-resolved — no _configureGating call needed
-        _initializeInstance(instance, identity.owner, identity.vault, bonding, protocol, gatingModule);
-        _setMetadata(instance, identity);
-        _finalizeInstance(instance, identity, metadataURI, creationTier);
-    }
-
-    /// @dev Legacy path: accepts TierConfig, calls _configureGating after clone deployment.
-    function _createInstanceInternalWithTiers(
-        IdentityParams calldata identity,
-        string calldata metadataURI,
-        PasswordTierGatingModule.TierConfig memory tiers,
-        CreationTier creationTier
-    ) internal returns (address instance) {
-        // All payment goes to protocol
-        accumulatedProtocolFees += msg.value;
-
-        // Validate identity
-        require(identity.nftCount > 0, "Invalid NFT count");
-        require(bytes(identity.name).length > 0, "Invalid name");
-        require(bytes(identity.symbol).length > 0, "Invalid symbol");
-        require(identity.owner != address(0), "Invalid owner");
-        require(identity.vault != address(0), "Vault required");
-        require(identity.vault.code.length > 0, "Vault must be a contract");
-        require(!masterRegistry.isNameTaken(identity.name), "Name already taken");
+        // Validate liquidity deployer
+        require(componentRegistry.isApprovedComponent(liquidityDeployer), "Unapproved liquidity deployer");
 
         // Soft vault capability check
         try IAlignmentVault(payable(identity.vault)).supportsCapability(keccak256("YIELD_GENERATION"))
@@ -228,91 +144,65 @@ contract ERC404Factory is OwnableRoles, ReentrancyGuard, IFactory {
             emit VaultCapabilityWarning(identity.vault, keccak256("YIELD_GENERATION"));
         }
 
-        // Compute BondingParams from profile
-        ERC404BondingInstance.BondingParams memory bonding = _computeBondingParams(identity.nftCount, identity.profileId);
-
-        // Assemble ProtocolParams
-        ERC404BondingInstance.ProtocolParams memory protocol = _getProtocolParams();
-
-        // Deploy clone
+        // Deploy clone and initialize via helpers (avoids stack-too-deep)
         instance = LibClone.clone(implementation);
-
-        // Configure gating module (before initialize)
-        address gatingModuleAddr = _configureGating(instance, tiers);
-
-        _initializeInstance(instance, identity.owner, identity.vault, bonding, protocol, gatingModuleAddr);
-        _setMetadata(instance, identity);
-        _finalizeInstance(instance, identity, metadataURI, creationTier);
-    }
-
-    function _finalizeInstance(
-        address instance,
-        IdentityParams calldata identity,
-        string calldata metadataURI,
-        CreationTier creationTier
-    ) private {
-        masterRegistry.registerInstance(
-            instance, address(this), identity.owner, identity.name, metadataURI, identity.vault
-        );
-        launchManager.applyTierPerks(instance, LaunchManager.CreationTier(uint8(creationTier)), identity.owner);
-        emit InstanceCreated(instance, identity.owner, identity.name, identity.symbol, identity.vault);
-        if (creationTier != CreationTier.STANDARD) {
-            emit InstanceCreatedWithTier(instance, creationTier);
-        }
-    }
-
-    function _configureGating(
-        address instance,
-        PasswordTierGatingModule.TierConfig memory tiers
-    ) private returns (address gatingModuleAddr) {
-        if (tiers.passwordHashes.length > 0) {
-            tierGatingModule.configureFor(instance, tiers);
-            gatingModuleAddr = address(tierGatingModule);
-        }
+        _initializeInstance(instance, identity, liquidityDeployer, gatingModule);
+        _finalizeInstance(instance, identity, metadataURI);
     }
 
     function _initializeInstance(
         address instance,
-        address owner,
-        address vault_,
-        ERC404BondingInstance.BondingParams memory bonding,
-        ERC404BondingInstance.ProtocolParams memory protocol,
-        address gatingModuleAddr
+        IdentityParams calldata identity,
+        address liquidityDeployer,
+        address gatingModule
     ) private {
-        ERC404BondingInstance(payable(instance)).initialize(owner, vault_, bonding, address(liquidityDeployer), gatingModuleAddr);
-        ERC404BondingInstance(payable(instance)).initializeProtocol(protocol);
-    }
+        // Fetch preset and validate its curve computer
+        LaunchManager.Preset memory preset = launchManager.getPreset(identity.presetId);
+        require(componentRegistry.isApprovedComponent(preset.curveComputer), "Unapproved curve computer");
 
-    function _setMetadata(address instance, IdentityParams calldata identity) private {
+        uint256 unit = preset.unitPerNFT * 1e18;
+        ERC404BondingInstance.BondingParams memory bonding = ERC404BondingInstance.BondingParams({
+            maxSupply: identity.nftCount * unit,
+            unit: unit,
+            liquidityReservePercent: preset.liquidityReserveBps / 100,
+            curve: ICurveComputer(preset.curveComputer).computeCurveParams(
+                identity.nftCount,
+                preset.targetETH,
+                preset.unitPerNFT,
+                preset.liquidityReserveBps
+            )
+        });
+
+        ERC404BondingInstance(payable(instance)).initialize(
+            identity.owner, identity.vault, bonding, liquidityDeployer, gatingModule
+        );
+        ERC404BondingInstance(payable(instance)).initializeProtocol(
+            ERC404BondingInstance.ProtocolParams({
+                globalMessageRegistry: globalMessageRegistry,
+                protocolTreasury: protocolTreasury,
+                masterRegistry: address(masterRegistry),
+                bondingFeeBps: bondingFeeBps
+            })
+        );
         ERC404BondingInstance(payable(instance)).initializeMetadata(
             identity.name, identity.symbol, identity.styleUri
         );
     }
 
-    function _computeBondingParams(
-        uint256 nftCount,
-        uint8 profileId
-    ) private view returns (ERC404BondingInstance.BondingParams memory bonding) {
-        GraduationProfile memory profile = profiles[profileId];
-        require(profile.active, "Profile not active");
-        uint256 unit = profile.unitPerNFT * 1e18;
-        bonding = ERC404BondingInstance.BondingParams({
-            maxSupply: nftCount * unit,
-            unit: unit,
-            liquidityReservePercent: profile.liquidityReserveBps / 100,
-            curve: curveComputer.computeCurveParams(
-                nftCount, profile.targetETH, profile.unitPerNFT, profile.liquidityReserveBps
-            )
-        });
-    }
-
-    function _getProtocolParams() private view returns (ERC404BondingInstance.ProtocolParams memory) {
-        return ERC404BondingInstance.ProtocolParams({
-            globalMessageRegistry: globalMessageRegistry,
-            protocolTreasury: protocolTreasury,
-            masterRegistry: address(masterRegistry),
-            bondingFeeBps: bondingFeeBps
-        });
+    function _finalizeInstance(
+        address instance,
+        IdentityParams calldata identity,
+        string calldata metadataURI
+    ) private {
+        masterRegistry.registerInstance(
+            instance, address(this), identity.owner, identity.name, metadataURI, identity.vault
+        );
+        launchManager.applyTierPerks(
+            instance,
+            LaunchManager.CreationTier(uint8(identity.creationTier)),
+            identity.owner
+        );
+        emit InstanceCreated(instance, identity.owner, identity.name, identity.symbol, identity.vault);
     }
 
     /**
@@ -320,6 +210,14 @@ contract ERC404Factory is OwnableRoles, ReentrancyGuard, IFactory {
      */
     function getFeatures() external view returns (bytes32[] memory) {
         return _features;
+    }
+
+    function features() external view returns (bytes32[] memory) {
+        return _features;
+    }
+
+    function protocol() external view returns (address) {
+        return owner();
     }
 
     function setProtocolTreasury(address _treasury) external onlyRoles(PROTOCOL_ROLE) {
@@ -338,28 +236,9 @@ contract ERC404Factory is OwnableRoles, ReentrancyGuard, IFactory {
         emit ProtocolFeesWithdrawn(protocolTreasury, amount);
     }
 
-    function protocol() external view returns (address) {
-        return owner();
-    }
-
-    function features() external view returns (bytes32[] memory) {
-        return _features;
-    }
-
     function setBondingFeeBps(uint256 _bps) external onlyRoles(PROTOCOL_ROLE) {
         require(_bps <= 300, "Max 3%");
         bondingFeeBps = _bps;
         emit BondingFeeUpdated(_bps);
-    }
-
-    function setProfile(uint256 profileId, GraduationProfile calldata profile) external onlyRoles(PROTOCOL_ROLE) {
-        require(profile.targetETH > 0, "Invalid target ETH");
-        require(profile.unitPerNFT > 0, "Invalid unit");
-        // poolFee > 0 allows both static fees (e.g. 3000) and DYNAMIC_FEE_FLAG (0x800000)
-        require(profile.poolFee > 0, "Invalid pool fee");
-        require(profile.tickSpacing > 0, "Invalid tick spacing");
-        require(profile.liquidityReserveBps > 0 && profile.liquidityReserveBps < 10000, "Invalid reserve bps");
-        profiles[profileId] = profile;
-        emit ProfileUpdated(profileId, profile.targetETH, profile.active);
     }
 }

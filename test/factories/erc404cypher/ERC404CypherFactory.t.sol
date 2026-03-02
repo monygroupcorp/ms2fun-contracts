@@ -97,7 +97,8 @@ contract ERC404CypherFactoryTest is Test {
             owner: instanceCreator,
             vault: address(0), // unused: vault is passed as separate param to createInstance
             nftCount: 100,
-            profileId: 0
+            presetId: 0,
+            creationTier: 0
         });
     }
 
@@ -126,7 +127,8 @@ contract ERC404CypherFactoryTest is Test {
             owner: instanceCreator,
             vault: address(0),
             nftCount: 100,
-            profileId: 99 // inactive profile
+            presetId: 99,
+            creationTier: 0 // inactive profile
         });
         vm.expectRevert();
         factory.createInstance{value: 0.01 ether}(id, "", mockVault);

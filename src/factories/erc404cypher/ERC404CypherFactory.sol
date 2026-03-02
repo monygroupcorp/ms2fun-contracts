@@ -161,7 +161,7 @@ contract ERC404CypherFactory is OwnableRoles, ReentrancyGuard, IFactory {
         require(vault.code.length > 0, "Vault must be a contract");
         require(!masterRegistry.isNameTaken(identity.name), "Name taken");
 
-        ERC404CypherBondingInstance.BondingParams memory bonding = _computeBondingParams(identity.nftCount, identity.profileId);
+        ERC404CypherBondingInstance.BondingParams memory bonding = _computeBondingParams(identity.nftCount, identity.presetId);
         instance = LibClone.clone(implementation);
 
         // gatingModule is pre-resolved — no configureFor call
@@ -186,7 +186,7 @@ contract ERC404CypherFactory is OwnableRoles, ReentrancyGuard, IFactory {
         require(vault.code.length > 0, "Vault must be a contract");
         require(!masterRegistry.isNameTaken(identity.name), "Name taken");
 
-        ERC404CypherBondingInstance.BondingParams memory bonding = _computeBondingParams(identity.nftCount, identity.profileId);
+        ERC404CypherBondingInstance.BondingParams memory bonding = _computeBondingParams(identity.nftCount, identity.presetId);
         instance = LibClone.clone(implementation);
 
         address gatingModuleAddr;

@@ -253,38 +253,24 @@ contract DeploySepolia is Script {
     function _deployFactories(address deployer, address weth, address poolManager) private {
         // Phase 5: ERC404Factory
         ERC404BondingInstance erc404Impl = new ERC404BondingInstance();
-        ERC404StakingModule erc404StakingModule = new ERC404StakingModule(masterRegistry);
-        LiquidityDeployerModule erc404LiquidityDeployer = new LiquidityDeployerModule(poolManager, weth, 3000, 60);
         launchManager = new LaunchManager(deployer);
         curveParamsComputer = new CurveParamsComputer(deployer);
         erc404Factory = new ERC404Factory(
             ERC404Factory.CoreConfig({
                 implementation: address(erc404Impl),
                 masterRegistry: masterRegistry,
-                instanceTemplate: address(0),
-                v4PoolManager: poolManager,
-                weth: weth,
                 protocol: deployer
             }),
             ERC404Factory.ModuleConfig({
-                stakingModule: address(erc404StakingModule),
-                liquidityDeployer: address(erc404LiquidityDeployer),
                 globalMessageRegistry: address(globalMessageRegistry),
                 launchManager: address(launchManager),
-                curveComputer: address(curveParamsComputer),
                 tierGatingModule: address(0),
                 componentRegistry: address(0)
             })
         );
         erc404Factory.setProtocolTreasury(address(treasury));
-        erc404Factory.setProfile(1, ERC404Factory.GraduationProfile({
-            targetETH: 15 ether,
-            unitPerNFT: 1_000_000,
-            poolFee: 3000,
-            tickSpacing: 60,
-            liquidityReserveBps: 1000,
-            active: true
-        }));
+        // NOTE: Approve components (curveParamsComputer, liquidity deployer) in ComponentRegistry
+        // and call launchManager.setPreset() before the factory is usable.
 
         // Phase 5: ERC1155Factory
         erc1155Factory = new ERC1155Factory(
