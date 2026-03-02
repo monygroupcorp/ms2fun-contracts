@@ -69,7 +69,6 @@ contract ERC404ZAMMFactoryTest is Test {
                 zamm: address(zamm),
                 zRouter: address(0), // zRouter (unused in basic tests)
                 feeOrHook: 30,
-                taxBps: 100,
                 protocol: protocol
             }),
             ERC404ZAMMFactory.ModuleConfig({
