@@ -5,11 +5,14 @@ pragma solidity ^0.8.20;
 /// address(0) means open gating — no module deployed.
 /// Implementations are registered in ComponentRegistry under tag keccak256("gating").
 interface IGatingModule {
-    /// @notice Returns true if `user` is allowed to mint `amount` tokens.
+    /// @notice Returns (allowed, permanent).
+    ///         When permanent == true, the caller MUST set gatingActive = false —
+    ///         this module guarantees it will never block again.
     /// @param user    The buyer address.
     /// @param amount  Token amount (not NFT count).
     /// @param data    Arbitrary data — password hash, merkle proof, etc.
-    function canMint(address user, uint256 amount, bytes calldata data) external returns (bool);
+    function canMint(address user, uint256 amount, bytes calldata data)
+        external returns (bool allowed, bool permanent);
 
     /// @notice Record a successful mint. Called by instance after canMint passes.
     /// @param user   The buyer address.

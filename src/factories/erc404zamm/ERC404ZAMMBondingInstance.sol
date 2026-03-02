@@ -255,7 +255,8 @@ contract ERC404ZAMMBondingInstance is DN404, Ownable, ReentrancyGuard, IInstance
         // Gating check (delegated to module; address(0) = open)
         if (address(gatingModule) != address(0)) {
             bytes memory gatingData = abi.encode(passwordHash, bondingOpenTime);
-            require(gatingModule.canMint(msg.sender, amount, gatingData), "Gating check failed");
+            (bool allowed,) = gatingModule.canMint(msg.sender, amount, gatingData);
+            require(allowed, "Gating check failed");
             gatingModule.onMint(msg.sender, amount);
         }
 

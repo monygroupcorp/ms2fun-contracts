@@ -62,7 +62,9 @@ contract PasswordTierGatingModule is IGatingModule {
     /// @param data abi.encode(bytes32 passwordHash, uint256 openTime)
     ///             passwordHash: bytes32(0) = open tier (no password).
     ///             openTime: instance/edition open timestamp; used by TIME_BASED enforcement.
-    function canMint(address user, uint256 amount, bytes calldata data) external override returns (bool) {
+    function canMint(address user, uint256 amount, bytes calldata data)
+        external override returns (bool allowed, bool permanent)
+    {
         TierConfig storage config = _configs[msg.sender];
         (bytes32 passwordHash, uint256 openTime) = abi.decode(data, (bytes32, uint256));
 
@@ -76,7 +78,8 @@ contract PasswordTierGatingModule is IGatingModule {
             uint256 unlockAt = openTime + config.tierUnlockTimes[tier - 1];
             if (block.timestamp < unlockAt) revert TierTimeLocked();
         }
-        return true;
+        allowed = true;
+        permanent = false; // PasswordTierGating never self-deactivates
     }
 
     /// @dev msg.sender is the calling instance.

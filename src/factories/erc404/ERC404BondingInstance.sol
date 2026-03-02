@@ -342,7 +342,8 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IInstanceLife
         // Gating check (address(0) = open gating)
         if (address(gatingModule) != address(0)) {
             bytes memory gatingData = abi.encode(passwordHash, bondingOpenTime);
-            require(gatingModule.canMint(msg.sender, amount, gatingData), "Gating check failed");
+            (bool allowed,) = gatingModule.canMint(msg.sender, amount, gatingData);
+            require(allowed, "Gating check failed");
             gatingModule.onMint(msg.sender, amount);
         }
 

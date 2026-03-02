@@ -54,13 +54,15 @@ contract PasswordTierGatingModuleTest is Test {
         module.configureFor(instance1, _volumeCapConfig());
         vm.prank(instance1);
         // open tier (no password) = unlimited
-        assertTrue(module.canMint(user1, 1e18, abi.encode(bytes32(0), uint256(0))));
+        (bool allowed,) = module.canMint(user1, 1e18, abi.encode(bytes32(0), uint256(0)));
+        assertTrue(allowed);
     }
 
     function test_canMint_correctPassword_withinCap() public {
         module.configureFor(instance1, _volumeCapConfig());
         vm.prank(instance1);
-        assertTrue(module.canMint(user1, 50e18, abi.encode(keccak256("tier1password"), uint256(0))));
+        (bool allowed,) = module.canMint(user1, 50e18, abi.encode(keccak256("tier1password"), uint256(0)));
+        assertTrue(allowed);
     }
 
     function test_canMint_wrongPassword_reverts() public {
@@ -88,7 +90,8 @@ contract PasswordTierGatingModuleTest is Test {
         module.onMint(user1, 90e18);
         // instance2's user1 should be unaffected
         vm.prank(instance2);
-        assertTrue(module.canMint(user1, 90e18, abi.encode(keccak256("tier1password"), uint256(0))));
+        (bool allowed2,) = module.canMint(user1, 90e18, abi.encode(keccak256("tier1password"), uint256(0)));
+        assertTrue(allowed2);
     }
 
     // ── TIME_BASED enforcement ────────────────────────────────────────────────
@@ -122,7 +125,8 @@ contract PasswordTierGatingModuleTest is Test {
         bytes memory data = abi.encode(bytes32(0), openTime);
 
         vm.prank(inst);
-        assertTrue(module.canMint(address(0xAAAA1), 1, data));
+        (bool a1,) = module.canMint(address(0xAAAA1), 1, data);
+        assertTrue(a1);
     }
 
     function test_timeBased_tier1_lockedBeforeUnlock() public {
@@ -153,7 +157,8 @@ contract PasswordTierGatingModuleTest is Test {
         vm.warp(block.timestamp + 2 hours);
 
         vm.prank(inst);
-        assertTrue(module.canMint(address(0xAAAA1), 1, data));
+        (bool a2,) = module.canMint(address(0xAAAA1), 1, data);
+        assertTrue(a2);
     }
 
     function test_timeBased_tier2_lockedEvenAfterTier1Unlock() public {
@@ -184,7 +189,8 @@ contract PasswordTierGatingModuleTest is Test {
         vm.warp(block.timestamp + 25 hours);
 
         vm.prank(inst);
-        assertTrue(module.canMint(address(0xAAAA1), 1, data));
+        (bool a3,) = module.canMint(address(0xAAAA1), 1, data);
+        assertTrue(a3);
     }
 
     function test_timeBased_invalidPassword_reverts() public {
@@ -227,7 +233,8 @@ contract PasswordTierGatingModuleTest is Test {
 
         // First mint within cap passes
         vm.prank(inst);
-        assertTrue(module.canMint(address(0xAAAA1), 5, data));
+        (bool a4,) = module.canMint(address(0xAAAA1), 5, data);
+        assertTrue(a4);
 
         // Record mint
         vm.prank(inst);

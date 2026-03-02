@@ -20,15 +20,17 @@ import {GlobalMessageRegistry} from "../../../src/registry/GlobalMessageRegistry
 import {PromotionBadges} from "../../../src/promotion/PromotionBadges.sol";
 
 contract MockRejectGatingModule {
-    function canMint(address, uint256, bytes calldata) external pure returns (bool) {
-        return false;
+    function canMint(address, uint256, bytes calldata) external pure returns (bool allowed, bool permanent) {
+        allowed = false;
+        permanent = false;
     }
     function onMint(address, uint256) external {}
 }
 
 contract MockAllowGatingModule {
-    function canMint(address, uint256, bytes calldata) external pure returns (bool) {
-        return true;
+    function canMint(address, uint256, bytes calldata) external pure returns (bool allowed, bool permanent) {
+        allowed = true;
+        permanent = false;
     }
     function onMint(address, uint256) external {}
 }

@@ -312,7 +312,8 @@ contract ERC1155Instance is Ownable, ReentrancyGuard, IInstanceLifecycle {
         // Gating check — forwards edition's openTime as the time reference
         if (address(gatingModule) != address(0)) {
             bytes memory encoded = abi.encode(gatingData, edition.openTime);
-            require(gatingModule.canMint(msg.sender, amount, encoded), "Gating check failed");
+            (bool allowed,) = gatingModule.canMint(msg.sender, amount, encoded);
+            require(allowed, "Gating check failed");
             gatingModule.onMint(msg.sender, amount);
         }
 
