@@ -21,10 +21,6 @@ import {PasswordTierGatingModule} from "../../gating/PasswordTierGatingModule.so
 import {IGatingModule} from "../../gating/IGatingModule.sol";
 import {IComponentRegistry} from "../../registry/interfaces/IComponentRegistry.sol";
 
-interface IUniAlignmentVaultV1 {
-    function hook() external view returns (address);
-}
-
 /**
  * @title ERC404Factory
  * @notice Factory contract for deploying ERC404 token instances with ultraalignment
@@ -102,8 +98,7 @@ contract ERC404Factory is OwnableRoles, ReentrancyGuard, IFactory {
         address indexed creator,
         string name,
         string symbol,
-        address indexed vault,
-        address hook
+        address indexed vault
     );
     event VaultCapabilityWarning(address indexed vault, bytes32 indexed capability);
     event ProtocolTreasuryUpdated(address indexed oldTreasury, address indexed newTreasury);
@@ -189,13 +184,6 @@ contract ERC404Factory is OwnableRoles, ReentrancyGuard, IFactory {
         require(identity.vault.code.length > 0, "Vault must be a contract");
         require(!masterRegistry.isNameTaken(identity.name), "Name already taken");
 
-        // Resolve hook from vault
-        address hook;
-        try IUniAlignmentVaultV1(payable(identity.vault)).hook() returns (address h) {
-            hook = h;
-        } catch {}
-        require(hook != address(0) && hook.code.length > 0, "Vault hook required");
-
         // Soft vault capability check
         try IAlignmentVault(payable(identity.vault)).supportsCapability(keccak256("YIELD_GENERATION"))
             returns (bool supported) {
@@ -214,9 +202,9 @@ contract ERC404Factory is OwnableRoles, ReentrancyGuard, IFactory {
         instance = LibClone.clone(implementation);
 
         // gatingModule is pre-resolved — no _configureGating call needed
-        _initializeInstance(instance, identity.owner, identity.vault, bonding, protocol, hook, gatingModule);
+        _initializeInstance(instance, identity.owner, identity.vault, bonding, protocol, gatingModule);
         _setMetadata(instance, identity);
-        _finalizeInstance(instance, identity, metadataURI, hook, creationTier);
+        _finalizeInstance(instance, identity, metadataURI, creationTier);
     }
 
     /// @dev Legacy path: accepts TierConfig, calls _configureGating after clone deployment.
@@ -238,13 +226,6 @@ contract ERC404Factory is OwnableRoles, ReentrancyGuard, IFactory {
         require(identity.vault.code.length > 0, "Vault must be a contract");
         require(!masterRegistry.isNameTaken(identity.name), "Name already taken");
 
-        // Resolve hook from vault
-        address hook;
-        try IUniAlignmentVaultV1(payable(identity.vault)).hook() returns (address h) {
-            hook = h;
-        } catch {}
-        require(hook != address(0) && hook.code.length > 0, "Vault hook required");
-
         // Soft vault capability check
         try IAlignmentVault(payable(identity.vault)).supportsCapability(keccak256("YIELD_GENERATION"))
             returns (bool supported) {
@@ -265,23 +246,22 @@ contract ERC404Factory is OwnableRoles, ReentrancyGuard, IFactory {
         // Configure gating module (before initialize)
         address gatingModuleAddr = _configureGating(instance, tiers);
 
-        _initializeInstance(instance, identity.owner, identity.vault, bonding, protocol, hook, gatingModuleAddr);
+        _initializeInstance(instance, identity.owner, identity.vault, bonding, protocol, gatingModuleAddr);
         _setMetadata(instance, identity);
-        _finalizeInstance(instance, identity, metadataURI, hook, creationTier);
+        _finalizeInstance(instance, identity, metadataURI, creationTier);
     }
 
     function _finalizeInstance(
         address instance,
         IdentityParams calldata identity,
         string calldata metadataURI,
-        address hook,
         CreationTier creationTier
     ) private {
         masterRegistry.registerInstance(
             instance, address(this), identity.owner, identity.name, metadataURI, identity.vault
         );
         launchManager.applyTierPerks(instance, LaunchManager.CreationTier(uint8(creationTier)), identity.owner);
-        emit InstanceCreated(instance, identity.owner, identity.name, identity.symbol, identity.vault, hook);
+        emit InstanceCreated(instance, identity.owner, identity.name, identity.symbol, identity.vault);
         if (creationTier != CreationTier.STANDARD) {
             emit InstanceCreatedWithTier(instance, creationTier);
         }
@@ -303,7 +283,6 @@ contract ERC404Factory is OwnableRoles, ReentrancyGuard, IFactory {
         address vault_,
         ERC404BondingInstance.BondingParams memory bonding,
         ERC404BondingInstance.ProtocolParams memory protocol,
-        address hook,
         address gatingModuleAddr
     ) private {
         ERC404BondingInstance(payable(instance)).initialize(owner, vault_, bonding, gatingModuleAddr);
