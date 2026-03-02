@@ -297,7 +297,7 @@ contract DeploySepolia is Script {
 
         // Phase 5: ERC1155Factory
         erc1155Factory = new ERC1155Factory(
-            masterRegistry, address(0), deployer, 500, address(globalMessageRegistry)
+            masterRegistry, address(0), deployer, 500, address(globalMessageRegistry), address(0)
         );
         erc1155Factory.setProtocolTreasury(address(treasury));
 

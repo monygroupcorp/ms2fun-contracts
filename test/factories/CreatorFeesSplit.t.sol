@@ -113,7 +113,8 @@ contract CreatorFeesSplitTest is Test {
             mockInstanceTemplate,
             factoryCreator,
             CREATOR_FEE_BPS,
-            address(globalMsgRegistry)
+            address(globalMsgRegistry),
+            address(0)
         );
         erc1155Factory.setProtocolTreasury(treasury);
 
@@ -309,7 +310,8 @@ contract CreatorFeesSplitTest is Test {
             mockInstanceTemplate,
             factoryCreator,
             0, // 0% creator fee
-            address(globalMsgRegistry)
+            address(globalMsgRegistry),
+            address(0)
         );
         zeroFeeFactory.setProtocolTreasury(treasury);
 

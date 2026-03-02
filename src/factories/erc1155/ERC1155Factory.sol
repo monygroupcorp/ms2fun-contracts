@@ -10,6 +10,7 @@ import {IAlignmentVault} from "../../interfaces/IAlignmentVault.sol";
 import {IFactory} from "../../interfaces/IFactory.sol";
 import {PromotionBadges} from "../../promotion/PromotionBadges.sol";
 import {FeaturedQueueManager} from "../../master/FeaturedQueueManager.sol";
+import {IComponentRegistry} from "../../registry/interfaces/IComponentRegistry.sol";
 
 /**
  * @title ERC1155Factory
@@ -18,6 +19,7 @@ import {FeaturedQueueManager} from "../../master/FeaturedQueueManager.sol";
 contract ERC1155Factory is Ownable, ReentrancyGuard, IFactory {
     IMasterRegistry public masterRegistry;
     address public immutable globalMessageRegistry;
+    IComponentRegistry public immutable componentRegistry;
     address public instanceTemplate;
     uint256 public instanceCreationFee;
 
@@ -78,7 +80,8 @@ contract ERC1155Factory is Ownable, ReentrancyGuard, IFactory {
         address _instanceTemplate,
         address _creator,
         uint256 _creatorFeeBps,
-        address _globalMessageRegistry
+        address _globalMessageRegistry,
+        address _componentRegistry    // NEW
     ) {
         _initializeOwner(msg.sender);
         require(_creatorFeeBps <= 10000, "Invalid creator fee bps");
@@ -87,6 +90,7 @@ contract ERC1155Factory is Ownable, ReentrancyGuard, IFactory {
         creatorFeeBps = _creatorFeeBps;
         masterRegistry = IMasterRegistry(_masterRegistry);
         globalMessageRegistry = _globalMessageRegistry;
+        componentRegistry = IComponentRegistry(_componentRegistry);
         instanceTemplate = _instanceTemplate;
         instanceCreationFee = 0.01 ether;
     }
@@ -101,7 +105,7 @@ contract ERC1155Factory is Ownable, ReentrancyGuard, IFactory {
         address vault,
         string memory styleUri
     ) external payable nonReentrant returns (address instance) {
-        return _createInstanceInternal(name, metadataURI, creator, vault, styleUri, CreationTier.STANDARD);
+        return _createInstanceInternal(name, metadataURI, creator, vault, styleUri, CreationTier.STANDARD, address(0));
     }
 
     /**
@@ -115,7 +119,25 @@ contract ERC1155Factory is Ownable, ReentrancyGuard, IFactory {
         string memory styleUri,
         CreationTier creationTier
     ) external payable nonReentrant returns (address instance) {
-        return _createInstanceInternal(name, metadataURI, creator, vault, styleUri, creationTier);
+        return _createInstanceInternal(name, metadataURI, creator, vault, styleUri, creationTier, address(0));
+    }
+
+    /**
+     * @notice Create a new ERC1155 instance with a gating component.
+     * @param gatingModule address(0) = open; otherwise must be approved in ComponentRegistry.
+     */
+    function createInstance(
+        string memory name,
+        string memory metadataURI,
+        address creator,
+        address vault,
+        string memory styleUri,
+        address gatingModule
+    ) external payable nonReentrant returns (address instance) {
+        if (gatingModule != address(0)) {
+            require(componentRegistry.isApprovedComponent(gatingModule), "Unapproved component");
+        }
+        return _createInstanceInternal(name, metadataURI, creator, vault, styleUri, CreationTier.STANDARD, gatingModule);
     }
 
     function _createInstanceInternal(
@@ -124,7 +146,8 @@ contract ERC1155Factory is Ownable, ReentrancyGuard, IFactory {
         address creator,
         address vault,
         string memory styleUri,
-        CreationTier creationTier
+        CreationTier creationTier,
+        address gatingModule       // NEW
     ) internal returns (address instance) {
         // Determine fee based on tier
         TierConfig memory config = tierConfigs[creationTier];
@@ -146,10 +169,11 @@ contract ERC1155Factory is Ownable, ReentrancyGuard, IFactory {
         }
 
         // Split the non-featured portion of the fee between protocol and creator
-        uint256 creatorCut = ((fee - featuredCost) * creatorFeeBps) / 10000;
-        uint256 protocolCut = fee - featuredCost - creatorCut;
-        accumulatedCreatorFees += creatorCut;
-        accumulatedProtocolFees += protocolCut;
+        {
+            uint256 creatorCut = ((fee - featuredCost) * creatorFeeBps) / 10000;
+            accumulatedCreatorFees += creatorCut;
+            accumulatedProtocolFees += fee - featuredCost - creatorCut;
+        }
 
         require(bytes(name).length > 0, "Invalid name");
         require(creator != address(0), "Invalid creator");
@@ -168,7 +192,7 @@ contract ERC1155Factory is Ownable, ReentrancyGuard, IFactory {
         // Check namespace availability before deploying (saves gas on collision)
         require(!masterRegistry.isNameTaken(name), "Name already taken");
 
-        instance = _deployAndRegister(name, metadataURI, creator, vault, styleUri);
+        instance = _deployAndRegister(name, metadataURI, creator, vault, styleUri, gatingModule);
 
         // Apply tier perks AFTER successful deployment and registration
         if (config.featuredDuration > 0 && address(featuredQueueManager) != address(0) && featuredCost > 0) {
@@ -198,7 +222,8 @@ contract ERC1155Factory is Ownable, ReentrancyGuard, IFactory {
         string memory metadataURI,
         address creator,
         address vault,
-        string memory styleUri
+        string memory styleUri,
+        address gatingModule       // NEW
     ) private returns (address instance) {
         instance = address(new ERC1155Instance(
             name,
@@ -209,7 +234,8 @@ contract ERC1155Factory is Ownable, ReentrancyGuard, IFactory {
             styleUri,
             globalMessageRegistry,
             protocolTreasury,
-            address(masterRegistry)
+            address(masterRegistry),
+            gatingModule           // NEW
         ));
         masterRegistry.registerInstance(
             instance,
@@ -231,7 +257,8 @@ contract ERC1155Factory is Ownable, ReentrancyGuard, IFactory {
         uint256 supply,
         string memory metadataURI,
         ERC1155Instance.PricingModel pricingModel,
-        uint256 priceIncreaseRate
+        uint256 priceIncreaseRate,
+        uint256 openTime           // NEW
     ) external returns (uint256 editionId) {
         require(isAgent[msg.sender], "Not authorized agent");
         ERC1155Instance instanceContract = ERC1155Instance(instance);
@@ -242,7 +269,8 @@ contract ERC1155Factory is Ownable, ReentrancyGuard, IFactory {
             supply,
             metadataURI,
             pricingModel,
-            priceIncreaseRate
+            priceIncreaseRate,
+            openTime               // NEW
         );
 
         editionId = instanceContract.nextEditionId() - 1;

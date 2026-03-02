@@ -8,6 +8,7 @@ import { EditionPricing } from "./libraries/EditionPricing.sol";
 import { IAlignmentVault } from "../../interfaces/IAlignmentVault.sol";
 import {IMasterRegistry} from "../../master/interfaces/IMasterRegistry.sol";
 import { IGlobalMessageRegistry } from "../../registry/interfaces/IGlobalMessageRegistry.sol";
+import {IGatingModule} from "../../gating/IGatingModule.sol";
 import { Currency } from "v4-core/types/Currency.sol";
 import { IInstanceLifecycle, TYPE_ERC1155, STATE_MINTING } from "../../interfaces/IInstanceLifecycle.sol";
 
@@ -38,6 +39,7 @@ contract ERC1155Instance is Ownable, ReentrancyGuard, IInstanceLifecycle {
         string metadataURI;
         PricingModel pricingModel;
         uint256 priceIncreaseRate; // For dynamic pricing (basis points, e.g., 100 = 1%)
+        uint256 openTime;          // Unix timestamp; 0 = open immediately
     }
 
     // ┌─────────────────────────┐
@@ -59,6 +61,8 @@ contract ERC1155Instance is Ownable, ReentrancyGuard, IInstanceLifecycle {
     mapping(uint256 => Edition) public editions;
     mapping(address => mapping(uint256 => uint256)) public balanceOf;
     mapping(address => mapping(address => bool)) public isApprovedForAll;
+
+    IGatingModule public gatingModule;
 
     uint256 public nextEditionId;
     uint256 public totalProceeds; // Total ETH collected from mints
@@ -122,7 +126,8 @@ contract ERC1155Instance is Ownable, ReentrancyGuard, IInstanceLifecycle {
         string memory _styleUri,
         address _globalMessageRegistry,
         address _protocolTreasury,
-        address _masterRegistry
+        address _masterRegistry,
+        address _gatingModule        // NEW
     ) {
         require(bytes(_name).length > 0, "Invalid name");
         require(_creator != address(0), "Invalid creator");
@@ -140,6 +145,9 @@ contract ERC1155Instance is Ownable, ReentrancyGuard, IInstanceLifecycle {
         protocolTreasury = _protocolTreasury;
         styleUri = _styleUri;
         nextEditionId = 1;
+        if (_gatingModule != address(0)) {
+            gatingModule = IGatingModule(_gatingModule);
+        }
         emit StateChanged(STATE_MINTING);
     }
 
@@ -168,7 +176,8 @@ contract ERC1155Instance is Ownable, ReentrancyGuard, IInstanceLifecycle {
         uint256 supply,
         string memory metadataURI,
         PricingModel pricingModel,
-        uint256 priceIncreaseRate
+        uint256 priceIncreaseRate,
+        uint256 openTime           // NEW: Unix timestamp; 0 = open immediately
     ) external {
         require(msg.sender == factory || msg.sender == owner(), "Not authorized");
         require(bytes(pieceTitle).length > 0, "Invalid title");
@@ -195,7 +204,8 @@ contract ERC1155Instance is Ownable, ReentrancyGuard, IInstanceLifecycle {
             minted: 0,
             metadataURI: metadataURI,
             pricingModel: pricingModel,
-            priceIncreaseRate: priceIncreaseRate
+            priceIncreaseRate: priceIncreaseRate,
+            openTime: openTime      // NEW
         });
 
         emit EditionAdded(editionId, pieceTitle, basePrice, supply, pricingModel);
@@ -285,12 +295,25 @@ contract ERC1155Instance is Ownable, ReentrancyGuard, IInstanceLifecycle {
     function mint(
         uint256 editionId,
         uint256 amount,
+        bytes32 gatingData,        // NEW: password hash (bytes32(0) = open tier)
         bytes calldata messageData,
         uint256 maxCost
     ) external payable nonReentrant {
         Edition storage edition = editions[editionId];
         require(edition.id != 0, "Edition not found");
         require(amount > 0, "Invalid amount");
+
+        // Time gate check
+        if (edition.openTime != 0) {
+            require(block.timestamp >= edition.openTime, "Edition not open yet");
+        }
+
+        // Gating check — forwards edition's openTime as the time reference
+        if (address(gatingModule) != address(0)) {
+            bytes memory encoded = abi.encode(gatingData, edition.openTime);
+            require(gatingModule.canMint(msg.sender, amount, encoded), "Gating check failed");
+            gatingModule.onMint(msg.sender, amount);
+        }
 
         // Check supply limits
         if (edition.pricingModel != PricingModel.UNLIMITED) {

@@ -141,7 +141,8 @@ contract NamespaceCollisionTest is Test {
             mockInstanceTemplate,
             address(0xC1EA),
             2000,
-            address(globalMsgRegistry)
+            address(globalMsgRegistry),
+            address(0)
         );
 
         // Set protocol treasury on both factories

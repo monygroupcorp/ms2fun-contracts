@@ -15,7 +15,7 @@ contract DeployERC1155Factory is Script {
 
         vm.startBroadcast(deployerPrivateKey);
 
-        ERC1155Factory factory = new ERC1155Factory(masterRegistry, instanceTemplate, creator, creatorFeeBps, globalMessageRegistry);
+        ERC1155Factory factory = new ERC1155Factory(masterRegistry, instanceTemplate, creator, creatorFeeBps, globalMessageRegistry, address(0));
         console.log("ERC1155Factory deployed at:", address(factory));
 
         vm.stopBroadcast();
