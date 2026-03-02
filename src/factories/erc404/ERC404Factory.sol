@@ -279,7 +279,7 @@ contract ERC404Factory is OwnableRoles, ReentrancyGuard, IFactory {
         ERC404BondingInstance.ProtocolParams memory protocol,
         address gatingModuleAddr
     ) private {
-        ERC404BondingInstance(payable(instance)).initialize(owner, vault_, bonding, gatingModuleAddr);
+        ERC404BondingInstance(payable(instance)).initialize(owner, vault_, bonding, address(liquidityDeployer), gatingModuleAddr);
         ERC404BondingInstance(payable(instance)).initializeProtocol(protocol);
     }
 
@@ -311,11 +311,6 @@ contract ERC404Factory is OwnableRoles, ReentrancyGuard, IFactory {
             globalMessageRegistry: globalMessageRegistry,
             protocolTreasury: protocolTreasury,
             masterRegistry: address(masterRegistry),
-            stakingModule: address(stakingModule),
-            liquidityDeployer: address(liquidityDeployer),
-            curveComputer: address(curveComputer),
-            v4PoolManager: v4PoolManager,
-            weth: weth,
             bondingFeeBps: bondingFeeBps
         });
     }

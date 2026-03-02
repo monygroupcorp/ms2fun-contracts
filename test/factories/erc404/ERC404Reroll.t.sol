@@ -3,17 +3,9 @@ pragma solidity ^0.8.24;
 
 import { Test } from "forge-std/Test.sol";
 import { ERC404BondingInstance, InsufficientTokenBalance, TokenAmountMustBePositive, TokenAmountMustRepresentNFT } from "src/factories/erc404/ERC404BondingInstance.sol";
-import { ERC404StakingModule } from "src/factories/erc404/ERC404StakingModule.sol";
 import { CurveParamsComputer } from "src/factories/erc404/CurveParamsComputer.sol";
 import { BondingCurveMath } from "src/factories/erc404/libraries/BondingCurveMath.sol";
-import { IPoolManager } from "v4-core/interfaces/IPoolManager.sol";
 import { LibClone } from "solady/utils/LibClone.sol";
-
-contract MockMasterRegistryForStakingR {
-    mapping(address => bool) public instances;
-    function setInstance(address a, bool v) external { instances[a] = v; }
-    function isRegisteredInstance(address a) external view returns (bool) { return instances[a]; }
-}
 
 /**
  * @title ERC404Reroll Tests
@@ -21,12 +13,8 @@ contract MockMasterRegistryForStakingR {
  */
 contract ERC404RerollTest is Test {
     ERC404BondingInstance token;
-    MockMasterRegistryForStakingR stakingRegistry;
-    ERC404StakingModule stakingModule;
     CurveParamsComputer curveComputer;
-    address mockPoolManager = address(0x1);
-    address mockHook = address(0x2);
-    address mockWETH = address(0x3);
+    address mockLiquidityDeployer = address(0x600);
     address factory = address(0x4);
     address mockMasterRegistry = address(0x6);
     address owner = address(0x5);
@@ -38,38 +26,18 @@ contract ERC404RerollTest is Test {
     uint256 constant UNIT = 1_000_000 ether; // 1M tokens = 1 NFT
 
     function setUp() public {
-        stakingRegistry = new MockMasterRegistryForStakingR();
-        stakingModule = new ERC404StakingModule(address(stakingRegistry));
         curveComputer = new CurveParamsComputer(address(this));
-
-        // Mock WETH with deposit/approve/transfer functions
-        vm.mockCall(
-            mockWETH,
-            abi.encodeWithSignature("deposit()"),
-            abi.encode()
-        );
-        vm.mockCall(
-            mockWETH,
-            abi.encodeWithSignature("approve(address,uint256)"),
-            abi.encode(true)
-        );
-        vm.mockCall(
-            mockPoolManager,
-            abi.encodeWithSignature("initialize(tuple,uint160)"),
-            abi.encode()
-        );
 
         // Create bonding instance
         BondingCurveMath.Params memory curveParams = BondingCurveMath.Params({
             initialPrice: 0.0001 ether,
-            quarticCoeff: 1,  // represents 1 / 10^10
-            cubicCoeff: 1,    // represents 1 / 10^8
-            quadraticCoeff: 1, // represents 1 / 10^6
+            quarticCoeff: 1,
+            cubicCoeff: 1,
+            quadraticCoeff: 1,
             normalizationFactor: 1e18
         });
 
         // Note: factory = msg.sender (address(this)) is set during initialize()
-        // All 3 init calls must come from the same address (address(this))
         ERC404BondingInstance impl2 = new ERC404BondingInstance();
         token = ERC404BondingInstance(payable(LibClone.clone(address(impl2))));
 
@@ -79,17 +47,12 @@ contract ERC404RerollTest is Test {
             liquidityReservePercent: LIQUIDITY_RESERVE_PERCENT,
             curve: curveParams
         });
-        token.initialize(owner, address(0xBEEF), bonding, address(0));
+        token.initialize(owner, address(0xBEEF), bonding, mockLiquidityDeployer, address(0));
 
         token.initializeProtocol(ERC404BondingInstance.ProtocolParams({
             globalMessageRegistry: address(0x700),
             protocolTreasury: address(0xFEE),
             masterRegistry: mockMasterRegistry,
-            stakingModule: address(stakingModule),
-            liquidityDeployer: address(0x600),
-            curveComputer: address(curveComputer),
-            v4PoolManager: mockPoolManager,
-            weth: mockWETH,
             bondingFeeBps: 100
         }));
 

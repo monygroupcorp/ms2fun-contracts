@@ -7,19 +7,14 @@ import { Ownable } from "solady/auth/Ownable.sol";
 import { ReentrancyGuard } from "solady/utils/ReentrancyGuard.sol";
 import { SafeTransferLib } from "solady/utils/SafeTransferLib.sol";
 import { BondingCurveMath } from "./libraries/BondingCurveMath.sol";
-import { CurveParamsComputer } from "./CurveParamsComputer.sol";
-import { ERC404StakingModule } from "./ERC404StakingModule.sol";
-import { LiquidityDeployerModule } from "./LiquidityDeployerModule.sol";
-import { IPoolManager } from "v4-core/interfaces/IPoolManager.sol";
 import { ILiquidityDeployerModule } from "../../interfaces/ILiquidityDeployerModule.sol";
 import { IAlignmentVault } from "../../interfaces/IAlignmentVault.sol";
-import {IMasterRegistry} from "../../master/interfaces/IMasterRegistry.sol";
+import { IMasterRegistry } from "../../master/interfaces/IMasterRegistry.sol";
 import { IGlobalMessageRegistry } from "../../registry/interfaces/IGlobalMessageRegistry.sol";
 import { IInstanceLifecycle, TYPE_ERC404, STATE_BONDING, STATE_PAUSED, STATE_GRADUATED } from "../../interfaces/IInstanceLifecycle.sol";
 import { IGatingModule } from "../../gating/IGatingModule.sol";
-import { IdentityParams } from "../../interfaces/IFactoryTypes.sol";
 
-// Custom errors (replaces string literals in require statements to reduce bytecode)
+// ── Errors ────────────────────────────────────────────────────────────────────
 error AlreadyInitialized();
 error AlreadyDeployed();
 error BondingEnded();
@@ -27,47 +22,33 @@ error BondingNotActive();
 error BondingNotConfigured();
 error CannotActivateAfterLiquidityDeployed();
 error ExceedsBonding();
+error GatingNotAllowed();
 error InsufficientBalance();
 error InsufficientTokenBalance();
-error InvalidCurveComputer();
-error InvalidFactory();
 error InvalidGlobalMessageRegistry();
 error InvalidLiquidityDeployer();
 error InvalidMaxSupply();
 error InvalidOwner();
-error InvalidPasswordHash();
-error InvalidPassword();
-error InvalidPoolManager();
 error InvalidRefund();
-error InvalidReservePercent();
-error InvalidStakingModule();
 error InvalidVault();
-error InvalidWETH();
 error LowETHValue();
 error MaturityMustBeAfterOpenTime();
 error MaxCostExceeded();
 error NoReserve();
-error NoTiers();
 error OnlyOwnerBeforeMaturity();
 error OpenTimeMustBeSetFirst();
 error OpenTimeNotSet();
-error TierConfigMismatch();
-error TierNotAvailableYet();
 error TimeMustBeInFuture();
 error TokenAmountMustBePositive();
 error TokenAmountMustRepresentNFT();
 error TooEarly();
 error TransactionExpired();
-error VaultRequirementsNotMet();
-error VolumeCapExceeded();
 error BalanceMismatchAfterReroll();
-error AmountExceedsAvailableBalance();
 error AmountMustBePositive();
 
 /**
  * @title ERC404BondingInstance
- * @notice ERC404 token with bonding curve, password-protected tiers, and V4 liquidity deployment
- * @dev Extends DN404 with bonding curve mechanics, message system, and Uniswap V4 integration
+ * @notice AMM-agnostic ERC404 bonding token. Graduation delegates to an ILiquidityDeployerModule.
  */
 contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IInstanceLifecycle {
 
@@ -88,15 +69,8 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IInstanceLife
         address globalMessageRegistry;
         address protocolTreasury;
         address masterRegistry;
-        address stakingModule;
-        address liquidityDeployer;
-        address curveComputer;
-        address v4PoolManager;
-        address weth;
         uint256 bondingFeeBps;
     }
-
-
 
     // ┌─────────────────────────┐
     // │      State Variables    │
@@ -109,62 +83,49 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IInstanceLife
 
     uint256 public MAX_SUPPLY;
     uint256 public LIQUIDITY_RESERVE;
-    BondingCurveMath.Params public curveParams; // Storage (set in initialize, never changed)
-
+    BondingCurveMath.Params public curveParams;
     uint256 public UNIT;
 
-    address public v4PoolManager;
     address public factory;
-    address public weth;
     IAlignmentVault public vault;
     IMasterRegistry public masterRegistry;
     IGlobalMessageRegistry public globalMessageRegistry;
 
-    // Protocol revenue
     address public protocolTreasury;
     uint256 public bondingFeeBps;
 
-    // Customization
     string public styleUri;
 
-    uint256 public bondingOpenTime;  // Set by owner, 0 = not set
-    uint256 public bondingMaturityTime; // When anyone can deploy liquidity, 0 = not set
-    bool public bondingActive;       // Toggle for open/close
+    uint256 public bondingOpenTime;
+    uint256 public bondingMaturityTime;
+    bool public bondingActive;
     uint256 public totalBondingSupply;
     uint256 public reserve;
-    address public liquidityPool;     // V4 pool address after deployment
 
     // Gating module (address(0) = open gating)
     IGatingModule public gatingModule;
+    bool public gatingActive;
 
-    // Staking delegation
-    ERC404StakingModule public stakingModule;
+    // Liquidity deployer — set once in initialize(), AMM-agnostic
+    ILiquidityDeployerModule public liquidityDeployer;
 
-    // V4 liquidity deployment singleton
-    LiquidityDeployerModule public liquidityDeployer;
+    // Graduation flag
+    bool public graduated;
 
-    // Curve math computer (external)
-    CurveParamsComputer public curveComputer;
-
-    // Events
+    // ── Events ────────────────────────────────────────────────────────────────
     event BondingSale(address indexed user, uint256 amount, uint256 cost, bool isBuy);
     event BondingOpenTimeSet(uint256 openTime);
     event BondingMaturityTimeSet(uint256 maturityTime);
     event BondingActiveChanged(bool active);
-    event LiquidityDeployed(address indexed pool, uint256 amountToken, uint256 amountETH);
+    event LiquidityDeployed(address indexed deployer, uint256 amountToken, uint256 amountETH);
     event RerollInitiated(address indexed user, uint256 tokenAmount, uint256[] exemptedNFTIds);
     event RerollCompleted(address indexed user, uint256 tokensReturned);
-    event StakingEnabled();
-    event StakerRewardsClaimed(address indexed user, uint256 rewardAmount);
     event BondingFeePaid(address indexed buyer, uint256 feeAmount);
 
     // ┌─────────────────────────┐
     // │      Constructor        │
     // └─────────────────────────┘
 
-    /**
-     * @notice Locks the implementation contract so it cannot be initialized directly.
-     */
     constructor() {
         _initialized = true;
     }
@@ -175,12 +136,12 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IInstanceLife
 
     /**
      * @notice Initialize a clone instance. Called by factory immediately after cloning.
-     * @dev Strings (name, symbol, styleUri) are set separately via initializeMetadata().
      */
     function initialize(
         address owner,
         address vault_,
         BondingParams calldata bonding,
+        address _liquidityDeployer,
         address _gatingModule
     ) external {
         if (_initialized) revert AlreadyInitialized();
@@ -189,6 +150,7 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IInstanceLife
         if (bonding.maxSupply == 0) revert InvalidMaxSupply();
         if (owner == address(0)) revert InvalidOwner();
         if (vault_ == address(0)) revert InvalidVault();
+        if (_liquidityDeployer == address(0)) revert InvalidLiquidityDeployer();
 
         _initializeOwner(owner);
 
@@ -200,43 +162,31 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IInstanceLife
         curveParams = bonding.curve;
         UNIT = bonding.unit;
 
+        liquidityDeployer = ILiquidityDeployerModule(_liquidityDeployer);
         gatingModule = IGatingModule(_gatingModule);
+        gatingActive = _gatingModule != address(0);
 
-        // Deploy DN404 mirror and initialize
         address mirror = address(new DN404Mirror(msg.sender));
         _initializeDN404(bonding.maxSupply, address(this), mirror);
     }
 
     /**
      * @notice Set protocol params. Called by factory immediately after initialize().
-     * @dev Split from initialize() to avoid Yul headStart stack-too-deep on external call encoding.
      */
     function initializeProtocol(ProtocolParams calldata protocol) external {
         require(msg.sender == factory, "Only factory");
         require(_initialized, "Not initialized");
 
-        if (protocol.v4PoolManager == address(0)) revert InvalidPoolManager();
-        if (protocol.weth == address(0)) revert InvalidWETH();
         if (protocol.globalMessageRegistry == address(0)) revert InvalidGlobalMessageRegistry();
-        if (protocol.stakingModule == address(0)) revert InvalidStakingModule();
-        if (protocol.liquidityDeployer == address(0)) revert InvalidLiquidityDeployer();
-        if (protocol.curveComputer == address(0)) revert InvalidCurveComputer();
 
         masterRegistry = IMasterRegistry(protocol.masterRegistry);
         globalMessageRegistry = IGlobalMessageRegistry(protocol.globalMessageRegistry);
-        v4PoolManager = protocol.v4PoolManager;
-        weth = protocol.weth;
         protocolTreasury = protocol.protocolTreasury;
         bondingFeeBps = protocol.bondingFeeBps;
-
-        stakingModule = ERC404StakingModule(protocol.stakingModule);
-        liquidityDeployer = LiquidityDeployerModule(payable(protocol.liquidityDeployer));
-        curveComputer = CurveParamsComputer(protocol.curveComputer);
     }
 
     /**
      * @notice Set token name, symbol, and styleUri. Called by factory once after initialize().
-     * @dev Only callable by factory, only before owner has set bondingOpenTime (i.e. during deploy).
      */
     function initializeMetadata(
         string calldata name_,
@@ -254,22 +204,12 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IInstanceLife
     // │    Owner Functions      │
     // └─────────────────────────┘
 
-    /**
-     * @notice Set the bonding curve open time
-     * @dev Accepts Unix timestamp as uint256. For date strings, frontend should convert to timestamp.
-     * @param timestamp Unix timestamp for when bonding curve should open
-     */
     function setBondingOpenTime(uint256 timestamp) external onlyOwner {
         if (timestamp <= block.timestamp) revert TimeMustBeInFuture();
         bondingOpenTime = timestamp;
         emit BondingOpenTimeSet(timestamp);
     }
 
-    /**
-     * @notice Set the bonding curve maturity time (when permissionless liquidity deployment is allowed)
-     * @dev After maturity, anyone can call deployLiquidity to transition to V4 pool
-     * @param timestamp Unix timestamp for when bonding curve matures
-     */
     function setBondingMaturityTime(uint256 timestamp) external onlyOwner {
         if (timestamp <= block.timestamp) revert TimeMustBeInFuture();
         if (bondingOpenTime == 0) revert OpenTimeMustBeSetFirst();
@@ -278,27 +218,23 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IInstanceLife
         emit BondingMaturityTimeSet(timestamp);
     }
 
-    /**
-     * @notice Set bonding curve active state
-     * @dev Requires bondingOpenTime to be set AND hook must be configured first
-     * @param _active Whether bonding curve is active
-     */
     function setBondingActive(bool _active) external onlyOwner {
         if (bondingOpenTime == 0) revert OpenTimeNotSet();
-        if (_active && liquidityPool != address(0)) revert CannotActivateAfterLiquidityDeployed();
+        if (_active && graduated) revert CannotActivateAfterLiquidityDeployed();
         bondingActive = _active;
         emit BondingActiveChanged(_active);
         emit StateChanged(_active ? STATE_BONDING : STATE_PAUSED);
     }
 
-    /// @notice Migrate to a new vault. New vault must share this instance's alignment target.
-    /// @dev Updates local active vault and appends to registry vault array.
+    function setStyle(string memory uri) external onlyOwner {
+        styleUri = uri;
+    }
+
     function migrateVault(address newVault) external onlyOwner {
         vault = IAlignmentVault(payable(newVault));
         masterRegistry.migrateVault(address(this), newVault);
     }
 
-    /// @notice Claim accumulated fees from all vault positions (current and historical).
     function claimAllFees() external onlyOwner {
         address[] memory allVaults = masterRegistry.getInstanceVaults(address(this));
         for (uint256 i = 0; i < allVaults.length; i++) {
@@ -307,26 +243,9 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IInstanceLife
     }
 
     // ┌─────────────────────────┐
-    // │   Tier System Functions │
-    // └─────────────────────────┘
-
-    // NOTE: Tier unlocking is now verified inline during buyBonding/sellBonding
-    // to reduce gas costs and simplify the UX. Users provide password hash directly
-    // at purchase time, eliminating the need for a separate unlock transaction.
-
-    // ┌─────────────────────────┐
     // │    Buy/Sell Functions   │
     // └─────────────────────────┘
 
-    /**
-     * @notice Buy tokens from bonding curve
-     * @param amount Amount of tokens to buy
-     * @param maxCost Maximum ETH cost
-     * @param mintNFT Whether to mint NFTs
-     * @param passwordHash Password hash for tier access (bytes32(0) for public)
-     * @param messageData Optional encoded message data
-     * @param deadline Timestamp after which this transaction reverts (0 = no deadline)
-     */
     function buyBonding(
         uint256 amount,
         uint256 maxCost,
@@ -337,52 +256,46 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IInstanceLife
     ) external payable nonReentrant {
         if (deadline != 0 && block.timestamp > deadline) revert TransactionExpired();
         if (!bondingActive) revert BondingNotActive();
-        if (liquidityPool != address(0)) revert BondingEnded();
+        if (graduated) revert BondingEnded();
         if (totalBondingSupply + amount > MAX_SUPPLY - LIQUIDITY_RESERVE) revert ExceedsBonding();
 
-        // Gating check (address(0) = open gating)
-        if (address(gatingModule) != address(0)) {
+        // Gating check (address(0) or gatingActive==false = open)
+        if (address(gatingModule) != address(0) && gatingActive) {
             bytes memory gatingData = abi.encode(passwordHash, bondingOpenTime);
-            (bool allowed,) = gatingModule.canMint(msg.sender, amount, gatingData);
-            require(allowed, "Gating check failed");
+            (bool allowed, bool permanent) = gatingModule.canMint(msg.sender, amount, gatingData);
+            if (!allowed) revert GatingNotAllowed();
+            if (permanent) gatingActive = false;
             gatingModule.onMint(msg.sender, amount);
         }
 
-        uint256 totalCost = curveComputer.calculateCost(curveParams, totalBondingSupply, amount);
+        uint256 totalCost = BondingCurveMath.calculateCost(curveParams, totalBondingSupply, amount);
         uint256 bondingFee = (totalCost * bondingFeeBps) / 10000;
         uint256 totalWithFee = totalCost + bondingFee;
         if (maxCost < totalWithFee) revert MaxCostExceeded();
         if (msg.value < totalWithFee) revert LowETHValue();
 
-        // Handle skipNFT
         bool originalSkipNFT = mintNFT ? getSkipNFT(msg.sender) : false;
         if (originalSkipNFT) {
             _setSkipNFT(msg.sender, false);
         }
 
         totalBondingSupply += amount;
-
-        // Transfer tokens
         _transfer(address(this), msg.sender, amount);
         reserve += totalCost;
 
-        // Route bonding fee to protocol treasury
         if (bondingFee > 0 && protocolTreasury != address(0)) {
             SafeTransferLib.safeTransferETH(protocolTreasury, bondingFee);
             emit BondingFeePaid(msg.sender, bondingFee);
         }
 
-        // Forward message to global registry
         if (messageData.length > 0) {
             globalMessageRegistry.postForAction(msg.sender, address(this), messageData);
         }
 
-        // Reset skipNFT
         if (originalSkipNFT) {
             _setSkipNFT(msg.sender, true);
         }
 
-        // Refund excess ETH
         if (msg.value > totalWithFee) {
             SafeTransferLib.safeTransferETH(msg.sender, msg.value - totalWithFee);
         }
@@ -390,14 +303,6 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IInstanceLife
         emit BondingSale(msg.sender, amount, totalWithFee, true);
     }
 
-    /**
-     * @notice Sell tokens back to bonding curve
-     * @param amount Amount of tokens to sell
-     * @param minRefund Minimum ETH refund expected
-     * @param passwordHash Password hash for tier access
-     * @param messageData Optional encoded message data
-     * @param deadline Timestamp after which this transaction reverts (0 = no deadline)
-     */
     function sellBonding(
         uint256 amount,
         uint256 minRefund,
@@ -407,86 +312,33 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IInstanceLife
     ) external nonReentrant {
         if (deadline != 0 && block.timestamp > deadline) revert TransactionExpired();
         if (!bondingActive) revert BondingNotActive();
-        if (liquidityPool != address(0)) revert BondingEnded();
+        if (graduated) revert BondingEnded();
 
-        // Lock sells when bonding curve is full to preserve best case scenario for liquidity deployment
-        /// @dev Sells are intentionally blocked when bonding curve is full. This ensures
-        /// users hold their positions until liquidity deployment occurs. The lock prevents
-        /// supply from decreasing after curve completion, maintaining the bonding curve's
-        /// terminal state until migration to Uniswap V4 liquidity.
         uint256 maxBondingSupply = MAX_SUPPLY - LIQUIDITY_RESERVE;
         if (totalBondingSupply >= maxBondingSupply) revert ExceedsBonding();
 
         uint256 balance = balanceOf(msg.sender);
         if (balance < amount) revert InsufficientBalance();
 
-        uint256 refund = curveComputer.calculateRefund(curveParams, totalBondingSupply, amount);
+        uint256 refund = BondingCurveMath.calculateRefund(curveParams, totalBondingSupply, amount);
         if (refund < minRefund || reserve < refund) revert InvalidRefund();
 
-        // Transfer tokens
         _transfer(msg.sender, address(this), amount);
         totalBondingSupply -= amount;
         reserve -= refund;
 
-        // Forward message to global registry
         if (messageData.length > 0) {
             globalMessageRegistry.postForAction(msg.sender, address(this), messageData);
         }
 
-        // Refund ETH (no tax - handled by hook)
         SafeTransferLib.safeTransferETH(msg.sender, refund);
-
         emit BondingSale(msg.sender, amount, refund, false);
-    }
-
-    // ── IInstanceLifecycle ─────────────────────────────────────────────────────
-
-    function instanceType() external pure override returns (bytes32) {
-        return TYPE_ERC404;
-    }
-
-    // ┌─────────────────────────┐
-    // │   Metadata Functions    │
-    // └─────────────────────────┘
-
-    /**
-     * @notice Get token name (ERC20/ERC721)
-     */
-    function name() public view override returns (string memory) {
-        return _name;
-    }
-
-    /**
-     * @notice Get token symbol (ERC20/ERC721)
-     */
-    function symbol() public view override returns (string memory) {
-        return _symbol;
-    }
-
-    // ┌─────────────────────────┐
-    // │   Style Management      │
-    // └─────────────────────────┘
-
-    /**
-     * @notice Set project styling (owner only)
-     * @param uri Style URI (ipfs://, ar://, https://, or inline:css:... / inline:js:...)
-     */
-    function setStyle(string memory uri) external onlyOwner {
-        styleUri = uri;
     }
 
     // ┌─────────────────────────┐
     // │   Reroll Functionality  │
     // └─────────────────────────┘
 
-    /**
-     * @notice Convenience function to reroll NFTs with optional shielding of specific IDs
-     * @dev Users can also reroll manually by calling
-     *      setSkipNFT(false), transferring balance to self, then setSkipNFT(true).
-     *      Manual reroll cannot shield specific NFTs - only this function provides that feature.
-     * @param tokenAmount Amount of tokens to reroll (must match current balance)
-     * @param exemptedNFTIds Array of NFT IDs to protect from reroll (unique feature)
-     */
     function rerollSelectedNFTs(
         uint256 tokenAmount,
         uint256[] calldata exemptedNFTIds
@@ -508,13 +360,10 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IInstanceLife
 
         emit RerollInitiated(msg.sender, tokenAmount, exemptedNFTIds);
 
-        // Phase 1 - Shield: Move exempted NFTs to contract for safekeeping
         for (uint256 i = 0; i < exemptCount; i++) {
             _initiateTransferFromNFT(msg.sender, address(this), exemptedNFTIds[i], msg.sender);
         }
 
-        // Phase 2 - Reroll: Transfer rerollAmount to contract (burns non-exempted NFTs),
-        // then transfer back with skipNFT=false (mints new random NFTs)
         _transfer(msg.sender, address(this), rerollAmount);
 
         bool originalSkipNFT = getSkipNFT(msg.sender);
@@ -522,7 +371,6 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IInstanceLife
         _transfer(address(this), msg.sender, rerollAmount);
         _setSkipNFT(msg.sender, originalSkipNFT);
 
-        // Phase 3 - Unshield: Return exempted NFTs (with their original IDs) to user
         for (uint256 i = 0; i < exemptCount; i++) {
             _initiateTransferFromNFT(address(this), msg.sender, exemptedNFTIds[i], address(this));
         }
@@ -533,75 +381,17 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IInstanceLife
     }
 
     // ┌─────────────────────────┐
-    // │  Staking Delegation     │
-    // └─────────────────────────┘
-
-    /// @notice Enable holder staking (irreversible). Owner forfeits direct vault yield.
-    function enableStaking() external onlyOwner {
-        stakingModule.enableStaking();
-        emit StakingEnabled();
-    }
-
-    /// @notice Stake tokens to receive proportional vault fee yield
-    function stake(uint256 amount) external nonReentrant {
-        if (amount == 0) revert AmountMustBePositive();
-        if (balanceOf(msg.sender) < amount) revert InsufficientBalance();
-        _transfer(msg.sender, address(this), amount);
-        stakingModule.recordStake(msg.sender, amount);
-    }
-
-    /// @notice Unstake tokens. Auto-claims pending rewards.
-    function unstake(uint256 amount) external nonReentrant {
-        if (amount == 0) revert AmountMustBePositive();
-        uint256 delta = vault.claimFees();
-        if (delta > 0) stakingModule.recordFeesReceived(delta);
-        uint256 rewardAmount = stakingModule.recordUnstake(msg.sender, amount);
-        _transfer(address(this), msg.sender, amount);
-        if (rewardAmount > 0) SafeTransferLib.safeTransferETH(msg.sender, rewardAmount);
-    }
-
-    /// @notice Claim proportional vault fee yield for staked tokens
-    function claimStakerRewards() external nonReentrant returns (uint256 rewardAmount) {
-        if (!vault.validateCompliance(address(this))) revert VaultRequirementsNotMet();
-        uint256 delta = vault.claimFees();
-        if (delta > 0) stakingModule.recordFeesReceived(delta);
-        rewardAmount = stakingModule.computeClaim(msg.sender);
-        SafeTransferLib.safeTransferETH(msg.sender, rewardAmount);
-        emit StakerRewardsClaimed(msg.sender, rewardAmount);
-    }
-
-    /// @notice Owner withdrawal of ETH dust (contract balance not owed to stakers)
-    function withdrawDust(uint256 amount) external onlyOwner nonReentrant {
-        uint256 dustAvailable = address(this).balance;
-        if (amount > dustAvailable) revert AmountExceedsAvailableBalance();
-        SafeTransferLib.safeTransferETH(owner(), amount);
-    }
-
-    /// @notice Accept ETH — required for vault.claimFees() to send fees back to this contract
-    receive() external payable override {}
-
-    // ┌─────────────────────────┐
-    // │  V4 Liquidity Deploy   │
+    // │  Liquidity Deployment   │
     // └─────────────────────────┘
 
     /**
-     * @notice Deploy liquidity to Uniswap V4
-     * @dev Fully deterministic — no caller-supplied parameters.
-     *      Computes sqrtPriceX96 from post-fee token/ETH ratio.
-     *      Uses reserve for ETH, LIQUIDITY_RESERVE for tokens.
-     *      Pool config (fee, tickSpacing) from storage set at initialization.
-     *
-     *      Permissionless when:
-     *      - Bonding curve is full, OR
-     *      - Maturity time is reached
-     *      Otherwise, only owner can deploy.
-     *
-     * @return liquidity Amount of liquidity added
+     * @notice Deploy liquidity via the pluggable ILiquidityDeployerModule.
+     * @dev Permissionless when curve is full or matured; owner-only otherwise.
      */
-    function deployLiquidity() external nonReentrant returns (uint128 liquidity) {
+    function deployLiquidity() external nonReentrant {
         if (bondingOpenTime == 0) revert BondingNotConfigured();
         if (block.timestamp < bondingOpenTime) revert TooEarly();
-        if (liquidityPool != address(0)) revert AlreadyDeployed();
+        if (graduated) revert AlreadyDeployed();
         if (reserve == 0) revert NoReserve();
 
         uint256 maxBondingSupply = MAX_SUPPLY - LIQUIDITY_RESERVE;
@@ -614,54 +404,41 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IInstanceLife
         // CEI: capture and zero reserve before external calls
         uint256 ethToSend = reserve;
         reserve = 0;
+        bondingActive = false;
 
-        // Transfer LIQUIDITY_RESERVE tokens to the module (module settles on behalf of this address)
         _transfer(address(this), address(liquidityDeployer), LIQUIDITY_RESERVE);
 
-        ILiquidityDeployerModule.DeployParams memory p = ILiquidityDeployerModule.DeployParams({
-            ethReserve: ethToSend,
-            tokenReserve: LIQUIDITY_RESERVE,
-            protocolTreasury: protocolTreasury,
-            vault: address(vault),
-            token: address(this),
-            instance: address(this)
-        });
+        liquidityDeployer.deployLiquidity{value: ethToSend}(
+            ILiquidityDeployerModule.DeployParams({
+                ethReserve: ethToSend,
+                tokenReserve: LIQUIDITY_RESERVE,
+                protocolTreasury: protocolTreasury,
+                vault: address(vault),
+                token: address(this),
+                instance: address(this)
+            })
+        );
 
-        liquidityDeployer.deployLiquidity{value: ethToSend}(p);
-
-        liquidityPool = v4PoolManager;
-        emit LiquidityDeployed(liquidityPool, LIQUIDITY_RESERVE, ethToSend);
+        graduated = true;
+        emit LiquidityDeployed(address(liquidityDeployer), LIQUIDITY_RESERVE, ethToSend);
         emit StateChanged(STATE_GRADUATED);
+    }
+
+    // ── IInstanceLifecycle ─────────────────────────────────────────────────────
+
+    function instanceType() external pure override returns (bytes32) {
+        return TYPE_ERC404;
     }
 
     // ┌─────────────────────────┐
     // │   DN404 Overrides        │
     // └─────────────────────────┘
 
-    /**
-     * @notice Returns the number of tokens that correspond to one NFT
-     * @dev Each NFT represents 1,000,000 tokens (1M tokens = 1 NFT)
-     * @return The number of tokens per NFT
-     */
-    function _unit() internal view override returns (uint256) {
-        return UNIT;
-    }
+    function name() public view override returns (string memory) { return _name; }
+    function symbol() public view override returns (string memory) { return _symbol; }
+    function _unit() internal view override returns (uint256) { return UNIT; }
+    function _tokenURI(uint256) internal pure override returns (string memory) { return ""; }
+    function _skipNFTDefault(address) internal pure override returns (bool) { return false; }
 
-    /**
-     * @notice Returns the token URI for a given token ID
-     * @param tokenId The ID of the token to get the URI for
-     * @return The token URI as a string
-     */
-    function _tokenURI(uint256 tokenId) internal view override returns (string memory) {
-        // Default implementation - can be overridden by inheriting contracts
-        return "";
-    }
-
-    /**
-     * @dev Override to set skip NFT default to On (true)
-     * @return true to skip NFT by default
-     */
-    function _skipNFTDefault(address) internal pure override returns (bool) {
-        return false;
-    }
+    receive() external payable override {}
 }

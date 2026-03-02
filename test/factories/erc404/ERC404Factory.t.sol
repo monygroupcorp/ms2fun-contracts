@@ -3,7 +3,7 @@ pragma solidity ^0.8.24;
 
 import {Test, console} from "forge-std/Test.sol";
 import {ERC404Factory} from "../../../src/factories/erc404/ERC404Factory.sol";
-import {ERC404BondingInstance, InvalidPoolManager, InvalidWETH} from "../../../src/factories/erc404/ERC404BondingInstance.sol";
+import {ERC404BondingInstance} from "../../../src/factories/erc404/ERC404BondingInstance.sol";
 import {ERC404StakingModule} from "../../../src/factories/erc404/ERC404StakingModule.sol";
 import {LaunchManager} from "../../../src/factories/erc404/LaunchManager.sol";
 import {CurveParamsComputer} from "../../../src/factories/erc404/CurveParamsComputer.sol";
@@ -258,83 +258,6 @@ contract ERC404FactoryTest is Test {
         vm.stopPrank();
     }
 
-    function test_createInstance_v4PoolManagerNotSet() public {
-        vm.startPrank(protocolAdmin);
-        ERC404BondingInstance implBadPM = new ERC404BondingInstance();
-        ERC404Factory factoryBadPoolManager = new ERC404Factory(
-            ERC404Factory.CoreConfig({
-                implementation: address(implBadPM),
-                masterRegistry: address(mockRegistry),
-                instanceTemplate: mockInstanceTemplate,
-                v4PoolManager: address(0), // missing
-                weth: mockWETH,
-                protocol: protocolAdmin
-            }),
-            ERC404Factory.ModuleConfig({
-                stakingModule: address(stakingModule),
-                liquidityDeployer: address(0x600),
-                globalMessageRegistry: mockGMR,
-                launchManager: address(launchMgr),
-                curveComputer: address(curveComp),
-                tierGatingModule: address(0),
-                componentRegistry: address(0)
-            })
-        );
-        factoryBadPoolManager.setProfile(DEFAULT_PROFILE_ID, ERC404Factory.GraduationProfile({
-            targetETH: 15 ether, unitPerNFT: 1e6, poolFee: 3000,
-            tickSpacing: 60, liquidityReserveBps: 2000, active: true
-        }));
-        vm.stopPrank();
-
-        vm.deal(creator1, 1 ether);
-        vm.startPrank(creator1);
-        vm.expectRevert(InvalidPoolManager.selector);
-        factoryBadPoolManager.createInstance{value: INSTANCE_CREATION_FEE}(
-            _identity("TestToken", "TEST", creator1),
-            "ipfs://metadata",
-            ERC404Factory.CreationTier.STANDARD
-        );
-        vm.stopPrank();
-    }
-
-    function test_createInstance_wethNotSet() public {
-        vm.startPrank(protocolAdmin);
-        ERC404BondingInstance implBadWeth = new ERC404BondingInstance();
-        ERC404Factory factoryBadWeth = new ERC404Factory(
-            ERC404Factory.CoreConfig({
-                implementation: address(implBadWeth),
-                masterRegistry: address(mockRegistry),
-                instanceTemplate: mockInstanceTemplate,
-                v4PoolManager: mockV4PoolManager,
-                weth: address(0), // missing
-                protocol: protocolAdmin
-            }),
-            ERC404Factory.ModuleConfig({
-                stakingModule: address(stakingModule),
-                liquidityDeployer: address(0x600),
-                globalMessageRegistry: mockGMR,
-                launchManager: address(launchMgr),
-                curveComputer: address(curveComp),
-                tierGatingModule: address(0),
-                componentRegistry: address(0)
-            })
-        );
-        factoryBadWeth.setProfile(DEFAULT_PROFILE_ID, ERC404Factory.GraduationProfile({
-            targetETH: 15 ether, unitPerNFT: 1e6, poolFee: 3000,
-            tickSpacing: 60, liquidityReserveBps: 2000, active: true
-        }));
-        vm.stopPrank();
-
-        vm.deal(creator1, 1 ether);
-        vm.startPrank(creator1);
-        vm.expectRevert(InvalidWETH.selector);
-        factoryBadWeth.createInstance{value: INSTANCE_CREATION_FEE}(
-            _identity("TestToken", "TEST", creator1),
-            "ipfs://metadata",
-            ERC404Factory.CreationTier.STANDARD
-        );
-        vm.stopPrank();
-    }
 
     // ========================
     // Infrastructure Tests
