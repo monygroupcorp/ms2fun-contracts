@@ -220,4 +220,8 @@ contract ERC721AuctionFactory is Ownable, ReentrancyGuard, IFactory {
     function protocol() external view returns (address) {
         return owner();
     }
+
+    function features() external view returns (bytes32[] memory) {
+        return new bytes32[](0);
+    }
 }

@@ -132,135 +132,40 @@ contract ERC404ZAMMBondingInstanceTest is Test {
     function test_deployLiquidity_setsGraduated() public {
         _setupGraduation();
 
-        instance.deployLiquidity(zammAddr, 30, 200); // feeOrHook=30, taxBps=200
+        instance.deployLiquidity(zammAddr, 30); // feeOrHook=30
 
         assertTrue(instance.graduated());
         assertEq(instance.zamm(), zammAddr);
         assertFalse(instance.bondingActive());
     }
 
-    function test_deployLiquidity_setsTransferExemptions() public {
-        _setupGraduation();
-        instance.deployLiquidity(zammAddr, 30, 200);
-
-        assertTrue(instance.transferExempt(address(instance)));
-        assertTrue(instance.transferExempt(address(instance.liquidityDeployer())));
-        assertTrue(instance.transferExempt(address(instance.vault())));
-    }
-
     function test_deployLiquidity_revertsIfAlreadyDeployed() public {
         _setupGraduation();
-        instance.deployLiquidity(zammAddr, 30, 200);
+        instance.deployLiquidity(zammAddr, 30);
 
         vm.expectRevert();
-        instance.deployLiquidity(zammAddr, 30, 200);
+        instance.deployLiquidity(zammAddr, 30);
     }
 
-    // ── Tax + sweep tests ─────────────────────────────────────────────────────
-
-    function _graduate() internal {
-        zammAddr = address(zamm);
-        vm.prank(owner);
-        instance.setBondingOpenTime(block.timestamp + 1);
-        vm.warp(block.timestamp + 2);
-        vm.prank(owner);
-        instance.setBondingActive(true);
-
-        // Set maturity time and warp past it so anyone can graduate
-        vm.prank(owner);
-        instance.setBondingMaturityTime(block.timestamp + 10);
-        vm.warp(block.timestamp + 11);
-
-        // Buy a small amount so reserve > 0
-        vm.deal(buyer, 1 ether);
-        vm.prank(buyer);
-        instance.buyBonding{value: 1 ether}(1 ether, 1 ether, false, bytes32(0), "", 0);
-
-        // Graduate (permissionless since maturity has passed)
-        instance.deployLiquidity(zammAddr, 30, 100); // 1% tax
-    }
-
-    function test_transferToZAMM_accumulatesTax() public {
-        _graduate();
+    function test_noTransferTaxAfterGraduation() public {
+        // After graduation, transfers to ZAMM must NOT deduct tax
+        _setupGraduation();
+        instance.deployLiquidity(zammAddr, 30);
 
         uint256 buyerBalance = instance.balanceOf(buyer);
-        assertGt(buyerBalance, 0, "buyer should have tokens after buy");
-        uint256 sellAmount = buyerBalance / 2; // sell half
-
-        uint256 taxBefore = instance.accumulatedTax();
+        assertGt(buyerBalance, 0);
         uint256 zammBalanceBefore = instance.balanceOf(zammAddr);
         vm.prank(buyer);
-        instance.transfer(zammAddr, sellAmount); // triggers tax hook
-
-        uint256 expectedTax = (sellAmount * 100) / 10000; // 1%
-        assertEq(instance.accumulatedTax(), taxBefore + expectedTax);
-        // ZAMM receives sellAmount - tax (check delta)
-        assertEq(instance.balanceOf(zammAddr), zammBalanceBefore + sellAmount - expectedTax);
-    }
-
-    function test_transferFromZAMM_accumulatesTax() public {
-        _graduate();
-
-        uint256 amount = 10 ether;
-        // Give ZAMM some tokens (exempt transfer from instance)
-        vm.prank(address(instance));
-        instance.transfer(zammAddr, amount); // exempt (instance is in transferExempt), no tax
-
-        // Simulate a "buy": transfer from zamm to buyer
-        uint256 taxBefore = instance.accumulatedTax();
-        vm.prank(zammAddr);
-        instance.transfer(buyer, amount);
-
-        uint256 expectedTax = (amount * 100) / 10000;
-        assertEq(instance.accumulatedTax(), taxBefore + expectedTax);
-    }
-
-    function test_transferExempt_noTax() public {
-        _graduate();
-
-        uint256 amount = 10 ether;
-        // Instance -> ZAMM: exempt (instance is in transferExempt)
-        uint256 taxBefore = instance.accumulatedTax();
-        vm.prank(address(instance));
-        instance.transfer(zammAddr, amount);
-        assertEq(instance.accumulatedTax(), taxBefore); // no tax
-    }
-
-    function test_walletToWallet_noTax() public {
-        _graduate();
-
-        address other = makeAddr("other");
-        uint256 buyerBalance = instance.balanceOf(buyer);
-        vm.prank(buyer);
-        instance.transfer(other, buyerBalance / 2);
-
-        assertEq(instance.accumulatedTax(), 0); // no tax
-    }
-
-    function test_sweepTax_swapsToEthAndSendsToVault() public {
-        _graduate();
-
-        // Accumulate some tax by selling tokens to ZAMM
-        uint256 buyerBalance = instance.balanceOf(buyer);
-        vm.prank(buyer);
         instance.transfer(zammAddr, buyerBalance);
-        uint256 accumulated = instance.accumulatedTax();
-        assertGt(accumulated, 0);
-
-        // Fund MockZAMM with ETH to return on swap
-        vm.deal(zammAddr, 10 ether);
-        zamm.setEthPerToken(1e15); // 0.001 ETH per token
-
-        // MockVault accepts receiveContribution() calls
-        instance.sweepTax();
-        assertEq(instance.accumulatedTax(), 0);
+        // ZAMM receives exactly buyerBalance — no tax deduction
+        assertEq(instance.balanceOf(zammAddr), zammBalanceBefore + buyerBalance);
     }
 
-    function test_sweepTax_noopOnZeroBalance() public {
-        _graduate();
-        // No accumulated tax — should be a no-op
-        instance.sweepTax();
-        assertEq(instance.accumulatedTax(), 0);
+    function test_deployLiquidity_noTaxParam() public {
+        // deployLiquidity() accepts only (_zamm, _feeOrHook) — no _taxBps
+        _setupGraduation();
+        instance.deployLiquidity(zammAddr, 30);
+        assertTrue(instance.graduated());
     }
 
     // ── Vault migration tests ─────────────────────────────────────────────────

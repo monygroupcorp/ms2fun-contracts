@@ -78,7 +78,7 @@ contract ERC404CypherFactory is OwnableRoles, ReentrancyGuard, IFactory {
     mapping(uint256 => GraduationProfile) public profiles;
 
     // Features
-    bytes32[] public features;
+    bytes32[] internal _features;
 
     // ── Events ────────────────────────────────────────────────────────────────
     event InstanceCreated(address indexed instance, address indexed instanceCreator, string name, string symbol, address indexed vault);
@@ -110,10 +110,11 @@ contract ERC404CypherFactory is OwnableRoles, ReentrancyGuard, IFactory {
         tierGatingModule = PasswordTierGatingModule(modules.tierGatingModule);
         componentRegistry = IComponentRegistry(modules.componentRegistry);
 
-        features.push(FeatureUtils.BONDING_CURVE);
-        features.push(FeatureUtils.LIQUIDITY_POOL);
-        features.push(FeatureUtils.CHAT);
-        features.push(FeatureUtils.PORTFOLIO);
+        _features.push(FeatureUtils.BONDING_CURVE);
+        _features.push(FeatureUtils.LIQUIDITY_POOL);
+        _features.push(FeatureUtils.CHAT);
+        _features.push(FeatureUtils.PORTFOLIO);
+        _features.push(FeatureUtils.GATING);
     }
 
     /**
@@ -291,6 +292,8 @@ contract ERC404CypherFactory is OwnableRoles, ReentrancyGuard, IFactory {
         SafeTransferLib.safeTransferETH(protocolTreasury, amt);
     }
 
-    function getFeatures() external view returns (bytes32[] memory) { return features; }
+    function getFeatures() external view returns (bytes32[] memory) { return _features; }
     function protocol() external view returns (address) { return owner(); }
+
+    function features() external view returns (bytes32[] memory) { return _features; }
 }

@@ -9,4 +9,11 @@ interface IFactory {
     /// @notice Returns the protocol authority address
     /// @return The protocol role with administrative control
     function protocol() external view returns (address);
+
+    /// @notice Returns the component tag categories this factory supports.
+    ///         Each bytes32 is a keccak256 tag matching a ComponentRegistry category
+    ///         (e.g. keccak256("gating"), keccak256("agent")).
+    ///         The frontend intersects this list with ComponentRegistry to build wizard steps.
+    /// @return Array of supported component tag hashes (may be empty)
+    function features() external view returns (bytes32[] memory);
 }

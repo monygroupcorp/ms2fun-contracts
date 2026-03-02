@@ -76,11 +76,12 @@ contract ERC404Factory is OwnableRoles, ReentrancyGuard, IFactory {
     enum CreationTier { STANDARD, PREMIUM, LAUNCH }
 
     // Feature matrix
-    bytes32[] public features = [
+    bytes32[] internal _features = [
         FeatureUtils.BONDING_CURVE,
         FeatureUtils.LIQUIDITY_POOL,
         FeatureUtils.CHAT,
-        FeatureUtils.PORTFOLIO
+        FeatureUtils.PORTFOLIO,
+        FeatureUtils.GATING
     ];
 
     // Graduation profiles (protocol-defined)
@@ -352,7 +353,7 @@ contract ERC404Factory is OwnableRoles, ReentrancyGuard, IFactory {
      * @notice Get factory features
      */
     function getFeatures() external view returns (bytes32[] memory) {
-        return features;
+        return _features;
     }
 
     function setProtocolTreasury(address _treasury) external onlyRoles(PROTOCOL_ROLE) {
@@ -373,6 +374,10 @@ contract ERC404Factory is OwnableRoles, ReentrancyGuard, IFactory {
 
     function protocol() external view returns (address) {
         return owner();
+    }
+
+    function features() external view returns (bytes32[] memory) {
+        return _features;
     }
 
     function setBondingFeeBps(uint256 _bps) external onlyRoles(PROTOCOL_ROLE) {

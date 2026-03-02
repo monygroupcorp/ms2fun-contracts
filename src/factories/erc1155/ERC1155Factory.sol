@@ -11,6 +11,7 @@ import {IFactory} from "../../interfaces/IFactory.sol";
 import {PromotionBadges} from "../../promotion/PromotionBadges.sol";
 import {FeaturedQueueManager} from "../../master/FeaturedQueueManager.sol";
 import {IComponentRegistry} from "../../registry/interfaces/IComponentRegistry.sol";
+import {FeatureUtils} from "../../master/libraries/FeatureUtils.sol";
 
 /**
  * @title ERC1155Factory
@@ -25,6 +26,9 @@ contract ERC1155Factory is Ownable, ReentrancyGuard, IFactory {
     // Protocol revenue
     address public protocolTreasury;
     uint256 public accumulatedProtocolFees;
+
+    // Pluggable component tags
+    bytes32[] internal _features;
 
     // Trusted agents that can add editions on behalf of users
     mapping(address => bool) public isAgent;
@@ -78,6 +82,7 @@ contract ERC1155Factory is Ownable, ReentrancyGuard, IFactory {
         globalMessageRegistry = _globalMessageRegistry;
         componentRegistry = IComponentRegistry(_componentRegistry);
         instanceTemplate = _instanceTemplate;
+        _features.push(FeatureUtils.GATING);
     }
 
     /**
@@ -293,5 +298,9 @@ contract ERC1155Factory is Ownable, ReentrancyGuard, IFactory {
 
     function protocol() external view returns (address) {
         return owner();
+    }
+
+    function features() external view returns (bytes32[] memory) {
+        return _features;
     }
 }
