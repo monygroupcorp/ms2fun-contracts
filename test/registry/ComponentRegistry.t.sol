@@ -3,6 +3,7 @@ pragma solidity ^0.8.20;
 
 import {Test} from "forge-std/Test.sol";
 import {LibClone} from "solady/utils/LibClone.sol";
+import {Ownable} from "solady/auth/Ownable.sol";
 import {ComponentRegistry} from "../../src/registry/ComponentRegistry.sol";
 import {IComponentRegistry} from "../../src/registry/interfaces/IComponentRegistry.sol";
 
@@ -33,7 +34,7 @@ contract ComponentRegistryTest is Test {
     }
 
     function test_initialize_revertsOnDoubleInit() public {
-        vm.expectRevert("Already initialized");
+        vm.expectRevert(Ownable.AlreadyInitialized.selector);
         registry.initialize(owner);
     }
 
@@ -41,7 +42,7 @@ contract ComponentRegistryTest is Test {
         address newImpl = address(new ComponentRegistry());
         address proxy = LibClone.deployERC1967(newImpl);
         ComponentRegistry r = ComponentRegistry(proxy);
-        vm.expectRevert("Invalid owner");
+        vm.expectRevert(ComponentRegistry.InvalidAddress.selector);
         r.initialize(address(0));
     }
 
@@ -67,13 +68,13 @@ contract ComponentRegistryTest is Test {
         vm.prank(owner);
         registry.approveComponent(module1, GATING_TAG, "PasswordTierGating");
         vm.prank(owner);
-        vm.expectRevert("Already approved");
+        vm.expectRevert(ComponentRegistry.AlreadyApproved.selector);
         registry.approveComponent(module1, GATING_TAG, "PasswordTierGating");
     }
 
     function test_approveComponent_revertsOnZeroAddress() public {
         vm.prank(owner);
-        vm.expectRevert("Invalid component");
+        vm.expectRevert(ComponentRegistry.InvalidAddress.selector);
         registry.approveComponent(address(0), GATING_TAG, "Bad");
     }
 
@@ -106,7 +107,7 @@ contract ComponentRegistryTest is Test {
 
     function test_revokeComponent_revertsIfNotApproved() public {
         vm.prank(owner);
-        vm.expectRevert("Not approved");
+        vm.expectRevert(ComponentRegistry.NotApproved.selector);
         registry.revokeComponent(module1);
     }
 

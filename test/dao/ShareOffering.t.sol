@@ -44,7 +44,7 @@ contract ShareOfferingTest is Test {
     }
 
     function test_Constructor_RevertsOnZeroAddress() public {
-        vm.expectRevert(bytes("invalid dao"));
+        vm.expectRevert(ShareOffering.InvalidAddress.selector);
         new ShareOffering(address(0));
     }
 
@@ -73,7 +73,7 @@ contract ShareOfferingTest is Test {
 
     function test_CreateTranche_RevertNotDAO() public {
         vm.prank(alice);
-        vm.expectRevert(bytes("!dao"));
+        vm.expectRevert(ShareOffering.Unauthorized.selector);
         offering.createTranche(PRICE, TOTAL_SHARES, DURATION, 0, 0, bytes32(0));
     }
 
@@ -82,7 +82,7 @@ contract ShareOfferingTest is Test {
         offering.createTranche(PRICE, TOTAL_SHARES, DURATION, 0, 0, bytes32(0));
 
         vm.prank(address(dao));
-        vm.expectRevert(bytes("active tranche exists"));
+        vm.expectRevert(ShareOffering.ActiveTrancheExists.selector);
         offering.createTranche(PRICE, TOTAL_SHARES, DURATION, 0, 0, bytes32(0));
     }
 
@@ -107,31 +107,31 @@ contract ShareOfferingTest is Test {
 
     function test_CreateTranche_RevertZeroPrice() public {
         vm.prank(address(dao));
-        vm.expectRevert(bytes("zero price"));
+        vm.expectRevert(ShareOffering.ZeroPrice.selector);
         offering.createTranche(0, TOTAL_SHARES, DURATION, 0, 0, bytes32(0));
     }
 
     function test_CreateTranche_RevertZeroShares() public {
         vm.prank(address(dao));
-        vm.expectRevert(bytes("zero shares"));
+        vm.expectRevert(ShareOffering.ZeroShares.selector);
         offering.createTranche(PRICE, 0, DURATION, 0, 0, bytes32(0));
     }
 
     function test_CreateTranche_RevertZeroDuration() public {
         vm.prank(address(dao));
-        vm.expectRevert(bytes("zero duration"));
+        vm.expectRevert(ShareOffering.ZeroDuration.selector);
         offering.createTranche(PRICE, TOTAL_SHARES, 0, 0, 0, bytes32(0));
     }
 
     function test_CreateTranche_RevertMinGtTotal() public {
         vm.prank(address(dao));
-        vm.expectRevert(bytes("min > total"));
+        vm.expectRevert(ShareOffering.MinExceedsTotal.selector);
         offering.createTranche(PRICE, TOTAL_SHARES, DURATION, TOTAL_SHARES + 1, 0, bytes32(0));
     }
 
     function test_CreateTranche_RevertCapLtMin() public {
         vm.prank(address(dao));
-        vm.expectRevert(bytes("cap < min"));
+        vm.expectRevert(ShareOffering.CapBelowMin.selector);
         offering.createTranche(PRICE, TOTAL_SHARES, DURATION, 5, 4, bytes32(0));
     }
 
@@ -212,7 +212,7 @@ contract ShareOfferingTest is Test {
 
         vm.deal(alice, 10 ether);
         vm.prank(alice);
-        vm.expectRevert(bytes("outside window"));
+        vm.expectRevert(ShareOffering.OutsideWindow.selector);
         offering.commit{value: PRICE}(1, 1, new bytes32[](0));
     }
 
@@ -221,7 +221,7 @@ contract ShareOfferingTest is Test {
 
         vm.deal(alice, 10 ether);
         vm.prank(alice);
-        vm.expectRevert(bytes("wrong ETH amount"));
+        vm.expectRevert(ShareOffering.WrongETHAmount.selector);
         offering.commit{value: PRICE + 1}(1, 1, new bytes32[](0));
     }
 
@@ -230,7 +230,7 @@ contract ShareOfferingTest is Test {
 
         vm.deal(alice, 100 ether);
         vm.prank(alice);
-        vm.expectRevert(bytes("exceeds supply"));
+        vm.expectRevert(ShareOffering.ExceedsSupply.selector);
         offering.commit{value: (TOTAL_SHARES + 1) * PRICE}(1, TOTAL_SHARES + 1, new bytes32[](0));
     }
 
@@ -240,7 +240,7 @@ contract ShareOfferingTest is Test {
 
         vm.deal(alice, 10 ether);
         vm.prank(alice);
-        vm.expectRevert(bytes("below minimum"));
+        vm.expectRevert(ShareOffering.BelowMinimum.selector);
         offering.commit{value: 4 * PRICE}(1, 4, new bytes32[](0));
     }
 
@@ -266,7 +266,7 @@ contract ShareOfferingTest is Test {
 
         vm.deal(alice, 10 ether);
         vm.prank(alice);
-        vm.expectRevert(bytes("exceeds cap"));
+        vm.expectRevert(ShareOffering.ExceedsCap.selector);
         offering.commit{value: 6 * PRICE}(1, 6, new bytes32[](0));
     }
 
@@ -279,7 +279,7 @@ contract ShareOfferingTest is Test {
         offering.commit{value: 3 * PRICE}(1, 3, new bytes32[](0));
 
         vm.prank(alice);
-        vm.expectRevert(bytes("exceeds cap"));
+        vm.expectRevert(ShareOffering.ExceedsCap.selector);
         offering.commit{value: 3 * PRICE}(1, 3, new bytes32[](0));
     }
 
@@ -287,14 +287,14 @@ contract ShareOfferingTest is Test {
         _createDefaultTranche();
 
         vm.prank(alice);
-        vm.expectRevert(bytes("zero shares"));
+        vm.expectRevert(ShareOffering.ZeroShares.selector);
         offering.commit{value: 0}(1, 0, new bytes32[](0));
     }
 
     function test_Commit_RevertNotActive() public {
         vm.deal(alice, 10 ether);
         vm.prank(alice);
-        vm.expectRevert(bytes("not active"));
+        vm.expectRevert(ShareOffering.NotActive.selector);
         offering.commit{value: PRICE}(1, 1, new bytes32[](0));
     }
 
@@ -322,7 +322,7 @@ contract ShareOfferingTest is Test {
 
         vm.deal(charlie, 10 ether);
         vm.prank(charlie);
-        vm.expectRevert(bytes("not whitelisted"));
+        vm.expectRevert(ShareOffering.NotWhitelisted.selector);
         offering.commit{value: PRICE}(1, 1, new bytes32[](0));
     }
 
@@ -380,7 +380,7 @@ contract ShareOfferingTest is Test {
         vm.warp(block.timestamp + DURATION + 1);
 
         vm.prank(alice);
-        vm.expectRevert(bytes("!dao"));
+        vm.expectRevert(ShareOffering.Unauthorized.selector);
         offering.finalize(1, new address[](0), new uint256[](0));
     }
 
@@ -388,7 +388,7 @@ contract ShareOfferingTest is Test {
         _createDefaultTranche();
 
         vm.prank(address(dao));
-        vm.expectRevert(bytes("window not closed"));
+        vm.expectRevert(ShareOffering.WindowNotClosed.selector);
         offering.finalize(1, new address[](0), new uint256[](0));
     }
 
@@ -397,7 +397,7 @@ contract ShareOfferingTest is Test {
         vm.warp(block.timestamp + DURATION + 7 days + 1);
 
         vm.prank(address(dao));
-        vm.expectRevert(bytes("past deadline"));
+        vm.expectRevert(ShareOffering.PastDeadline.selector);
         offering.finalize(1, new address[](0), new uint256[](0));
     }
 
@@ -409,7 +409,7 @@ contract ShareOfferingTest is Test {
         buyers[0] = alice;
 
         vm.prank(address(dao));
-        vm.expectRevert(bytes("!array parity"));
+        vm.expectRevert(ShareOffering.ArrayLengthMismatch.selector);
         offering.finalize(1, buyers, new uint256[](0));
     }
 
@@ -428,7 +428,7 @@ contract ShareOfferingTest is Test {
         amounts[0] = 3; // wrong amount
 
         vm.prank(address(dao));
-        vm.expectRevert(bytes("commitment mismatch"));
+        vm.expectRevert(ShareOffering.CommitmentMismatch.selector);
         offering.finalize(1, buyers, amounts);
     }
 
@@ -452,7 +452,7 @@ contract ShareOfferingTest is Test {
         amounts[0] = 5;
 
         vm.prank(address(dao));
-        vm.expectRevert(bytes("incomplete buyers"));
+        vm.expectRevert(ShareOffering.IncompleteBuyers.selector);
         offering.finalize(1, buyers, amounts);
     }
 
@@ -471,13 +471,13 @@ contract ShareOfferingTest is Test {
         _createDefaultTranche();
 
         vm.prank(alice);
-        vm.expectRevert(bytes("!dao"));
+        vm.expectRevert(ShareOffering.Unauthorized.selector);
         offering.cancel(1);
     }
 
     function test_Cancel_RevertNotActive() public {
         vm.prank(address(dao));
-        vm.expectRevert(bytes("not active"));
+        vm.expectRevert(ShareOffering.NotActive.selector);
         offering.cancel(1);
     }
 
@@ -562,7 +562,7 @@ contract ShareOfferingTest is Test {
         offering.finalize(1, buyers, amounts);
 
         vm.prank(alice);
-        vm.expectRevert(bytes("not refundable"));
+        vm.expectRevert(ShareOffering.NotRefundable.selector);
         offering.refund(1);
     }
 
@@ -574,7 +574,7 @@ contract ShareOfferingTest is Test {
         offering.commit{value: 5 * PRICE}(1, 5, new bytes32[](0));
 
         vm.prank(alice);
-        vm.expectRevert(bytes("not refundable"));
+        vm.expectRevert(ShareOffering.NotRefundable.selector);
         offering.refund(1);
     }
 
@@ -585,7 +585,7 @@ contract ShareOfferingTest is Test {
         offering.cancel(1);
 
         vm.prank(alice);
-        vm.expectRevert(bytes("no commitment"));
+        vm.expectRevert(ShareOffering.NoCommitment.selector);
         offering.refund(1);
     }
 
@@ -603,7 +603,7 @@ contract ShareOfferingTest is Test {
         offering.refund(1);
 
         vm.prank(alice);
-        vm.expectRevert(bytes("no commitment"));
+        vm.expectRevert(ShareOffering.NoCommitment.selector);
         offering.refund(1);
     }
 

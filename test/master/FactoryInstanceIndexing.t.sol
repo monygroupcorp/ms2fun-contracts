@@ -155,7 +155,7 @@ contract FactoryInstanceIndexingTest is Test {
             // Try to register duplicate name - should fail
             address duplicateInstance = _newInstance();
             vm.prank(address(erc404Factory));
-            vm.expectRevert("Name already taken");
+            vm.expectRevert(MasterRegistryV1.NameAlreadyTaken.selector);
             IMasterRegistry(proxy).registerInstance(
                 duplicateInstance,
                 address(erc404Factory),
@@ -197,7 +197,7 @@ contract FactoryInstanceIndexingTest is Test {
         // For now, we verify registration succeeded by checking name uniqueness
         address duplicateInstance = _newInstance();
         vm.prank(address(erc404Factory));
-        vm.expectRevert("Name already taken");
+        vm.expectRevert(MasterRegistryV1.NameAlreadyTaken.selector);
         IMasterRegistry(proxy).registerInstance(
             duplicateInstance,
             address(erc404Factory),
@@ -288,7 +288,7 @@ contract FactoryInstanceIndexingTest is Test {
         // Try to register with uppercase name (should fail - case insensitive)
         address instance2 = _newInstance();
         vm.prank(address(erc404Factory));
-        vm.expectRevert("Name already taken");
+        vm.expectRevert(MasterRegistryV1.NameAlreadyTaken.selector);
         IMasterRegistry(proxy).registerInstance(
             instance2,
             address(erc404Factory),

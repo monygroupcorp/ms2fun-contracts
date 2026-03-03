@@ -9,10 +9,17 @@ interface IRevenueConductorDAO {
 }
 
 interface IRevenueConductorTreasury {
-    function withdrawETH(address to, uint256 amount) external;
+    function routeToDAO(address safe, uint256 amount) external;
 }
 
 contract RevenueConductor {
+    // ============ Custom Errors ============
+
+    error InvalidAddress();
+    error Unauthorized();
+    error BpsMustSumTo10000();
+    error NothingToRoute();
+
     address public immutable dao;
     address public immutable treasury;
 
@@ -32,9 +39,9 @@ contract RevenueConductor {
         uint256 _ragequitBps,
         uint256 _reserveBps
     ) {
-        require(_dao != address(0), "invalid dao");
-        require(_treasury != address(0), "invalid treasury");
-        require(_dividendBps + _ragequitBps + _reserveBps == 10000, "bps must sum to 10000");
+        if (_dao == address(0)) revert InvalidAddress();
+        if (_treasury == address(0)) revert InvalidAddress();
+        if (_dividendBps + _ragequitBps + _reserveBps != 10000) revert BpsMustSumTo10000();
 
         dao = _dao;
         treasury = _treasury;
@@ -44,12 +51,12 @@ contract RevenueConductor {
     }
 
     function sweep() external {
-        require(IRevenueConductorDAO(dao).shares(msg.sender) > 0, "!shareholder");
+        if (IRevenueConductorDAO(dao).shares(msg.sender) == 0) revert Unauthorized();
 
         uint256 available = treasury.balance;
-        require(available > 0, "nothing to route");
+        if (available == 0) revert NothingToRoute();
 
-        uint256 reserveAmount = available * reserveBps / 10000;
+        uint256 reserveAmount = available * reserveBps / 10000; // round down: favors routable pool
         uint256 routable = available - reserveAmount;
 
         uint256 dividendAmount;
@@ -57,17 +64,13 @@ contract RevenueConductor {
 
         uint256 activeTotal = dividendBps + ragequitBps;
         if (activeTotal > 0) {
-            dividendAmount = routable * dividendBps / activeTotal;
+            dividendAmount = routable * dividendBps / activeTotal; // round down: dust absorbed by ragequit
             ragequitAmount = routable - dividendAmount;
         }
 
-        // Withdraw from treasury to this contract
-        IRevenueConductorTreasury(treasury).withdrawETH(address(this), routable);
-
-        // Send ETH to Safe (pool accounting is checked against safe.balance)
+        // Route directly from treasury to Safe
         address safeAddr = IRevenueConductorDAO(dao).safe();
-        (bool success,) = safeAddr.call{value: routable}("");
-        require(success, "safe transfer failed");
+        IRevenueConductorTreasury(treasury).routeToDAO(safeAddr, routable);
 
         // Update pool accounting on the DAO
         if (dividendAmount > 0) {
@@ -83,8 +86,8 @@ contract RevenueConductor {
     }
 
     function setRatio(uint256 _dividendBps, uint256 _ragequitBps, uint256 _reserveBps) external {
-        require(msg.sender == dao, "!dao");
-        require(_dividendBps + _ragequitBps + _reserveBps == 10000, "bps must sum to 10000");
+        if (msg.sender != dao) revert Unauthorized();
+        if (_dividendBps + _ragequitBps + _reserveBps != 10000) revert BpsMustSumTo10000();
 
         dividendBps = _dividendBps;
         ragequitBps = _ragequitBps;

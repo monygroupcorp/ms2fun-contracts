@@ -100,11 +100,16 @@ contract TimelockIntegrationTest is Test {
     // ========== Test: Propose + Execute Owner Function ==========
 
     function test_ProposeAndExecuteOwnerFunction() public {
+        // Alice requests ownership handover first
+        vm.prank(alice);
+        registry.requestOwnershipHandover();
+
+        // Timelock completes the handover (two-step flow required by SafeOwnableUUPS)
         ERC7821.Call[] memory calls = new ERC7821.Call[](1);
         calls[0] = ERC7821.Call({
             to: registryProxy,
             value: 0,
-            data: abi.encodeWithSelector(Ownable.transferOwnership.selector, alice)
+            data: abi.encodeWithSelector(Ownable.completeOwnershipHandover.selector, alice)
         });
 
         bytes memory executionData = _buildExecutionData(calls, bytes32(uint256(2)));
@@ -206,7 +211,11 @@ contract TimelockIntegrationTest is Test {
     function test_BatchOperation() public {
         MasterRegistryV2Mock newImpl = new MasterRegistryV2Mock();
 
-        // Batch: upgrade + transferOwnership in a single proposal
+        // Alice requests ownership handover first (two-step flow required by SafeOwnableUUPS)
+        vm.prank(alice);
+        registry.requestOwnershipHandover();
+
+        // Batch: upgrade + completeOwnershipHandover in a single proposal
         ERC7821.Call[] memory calls = new ERC7821.Call[](2);
         calls[0] = ERC7821.Call({
             to: registryProxy,
@@ -216,7 +225,7 @@ contract TimelockIntegrationTest is Test {
         calls[1] = ERC7821.Call({
             to: registryProxy,
             value: 0,
-            data: abi.encodeWithSelector(Ownable.transferOwnership.selector, alice)
+            data: abi.encodeWithSelector(Ownable.completeOwnershipHandover.selector, alice)
         });
 
         bytes memory executionData = _buildExecutionData(calls, bytes32(uint256(7)));

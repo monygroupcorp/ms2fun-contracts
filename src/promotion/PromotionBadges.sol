@@ -12,6 +12,15 @@ import {SafeTransferLib} from "solady/utils/SafeTransferLib.sol";
  *      One badge per instance at a time. Anyone can purchase a badge for any instance.
  */
 contract PromotionBadges is Ownable, ReentrancyGuard {
+    error InvalidDuration();
+    error InvalidBadge();
+    error InsufficientPayment();
+    error DifferentBadgeActive();
+    error TreasuryNotSet();
+    error NoFees();
+    error InvalidAddress();
+    error InvalidBounds();
+
     enum BadgeType {
         NONE,
         HIGHLIGHT,    // Visual highlight/glow effect
@@ -66,16 +75,16 @@ contract PromotionBadges is Ownable, ReentrancyGuard {
         BadgeType badgeType,
         uint256 duration
     ) external payable nonReentrant {
-        require(duration >= minBadgeDuration && duration <= maxBadgeDuration, "Invalid duration");
-        require(badgeType != BadgeType.NONE, "Invalid badge");
+        if (duration < minBadgeDuration || duration > maxBadgeDuration) revert InvalidDuration();
+        if (badgeType == BadgeType.NONE) revert InvalidBadge();
 
-        uint256 cost = (badgePricePerDay[badgeType] * duration) / 1 days;
-        require(msg.value >= cost, "Insufficient payment");
+        uint256 cost = (badgePricePerDay[badgeType] * duration) / 1 days; // round down: favors buyer
+        if (msg.value < cost) revert InsufficientPayment();
 
         Badge storage current = instanceBadges[instance];
         if (current.badgeType != BadgeType.NONE && block.timestamp < current.expiresAt) {
             // Active badge exists — only allow extending same type
-            require(current.badgeType == badgeType, "Different badge active");
+            if (current.badgeType != badgeType) revert DifferentBadgeActive();
             instanceBadges[instance] = Badge({
                 badgeType: badgeType,
                 expiresAt: current.expiresAt + duration,
@@ -137,8 +146,8 @@ contract PromotionBadges is Ownable, ReentrancyGuard {
         BadgeType badgeType,
         uint256 duration
     ) external {
-        require(authorizedFactories[msg.sender], "Not authorized");
-        require(badgeType != BadgeType.NONE, "Invalid badge");
+        if (!authorizedFactories[msg.sender]) revert Unauthorized();
+        if (badgeType == BadgeType.NONE) revert InvalidBadge();
 
         instanceBadges[instance] = Badge({
             badgeType: badgeType,
@@ -153,9 +162,9 @@ contract PromotionBadges is Ownable, ReentrancyGuard {
      * @notice Withdraw accumulated fees to protocol treasury
      */
     function withdrawProtocolFees() external onlyOwner {
-        require(protocolTreasury != address(0), "Treasury not set");
+        if (protocolTreasury == address(0)) revert TreasuryNotSet();
         uint256 balance = address(this).balance;
-        require(balance > 0, "No fees");
+        if (balance == 0) revert NoFees();
         SafeTransferLib.safeTransferETH(protocolTreasury, balance);
         emit ProtocolFeesWithdrawn(balance);
     }
@@ -164,7 +173,7 @@ contract PromotionBadges is Ownable, ReentrancyGuard {
      * @notice Set price per day for a badge type (owner only)
      */
     function setBadgePrice(BadgeType badgeType, uint256 pricePerDay) external onlyOwner {
-        require(badgeType != BadgeType.NONE, "Invalid badge");
+        if (badgeType == BadgeType.NONE) revert InvalidBadge();
         badgePricePerDay[badgeType] = pricePerDay;
         emit BadgePriceUpdated(badgeType, pricePerDay);
     }
@@ -181,7 +190,7 @@ contract PromotionBadges is Ownable, ReentrancyGuard {
      * @notice Update protocol treasury address
      */
     function setProtocolTreasury(address _treasury) external onlyOwner {
-        require(_treasury != address(0), "Invalid treasury");
+        if (_treasury == address(0)) revert InvalidAddress();
         address old = protocolTreasury;
         protocolTreasury = _treasury;
         emit ProtocolTreasuryUpdated(old, _treasury);
@@ -191,7 +200,7 @@ contract PromotionBadges is Ownable, ReentrancyGuard {
      * @notice Update min/max badge duration bounds
      */
     function setDurationBounds(uint256 _min, uint256 _max) external onlyOwner {
-        require(_min > 0 && _max > _min, "Invalid bounds");
+        if (_min == 0 || _max <= _min) revert InvalidBounds();
         minBadgeDuration = _min;
         maxBadgeDuration = _max;
         emit DurationBoundsUpdated(_min, _max);

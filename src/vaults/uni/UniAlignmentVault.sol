@@ -17,6 +17,7 @@ import {TickMath} from "v4-core/libraries/TickMath.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IAlignmentVault} from "../../interfaces/IAlignmentVault.sol";
 import {IVaultPriceValidator} from "../../interfaces/IVaultPriceValidator.sol";
+import {IAlignmentRegistry} from "../../master/interfaces/IAlignmentRegistry.sol";
 
 interface IzRouterV4 {
     function swapV4(
@@ -50,6 +51,34 @@ contract UniAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback, IAlignm
     using CurrencySettler for Currency;
     using PoolIdLibrary for PoolKey;
     using StateLibrary for IPoolManager;
+
+    // ========== Custom Errors ==========
+
+    error InvalidAddress();
+    error TargetNotActive();
+    error TokenNotInTarget();
+    error AmountMustBePositive();
+    error NoPendingETH();
+    error NoAlignmentTarget();
+    error PoolKeyNotSet();
+    error InsufficientLiquidity();
+    error InvalidPoolKey();
+    error InvalidFeeTier();
+    error InvalidTickSpacing();
+    error AlignmentTokenNotInPool();
+    error PoolMustContainETH();
+    error InvalidCurrencyOrdering();
+    error NoShares();
+    error NoFeesToClaim();
+    error InsufficientBalance();
+    error TransferFailed();
+    error NotBenefactor();
+    error NotDelegate();
+    error PendingETHNotConverted();
+    error RewardTooHigh();
+    error DeviationTooHigh();
+    error ExceedsMaxBps();
+    error TreasuryNotSet();
 
     // ========== Data Structures ==========
 
@@ -115,6 +144,10 @@ contract UniAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback, IAlignm
     // Peripherals (set once at initialize, owner can update)
     IVaultPriceValidator public priceValidator;
 
+    // Alignment target binding (set once at initialize)
+    IAlignmentRegistry public alignmentRegistry;
+    uint256 public alignmentTargetId;
+
     // Clone guard
     bool private _initialized;
 
@@ -148,7 +181,7 @@ contract UniAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback, IAlignm
 
     event ProtocolYieldCollected(uint256 amount);
     event ProtocolYieldCutUpdated(uint256 newBps);
-    event ProtocolTreasuryUpdated(address indexed newTreasury);
+    event ProtocolTreasuryUpdated(address indexed oldTreasury, address indexed newTreasury);
     event ProtocolFeesWithdrawn(uint256 amount);
 
     event AlignmentTokenUpdated(address indexed oldToken, address indexed newToken);
@@ -167,16 +200,21 @@ contract UniAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback, IAlignm
         address _zRouter,
         uint24  _zRouterFee,
         int24   _zRouterTickSpacing,
-        IVaultPriceValidator _priceValidator
+        IVaultPriceValidator _priceValidator,
+        IAlignmentRegistry _alignmentRegistry,
+        uint256 _alignmentTargetId
     ) external {
-        if (_initialized) revert("Already initialized");
+        if (_initialized) revert AlreadyInitialized();
         _initialized = true;
 
         _initializeOwner(msg.sender); // factory becomes owner
 
-        require(_weth != address(0), "Invalid WETH");
-        require(_poolManager != address(0), "Invalid pool manager");
-        require(_alignmentToken != address(0), "Invalid alignment token");
+        if (_weth == address(0)) revert InvalidAddress();
+        if (_poolManager == address(0)) revert InvalidAddress();
+        if (_alignmentToken == address(0)) revert InvalidAddress();
+        if (address(_alignmentRegistry) == address(0)) revert InvalidAddress();
+        if (!_alignmentRegistry.isAlignmentTargetActive(_alignmentTargetId)) revert TargetNotActive();
+        if (!_alignmentRegistry.isTokenInTarget(_alignmentTargetId, _alignmentToken)) revert TokenNotInTarget();
 
         weth = _weth;
         poolManager = _poolManager;
@@ -185,6 +223,8 @@ contract UniAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback, IAlignm
         zRouterFee = _zRouterFee;
         zRouterTickSpacing = _zRouterTickSpacing;
         priceValidator = _priceValidator;
+        alignmentRegistry = _alignmentRegistry;
+        alignmentTargetId = _alignmentTargetId;
 
         // Initialize defaults that can't use declaration initializers with clones
         protocolYieldCutBps = 100;
@@ -208,7 +248,7 @@ contract UniAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback, IAlignm
     }
 
     function _receiveExternalContribution() private nonReentrant {
-        require(msg.value > 0, "Amount must be positive");
+        if (msg.value == 0) revert AmountMustBePositive();
         _trackBenefactorContribution(msg.sender, msg.value);
         emit ContributionReceived(msg.sender, msg.value);
     }
@@ -218,8 +258,8 @@ contract UniAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback, IAlignm
         uint256 amount,
         address benefactor
     ) external payable override nonReentrant {
-        require(amount > 0, "Amount must be positive");
-        require(benefactor != address(0), "Invalid benefactor");
+        if (amount == 0) revert AmountMustBePositive();
+        if (benefactor == address(0)) revert InvalidAddress();
         _trackBenefactorContribution(benefactor, amount);
         emit ContributionReceived(benefactor, amount);
     }
@@ -255,9 +295,9 @@ contract UniAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback, IAlignm
     function convertAndAddLiquidity(
         uint256 minOutTarget
     ) external nonReentrant returns (uint256 lpPositionValue) {
-        require(totalPendingETH > 0, "No pending ETH to convert");
-        require(alignmentToken != address(0), "No alignment target set");
-        require(Currency.unwrap(v4PoolKey.currency0) != address(0) || Currency.unwrap(v4PoolKey.currency1) != address(0), "V4 pool key not set");
+        if (totalPendingETH == 0) revert NoPendingETH();
+        if (alignmentToken == address(0)) revert NoAlignmentTarget();
+        if (Currency.unwrap(v4PoolKey.currency0) == address(0) && Currency.unwrap(v4PoolKey.currency1) == address(0)) revert PoolKeyNotSet();
 
         int24 tickLower = TickMath.minUsableTick(v4PoolKey.tickSpacing);
         int24 tickUpper = TickMath.maxUsableTick(v4PoolKey.tickSpacing);
@@ -268,7 +308,7 @@ contract UniAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback, IAlignm
             alignmentToken, lastTickLower, lastTickUpper, poolManager,
             bytes32(PoolId.unwrap(v4PoolKey.toId()))
         );
-        uint256 ethToSwap = (ethToAdd * proportionToSwap) / 1e18;
+        uint256 ethToSwap = (ethToAdd * proportionToSwap) / 1e18; // round down: excess stays as ethForLP
 
         SwapLPResult memory r = _doSwapAndLP(ethToAdd, ethToSwap, minOutTarget, tickLower, tickUpper);
 
@@ -319,8 +359,8 @@ contract UniAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback, IAlignm
                 largestContributor = benefactor;
             }
 
-            uint256 sharePercent = (contribution * 1e18) / ethToAdd;
-            uint256 sharesToIssue = (totalSharesIssued * sharePercent) / 1e18;
+            uint256 sharePercent = (contribution * 1e18) / ethToAdd; // round down: dust tracked separately
+            uint256 sharesToIssue = (totalSharesIssued * sharePercent) / 1e18; // round down: dust accumulated and redistributed
 
             benefactorShares[benefactor] += sharesToIssue;
             totalShares += sharesToIssue;
@@ -427,7 +467,7 @@ contract UniAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback, IAlignm
 
             uint256 totalCollected = ethCollected + ethFromTokens;
             if (totalCollected > 0) {
-                uint256 protocolCut = (totalCollected * protocolYieldCutBps) / 10000;
+                uint256 protocolCut = (totalCollected * protocolYieldCutBps) / 10000; // round down: favors benefactors
                 uint256 benefactorAmount = totalCollected - protocolCut;
 
                 accumulatedFees += benefactorAmount;
@@ -445,16 +485,16 @@ contract UniAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback, IAlignm
 
         address benefactor = msg.sender;
 
-        require(benefactorShares[benefactor] > 0, "No shares");
-        require(accumulatedFees > 0, "No fees to claim");
+        if (benefactorShares[benefactor] == 0) revert NoShares();
+        if (accumulatedFees == 0) revert NoFeesToClaim();
 
-        uint256 currentShareValue = (accumulatedFees * benefactorShares[benefactor]) / totalShares;
+        uint256 currentShareValue = (accumulatedFees * benefactorShares[benefactor]) / totalShares; // round down: favors vault
 
         ethClaimed = currentShareValue > shareValueAtLastClaim[benefactor]
             ? currentShareValue - shareValueAtLastClaim[benefactor]
             : 0;
 
-        require(ethClaimed > 0, "No new fees to claim");
+        if (ethClaimed == 0) revert NoFeesToClaim();
 
         shareValueAtLastClaim[benefactor] = currentShareValue;
         lastClaimTimestamp[benefactor] = block.timestamp;
@@ -462,9 +502,9 @@ contract UniAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback, IAlignm
         address recipient = benefactorDelegate[benefactor];
         if (recipient == address(0)) recipient = benefactor;
 
-        require(address(this).balance >= ethClaimed, "Insufficient ETH for claim");
+        if (address(this).balance < ethClaimed) revert InsufficientBalance();
         (bool success, ) = payable(recipient).call{value: ethClaimed}("");
-        require(success, "ETH transfer failed");
+        if (!success) revert TransferFailed();
 
         emit FeesClaimed(benefactor, ethClaimed);
 
@@ -474,7 +514,7 @@ contract UniAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback, IAlignm
     // ========== Fee Accumulation ==========
 
     function recordAccumulatedFees(uint256 feeAmount) external onlyOwner {
-        require(feeAmount > 0, "Fee amount must be positive");
+        if (feeAmount == 0) revert AmountMustBePositive();
         accumulatedFees += feeAmount;
         emit FeesAccumulated(feeAmount);
     }
@@ -497,7 +537,7 @@ contract UniAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback, IAlignm
         int24 tickLower,
         int24 tickUpper
     ) internal virtual returns (uint128 liquidityUnits) {
-        require(amount0 > 0 && amount1 > 0, "Amounts must be positive");
+        if (amount0 == 0 || amount1 == 0) revert AmountMustBePositive();
 
         lastTickLower = tickLower;
         lastTickUpper = tickUpper;
@@ -519,7 +559,7 @@ contract UniAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback, IAlignm
         uint128 liquidityToAdd = LiquidityAmounts.getLiquidityForAmounts(
             sqrtPriceX96, sqrtPriceAX96, sqrtPriceBX96, amount0, amount1
         );
-        require(liquidityToAdd > 0, "Insufficient amounts for liquidity");
+        if (liquidityToAdd == 0) revert InsufficientLiquidity();
         int256 liquidityDelta = int256(uint256(liquidityToAdd));
 
         IPoolManager.ModifyLiquidityParams memory params = IPoolManager.ModifyLiquidityParams({
@@ -543,7 +583,7 @@ contract UniAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback, IAlignm
     }
 
     function unlockCallback(bytes calldata data) external returns (bytes memory) {
-        require(msg.sender == address(poolManager), "Only PoolManager");
+        if (msg.sender != address(poolManager)) revert Unauthorized();
 
         ModifyLiquidityCallbackData memory lpData = abi.decode(data, (ModifyLiquidityCallbackData));
 
@@ -580,40 +620,27 @@ contract UniAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback, IAlignm
     // ========== Pool Validation ==========
 
     function _validateV4Pool(PoolKey memory poolKey) internal view {
-        require(
-            Currency.unwrap(poolKey.currency0) != address(0) ||
-            Currency.unwrap(poolKey.currency1) != address(0),
-            "Invalid pool key: no currencies set"
-        );
+        if (Currency.unwrap(poolKey.currency0) == address(0) && Currency.unwrap(poolKey.currency1) == address(0)) revert InvalidPoolKey();
 
-        require(
-            poolKey.fee == 500 || poolKey.fee == 3000 || poolKey.fee == 10000,
-            "Invalid fee tier (must be 500, 3000, or 10000)"
-        );
+        if (poolKey.fee != 500 && poolKey.fee != 3000 && poolKey.fee != 10000) revert InvalidFeeTier();
 
         if (poolKey.fee == 500) {
-            require(poolKey.tickSpacing == 10, "Invalid tick spacing for 0.05% fee");
+            if (poolKey.tickSpacing != 10) revert InvalidTickSpacing();
         } else if (poolKey.fee == 3000) {
-            require(poolKey.tickSpacing == 60, "Invalid tick spacing for 0.3% fee");
+            if (poolKey.tickSpacing != 60) revert InvalidTickSpacing();
         } else if (poolKey.fee == 10000) {
-            require(poolKey.tickSpacing == 200, "Invalid tick spacing for 1% fee");
+            if (poolKey.tickSpacing != 200) revert InvalidTickSpacing();
         }
 
         address currency0Addr = Currency.unwrap(poolKey.currency0);
         address currency1Addr = Currency.unwrap(poolKey.currency1);
 
-        require(
-            currency0Addr == alignmentToken || currency1Addr == alignmentToken,
-            "Alignment token not in pool"
-        );
+        if (currency0Addr != alignmentToken && currency1Addr != alignmentToken) revert AlignmentTokenNotInPool();
 
         bool hasNativeETH = currency0Addr == address(0) || currency1Addr == address(0);
-        require(hasNativeETH, "Pool must contain native ETH (address(0))");
+        if (!hasNativeETH) revert PoolMustContainETH();
 
-        require(
-            currency0Addr < currency1Addr,
-            "Invalid currency ordering (currency0 must be < currency1)"
-        );
+        if (currency0Addr >= currency1Addr) revert InvalidCurrencyOrdering();
     }
 
     function validateCurrentPoolKey() external view {
@@ -648,7 +675,7 @@ contract UniAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback, IAlignm
         returns (uint256)
     {
         if (totalShares == 0 || accumulatedFees == 0) return 0;
-        return (accumulatedFees * benefactorShares[benefactor]) / totalShares;
+        return (accumulatedFees * benefactorShares[benefactor]) / totalShares; // round down: favors vault
     }
 
     function getUnclaimedFees(address benefactor)
@@ -656,7 +683,7 @@ contract UniAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback, IAlignm
         view
         returns (uint256)
     {
-        uint256 currentShareValue = (accumulatedFees * benefactorShares[benefactor]) / totalShares;
+        uint256 currentShareValue = (accumulatedFees * benefactorShares[benefactor]) / totalShares; // round down: favors vault
         return currentShareValue > shareValueAtLastClaim[benefactor]
             ? currentShareValue - shareValueAtLastClaim[benefactor]
             : 0;
@@ -688,7 +715,7 @@ contract UniAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback, IAlignm
     // ========== Benefactor Delegation ==========
 
     function delegateBenefactor(address delegate) external override {
-        require(benefactorShares[msg.sender] > 0 || benefactorTotalETH[msg.sender] > 0, "Not a benefactor");
+        if (benefactorShares[msg.sender] == 0 && benefactorTotalETH[msg.sender] == 0) revert NotBenefactor();
         benefactorDelegate[msg.sender] = delegate;
         emit BenefactorDelegateSet(msg.sender, delegate);
     }
@@ -704,12 +731,12 @@ contract UniAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback, IAlignm
         for (uint256 i = 0; i < benefactors.length; i++) {
             address benefactor = benefactors[i];
 
-            require(benefactorDelegate[benefactor] == msg.sender, "Not delegate for benefactor");
-            require(benefactorShares[benefactor] > 0, "No shares");
+            if (benefactorDelegate[benefactor] != msg.sender) revert NotDelegate();
+            if (benefactorShares[benefactor] == 0) revert NoShares();
 
             if (accumulatedFees == 0) continue;
 
-            uint256 currentShareValue = (accumulatedFees * benefactorShares[benefactor]) / totalShares;
+            uint256 currentShareValue = (accumulatedFees * benefactorShares[benefactor]) / totalShares; // round down: favors vault
 
             uint256 ethClaimed = currentShareValue > shareValueAtLastClaim[benefactor]
                 ? currentShareValue - shareValueAtLastClaim[benefactor]
@@ -723,19 +750,33 @@ contract UniAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback, IAlignm
             }
         }
 
-        require(totalClaimed > 0, "No fees to claim");
-        require(address(this).balance >= totalClaimed, "Insufficient ETH for claims");
+        if (totalClaimed == 0) revert NoFeesToClaim();
+        if (address(this).balance < totalClaimed) revert InsufficientBalance();
 
         (bool success, ) = payable(msg.sender).call{value: totalClaimed}("");
-        require(success, "ETH transfer failed");
+        if (!success) revert TransferFailed();
     }
 
     // ========== Configuration ==========
 
     function setAlignmentToken(address newToken) external onlyOwner {
-        require(newToken != address(0), "Invalid token");
+        if (newToken == address(0)) revert InvalidAddress();
+        if (totalPendingETH != 0) revert PendingETHNotConverted();
+        if (!alignmentRegistry.isTokenInTarget(alignmentTargetId, newToken)) revert TokenNotInTarget();
+
         address oldToken = alignmentToken;
         alignmentToken = newToken;
+
+        if (newToken.code.length > 0) {
+            try IERC20Metadata(newToken).decimals() returns (uint8 decimals) {
+                alignmentTokenDecimals = decimals;
+            } catch {
+                alignmentTokenDecimals = 18;
+            }
+        } else {
+            alignmentTokenDecimals = 18;
+        }
+
         emit AlignmentTokenUpdated(oldToken, newToken);
     }
 
@@ -746,25 +787,25 @@ contract UniAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback, IAlignm
     }
 
     function setStandardConversionReward(uint256 newReward) external onlyOwner {
-        require(newReward <= 0.1 ether, "Reward too high (max 0.1 ETH)");
+        if (newReward > 0.1 ether) revert RewardTooHigh();
         standardConversionReward = newReward;
         emit ConversionRewardUpdated(newReward);
     }
 
     function setMaxPriceDeviationBps(uint256 newBps) external onlyOwner {
-        require(newBps <= 2000, "Deviation too high (max 20%)");
+        if (newBps > 2000) revert DeviationTooHigh();
         maxPriceDeviationBps = newBps;
         emit MaxPriceDeviationUpdated(newBps);
     }
 
     function setDustDistributionThreshold(uint256 newThreshold) external onlyOwner {
-        require(newThreshold > 0, "Threshold must be positive");
+        if (newThreshold == 0) revert AmountMustBePositive();
         dustDistributionThreshold = newThreshold;
         emit DustDistributionThresholdUpdated(newThreshold);
     }
 
     function depositFees() external payable onlyOwner {
-        require(msg.value > 0, "Amount must be positive");
+        if (msg.value == 0) revert AmountMustBePositive();
         accumulatedFees += msg.value;
         emit FeesAccumulated(msg.value);
     }
@@ -772,24 +813,25 @@ contract UniAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback, IAlignm
     // ========== Protocol Yield Cut ==========
 
     function setProtocolYieldCutBps(uint256 _bps) external onlyOwner {
-        require(_bps <= 1500, "Max 15%");
+        if (_bps > 1500) revert ExceedsMaxBps();
         protocolYieldCutBps = _bps;
         emit ProtocolYieldCutUpdated(_bps);
     }
 
     function setProtocolTreasury(address _treasury) external onlyOwner {
-        require(_treasury != address(0), "Invalid treasury");
+        if (_treasury == address(0)) revert InvalidAddress();
+        address old = protocolTreasury;
         protocolTreasury = _treasury;
-        emit ProtocolTreasuryUpdated(_treasury);
+        emit ProtocolTreasuryUpdated(old, _treasury);
     }
 
     function withdrawProtocolFees() external {
-        require(protocolTreasury != address(0), "Treasury not set");
+        if (protocolTreasury == address(0)) revert TreasuryNotSet();
         uint256 amount = accumulatedProtocolFees;
-        require(amount > 0, "No fees");
+        if (amount == 0) revert NoFeesToClaim();
         accumulatedProtocolFees = 0;
         (bool success, ) = payable(protocolTreasury).call{value: amount}("");
-        require(success, "ETH transfer failed");
+        if (!success) revert TransferFailed();
         emit ProtocolFeesWithdrawn(amount);
     }
 }

@@ -16,6 +16,16 @@ import {FeaturedQueueManager} from "../../master/FeaturedQueueManager.sol";
  * @notice Factory contract for deploying ERC721 auction instances for 1/1 artists
  */
 contract ERC721AuctionFactory is Ownable, ReentrancyGuard, IFactory {
+    error InvalidAddress();
+    error InsufficientPayment();
+    error InvalidName();
+    error VaultMustBeContract();
+    error NameAlreadyTaken();
+    error TreasuryNotSet();
+    error NoProtocolFees();
+    error NotAuthorizedAgent();
+    error NotRegisteredInstance();
+
     IMasterRegistry public masterRegistry;
     address public immutable globalMessageRegistry;
 
@@ -62,13 +72,14 @@ contract ERC721AuctionFactory is Ownable, ReentrancyGuard, IFactory {
     event ProtocolFeesWithdrawn(address indexed treasury, uint256 amount);
     event TierConfigUpdated(CreationTier tier);
     event InstanceCreatedWithTier(address indexed instance, CreationTier tier);
+    event PieceQueuedByAgent(address indexed instance, address indexed agent, string tokenURI);
 
     constructor(
         address _masterRegistry,
         address _globalMessageRegistry
     ) {
         _initializeOwner(msg.sender);
-        require(_globalMessageRegistry != address(0), "Invalid global message registry");
+        if (_globalMessageRegistry == address(0)) revert InvalidAddress();
         masterRegistry = IMasterRegistry(_masterRegistry);
         globalMessageRegistry = _globalMessageRegistry;
     }
@@ -121,13 +132,20 @@ contract ERC721AuctionFactory is Ownable, ReentrancyGuard, IFactory {
     {
         TierConfig memory config = tierConfigs[creationTier];
         uint256 featuredCost = _computeFeaturedCost(config);
-        require(msg.value >= featuredCost, "Insufficient featured fee");
+        if (msg.value < featuredCost) revert InsufficientPayment();
         accumulatedProtocolFees += msg.value - featuredCost;
 
-        require(bytes(args.name).length > 0, "Invalid name");
-        require(args.creator != address(0), "Invalid creator");
-        require(args.vault != address(0), "Invalid vault");
-        require(args.vault.code.length > 0, "Vault must be a contract");
+        if (bytes(args.name).length == 0) revert InvalidName();
+        if (args.creator == address(0)) revert InvalidAddress();
+        if (args.vault == address(0)) revert InvalidAddress();
+        if (args.vault.code.length == 0) revert VaultMustBeContract();
+
+        // Agent-on-behalf-of check
+        bool agentCreated = false;
+        if (msg.sender != args.creator) {
+            if (!masterRegistry.isAgent(msg.sender)) revert NotAuthorizedAgent();
+            agentCreated = true;
+        }
 
         // Soft capability checks
         try IAlignmentVault(payable(args.vault)).supportsCapability(keccak256("YIELD_GENERATION")) returns (bool supported) {
@@ -138,9 +156,9 @@ contract ERC721AuctionFactory is Ownable, ReentrancyGuard, IFactory {
             emit VaultCapabilityWarning(args.vault, keccak256("YIELD_GENERATION"));
         }
 
-        require(!masterRegistry.isNameTaken(args.name), "Name already taken");
+        if (masterRegistry.isNameTaken(args.name)) revert NameAlreadyTaken();
 
-        instance = _deployInstance(args);
+        instance = _deployInstance(args, agentCreated);
         masterRegistry.registerInstance(instance, address(this), args.creator, args.name, args.metadataURI, args.vault);
 
         _applyTierPerks(instance, args.creator, config, featuredCost);
@@ -160,12 +178,16 @@ contract ERC721AuctionFactory is Ownable, ReentrancyGuard, IFactory {
         }
     }
 
-    function _deployInstance(CreateArgs memory args) private returns (address) {
-        return address(new ERC721AuctionInstance(
+    function _deployInstance(CreateArgs memory args, bool agentCreated) private returns (address) {
+        address instance = address(new ERC721AuctionInstance(
             args.vault, protocolTreasury, args.creator, args.name, args.symbol,
             args.lines, args.baseDuration, args.timeBuffer, args.bidIncrement,
             globalMessageRegistry, address(masterRegistry)
         ));
+        if (agentCreated) {
+            ERC721AuctionInstance(payable(instance)).setAgentDelegationFromFactory();
+        }
+        return instance;
     }
 
     function _applyTierPerks(
@@ -182,6 +204,17 @@ contract ERC721AuctionFactory is Ownable, ReentrancyGuard, IFactory {
         if (config.badge != PromotionBadges.BadgeType.NONE && address(promotionBadges) != address(0)) {
             promotionBadges.assignBadgeFor(instance, config.badge, config.badgeDuration);
         }
+    }
+
+    // ┌─────────────────────────┐
+    // │    Agent Proxy          │
+    // └─────────────────────────┘
+
+    /// @notice Queue a piece on behalf of the artist (agent only)
+    function queuePiece(address instance, string calldata tokenURI) external payable nonReentrant {
+        if (!masterRegistry.isAgent(msg.sender)) revert NotAuthorizedAgent();
+        ERC721AuctionInstance(payable(instance)).queuePiece{value: msg.value}(tokenURI);
+        emit PieceQueuedByAgent(instance, msg.sender, tokenURI);
     }
 
     // ┌─────────────────────────┐
@@ -202,16 +235,16 @@ contract ERC721AuctionFactory is Ownable, ReentrancyGuard, IFactory {
     }
 
     function setProtocolTreasury(address _treasury) external onlyOwner {
-        require(_treasury != address(0), "Invalid treasury");
+        if (_treasury == address(0)) revert InvalidAddress();
         address old = protocolTreasury;
         protocolTreasury = _treasury;
         emit ProtocolTreasuryUpdated(old, _treasury);
     }
 
     function withdrawProtocolFees() external onlyOwner {
-        require(protocolTreasury != address(0), "Treasury not set");
+        if (protocolTreasury == address(0)) revert TreasuryNotSet();
         uint256 amount = accumulatedProtocolFees;
-        require(amount > 0, "No protocol fees");
+        if (amount == 0) revert NoProtocolFees();
         accumulatedProtocolFees = 0;
         SafeTransferLib.safeTransferETH(protocolTreasury, amount);
         emit ProtocolFeesWithdrawn(protocolTreasury, amount);

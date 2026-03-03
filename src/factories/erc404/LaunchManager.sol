@@ -11,6 +11,15 @@ import {FeaturedQueueManager} from "../../master/FeaturedQueueManager.sol";
  * @dev Extracted from ERC404Factory to reduce bytecode size. Owns all tier/promotion concerns.
  */
 contract LaunchManager is Ownable {
+    error InvalidProtocol();
+    error FeeMustBePositive();
+    error InvalidTargetETH();
+    error InvalidUnitPerNFT();
+    error InvalidReserveBps();
+    error InvalidCurveComputer();
+    error PresetNotActive();
+    error TierNotConfigured();
+
     // Tiered creation
     enum CreationTier { STANDARD, PREMIUM, LAUNCH }
 
@@ -44,7 +53,7 @@ contract LaunchManager is Ownable {
     event PresetUpdated(uint256 indexed presetId, uint256 targetETH, address curveComputer, bool active);
 
     constructor(address _protocol) {
-        require(_protocol != address(0), "Invalid protocol");
+        if (_protocol == address(0)) revert InvalidProtocol();
         _initializeOwner(_protocol);
     }
 
@@ -52,7 +61,7 @@ contract LaunchManager is Ownable {
      * @notice Set configuration for a creation tier
      */
     function setTierConfig(CreationTier tier, TierConfig calldata config) external onlyOwner {
-        require(config.fee > 0, "Fee must be positive");
+        if (config.fee == 0) revert FeeMustBePositive();
         tierConfigs[tier] = config;
         emit TierConfigUpdated(tier, config.fee);
     }
@@ -98,10 +107,10 @@ contract LaunchManager is Ownable {
 
     /// @notice Set or update a graduation preset. Only callable by owner (DAO).
     function setPreset(uint256 presetId, Preset calldata preset) external onlyOwner {
-        require(preset.targetETH > 0, "Invalid targetETH");
-        require(preset.unitPerNFT > 0, "Invalid unitPerNFT");
-        require(preset.liquidityReserveBps > 0 && preset.liquidityReserveBps < 10000, "Invalid reserve bps");
-        require(preset.curveComputer != address(0), "Invalid curveComputer");
+        if (preset.targetETH == 0) revert InvalidTargetETH();
+        if (preset.unitPerNFT == 0) revert InvalidUnitPerNFT();
+        if (preset.liquidityReserveBps == 0 || preset.liquidityReserveBps >= 10000) revert InvalidReserveBps();
+        if (preset.curveComputer == address(0)) revert InvalidCurveComputer();
         _presets[presetId] = preset;
         emit PresetUpdated(presetId, preset.targetETH, preset.curveComputer, preset.active);
     }
@@ -109,7 +118,7 @@ contract LaunchManager is Ownable {
     /// @notice Get a graduation preset. Reverts if not active.
     function getPreset(uint256 presetId) external view returns (Preset memory) {
         Preset memory p = _presets[presetId];
-        require(p.active, "Preset not active");
+        if (!p.active) revert PresetNotActive();
         return p;
     }
 
@@ -126,7 +135,7 @@ contract LaunchManager is Ownable {
         } else if (tier == CreationTier.STANDARD) {
             return defaultFee;
         } else {
-            revert("Tier not configured");
+            revert TierNotConfigured();
         }
     }
 }

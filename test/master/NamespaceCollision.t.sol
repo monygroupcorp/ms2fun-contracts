@@ -58,8 +58,7 @@ contract NamespaceCollisionTest is Test {
         implementation = new MasterRegistryV1();
         bytes memory initData = abi.encodeWithSignature("initialize(address)", owner);
         proxy = new MasterRegistry(address(implementation), initData);
-        address innerProxy = proxy.getProxyAddress();
-        registry = MasterRegistryV1(innerProxy);
+        registry = MasterRegistryV1(address(proxy));
 
         mockVault = new MockVaultForNamespace();
         mockDeployer = new MockLiquidityDeployerNS();
@@ -139,16 +138,16 @@ contract NamespaceCollisionTest is Test {
         vm.stopPrank();
     }
 
-    function _erc404Identity(string memory name_, string memory symbol_, address vault_)
+    function _erc404Identity(string memory name_, string memory symbol_, address vault_, address owner_)
         internal
-        view
+        pure
         returns (IdentityParams memory)
     {
         return IdentityParams({
             name: name_,
             symbol: symbol_,
             styleUri: "",
-            owner: msg.sender,
+            owner: owner_,
             vault: vault_,
             nftCount: 10,
             presetId: uint8(DEFAULT_PRESET_ID),
@@ -172,7 +171,7 @@ contract NamespaceCollisionTest is Test {
         vm.startPrank(creator1);
 
         erc404Factory.createInstance{value: INSTANCE_FEE}(
-            _erc404Identity("poggers", "POG", address(mockVault)),
+            _erc404Identity("poggers", "POG", address(mockVault), creator1),
             "ipfs://metadata",
             address(mockDeployer),
             address(0),
@@ -223,9 +222,9 @@ contract NamespaceCollisionTest is Test {
         vm.stopPrank();
 
         vm.startPrank(creator2);
-        vm.expectRevert("Name already taken");
+        vm.expectRevert(MasterRegistryV1.NameAlreadyTaken.selector);
         erc404Factory.createInstance{value: INSTANCE_FEE}(
-            _erc404Identity("poggers", "POG", address(mockVault)),
+            _erc404Identity("poggers", "POG", address(mockVault), creator2),
             "ipfs://metadata",
             address(mockDeployer),
             address(0),
@@ -243,7 +242,7 @@ contract NamespaceCollisionTest is Test {
 
         vm.startPrank(creator1);
         erc404Factory.createInstance{value: INSTANCE_FEE}(
-            _erc404Identity("poggers", "POG", address(mockVault)),
+            _erc404Identity("poggers", "POG", address(mockVault), creator1),
             "ipfs://metadata",
             address(mockDeployer),
             address(0),
@@ -252,7 +251,7 @@ contract NamespaceCollisionTest is Test {
         vm.stopPrank();
 
         vm.startPrank(creator2);
-        vm.expectRevert("Name already taken");
+        vm.expectRevert(ERC1155Factory.NameAlreadyTaken.selector);
         erc1155Factory.createInstance{value: INSTANCE_FEE}(
             "poggers",
             "ipfs://metadata",
@@ -281,9 +280,9 @@ contract NamespaceCollisionTest is Test {
         vm.stopPrank();
 
         vm.startPrank(creator2);
-        vm.expectRevert("Name already taken");
+        vm.expectRevert(MasterRegistryV1.NameAlreadyTaken.selector);
         erc404Factory.createInstance{value: INSTANCE_FEE}(
-            _erc404Identity("poggers", "POG", address(mockVault)),
+            _erc404Identity("poggers", "POG", address(mockVault), creator2),
             "ipfs://metadata",
             address(mockDeployer),
             address(0),
@@ -301,7 +300,7 @@ contract NamespaceCollisionTest is Test {
 
         vm.startPrank(creator1);
         erc404Factory.createInstance{value: INSTANCE_FEE}(
-            _erc404Identity("poggers", "POG", address(mockVault)),
+            _erc404Identity("poggers", "POG", address(mockVault), creator1),
             "ipfs://metadata",
             address(mockDeployer),
             address(0),
@@ -310,9 +309,9 @@ contract NamespaceCollisionTest is Test {
         vm.stopPrank();
 
         vm.startPrank(creator2);
-        vm.expectRevert("Name already taken");
+        vm.expectRevert(MasterRegistryV1.NameAlreadyTaken.selector);
         erc404Factory.createInstance{value: INSTANCE_FEE}(
-            _erc404Identity("poggers", "POG2", address(mockVault)),
+            _erc404Identity("poggers", "POG2", address(mockVault), creator2),
             "ipfs://metadata2",
             address(mockDeployer),
             address(0),
@@ -340,7 +339,7 @@ contract NamespaceCollisionTest is Test {
 
         vm.startPrank(creator2);
         address instance2 = erc404Factory.createInstance{value: INSTANCE_FEE}(
-            _erc404Identity("different_name", "DIFF", address(mockVault)),
+            _erc404Identity("different_name", "DIFF", address(mockVault), creator2),
             "ipfs://metadata",
             address(mockDeployer),
             address(0),

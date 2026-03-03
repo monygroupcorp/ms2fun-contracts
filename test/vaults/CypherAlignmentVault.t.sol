@@ -9,6 +9,7 @@ import {MockWETH} from "../mocks/MockWETH.sol";
 import {TestableCypherAlignmentVault} from "../helpers/TestableCypherAlignmentVault.sol";
 import {CypherAlignmentVault} from "../../src/vaults/cypher/CypherAlignmentVault.sol";
 import {Currency} from "v4-core/types/Currency.sol";
+import {Ownable} from "solady/auth/Ownable.sol";
 
 contract CypherAlignmentVaultTest is Test {
     TestableCypherAlignmentVault vault;
@@ -170,7 +171,7 @@ contract CypherAlignmentVaultTest is Test {
     function test_harvest_revertsWithZeroContributions() public {
         vault.setPositionForTest(1, makeAddr("pool"), true);
         vm.expectRevert();
-        vault.harvest();
+        vault.harvest(0);
     }
 
     function test_harvest_revertsWithNoPosition() public {
@@ -178,7 +179,7 @@ contract CypherAlignmentVaultTest is Test {
         vault.receiveContribution{value: 1 ether}(Currency.wrap(address(0)), 1 ether, alice);
         // lpTokenId = 0 — no position registered
         vm.expectRevert();
-        vault.harvest();
+        vault.harvest(0);
     }
 
     function test_harvest_returnsZeroWhenNoFees() public {
@@ -186,7 +187,7 @@ contract CypherAlignmentVaultTest is Test {
         vault.receiveContribution{value: 1 ether}(Currency.wrap(address(0)), 1 ether, alice);
         vault.setPositionForTest(1, makeAddr("pool"), true);
         // No fees set on position manager — collect returns (0, 0)
-        uint256 returned = vault.harvest();
+        uint256 returned = vault.harvest(0);
         assertEq(returned, 0);
         assertEq(vault.accRewardPerContribution(), 0);
     }
@@ -206,7 +207,7 @@ contract CypherAlignmentVaultTest is Test {
         vm.deal(address(weth), 0.14e18);
 
         uint256 aliceBalBefore = alice.balance;
-        vault.harvest();
+        vault.harvest(0);
 
         assertGt(vault.accRewardPerContribution(), 0);
         assertGt(vault.calculateClaimableAmount(alice), 0);
@@ -226,7 +227,7 @@ contract CypherAlignmentVaultTest is Test {
         _setupHarvestFees(alignmentFees, wethFees, false);
 
         uint256 expectedTotal = wethFees + (alignmentFees * 9 / 10);
-        uint256 feesETH = vault.harvest();
+        uint256 feesETH = vault.harvest(0);
         assertEq(feesETH, expectedTotal);
         assertGt(vault.accRewardPerContribution(), 0);
     }
@@ -236,7 +237,7 @@ contract CypherAlignmentVaultTest is Test {
         vault.receiveContribution{value: 1 ether}(Currency.wrap(address(0)), 1 ether, alice);
         _setupHarvestFees(0, 1 ether, true);
 
-        vault.harvest();
+        vault.harvest(0);
 
         // 1% protocol cut of 1 ETH = 0.01 ETH
         assertEq(vault.accumulatedProtocolFees(), 0.01 ether);
@@ -249,7 +250,7 @@ contract CypherAlignmentVaultTest is Test {
         vault.receiveContribution{value: 1 ether}(Currency.wrap(address(0)), 1 ether, alice);
 
         _setupHarvestFees(0, 0.1 ether, true);
-        vault.harvest();
+        vault.harvest(0);
         uint256 accAfterFirst = vault.accRewardPerContribution();
         assertGt(accAfterFirst, 0);
 
@@ -257,7 +258,7 @@ contract CypherAlignmentVaultTest is Test {
         weth.mint(address(positionManager), 0.1 ether);
         positionManager.setFees(1, 0, 0.1 ether);
         vm.deal(address(weth), 0.1 ether);
-        vault.harvest();
+        vault.harvest(0);
 
         assertGt(vault.accRewardPerContribution(), accAfterFirst);
     }
@@ -274,7 +275,7 @@ contract CypherAlignmentVaultTest is Test {
         vm.deal(address(this), 1 ether);
         vault.receiveContribution{value: 1 ether}(Currency.wrap(address(0)), 1 ether, alice);
         _setupHarvestFees(0, 0.1 ether, true);
-        vault.harvest();
+        vault.harvest(0);
 
         vm.prank(alice);
         vault.claimFees();
@@ -291,7 +292,7 @@ contract CypherAlignmentVaultTest is Test {
         vault.receiveContribution{value: 20 ether}(Currency.wrap(address(0)), 20 ether, bob);
 
         _setupHarvestFees(0, 1 ether, true);
-        vault.harvest();
+        vault.harvest(0);
 
         // benefactorFees = 1 ETH * 99% = 0.99 ETH (integer arithmetic)
         // Alice: 10/30 = 1/3, Bob: 20/30 = 2/3
@@ -318,7 +319,7 @@ contract CypherAlignmentVaultTest is Test {
 
         // First harvest: 0.1 ETH
         _setupHarvestFees(0, 0.1 ether, true);
-        vault.harvest();
+        vault.harvest(0);
 
         vm.prank(alice);
         uint256 firstClaim = vault.claimFees();
@@ -328,7 +329,7 @@ contract CypherAlignmentVaultTest is Test {
         weth.mint(address(positionManager), 0.2 ether);
         positionManager.setFees(1, 0, 0.2 ether);
         vm.deal(address(weth), 0.2 ether);
-        vault.harvest();
+        vault.harvest(0);
 
         vm.prank(alice);
         uint256 secondClaim = vault.claimFees();
@@ -346,7 +347,7 @@ contract CypherAlignmentVaultTest is Test {
         vault.delegateBenefactor(carol);
 
         _setupHarvestFees(0, 0.1 ether, true);
-        vault.harvest();
+        vault.harvest(0);
 
         uint256 carolBefore = carol.balance;
         address[] memory benefactors = new address[](1);
@@ -363,13 +364,13 @@ contract CypherAlignmentVaultTest is Test {
         vault.receiveContribution{value: 1 ether}(Currency.wrap(address(0)), 1 ether, alice);
 
         _setupHarvestFees(0, 0.1 ether, true);
-        vault.harvest();
+        vault.harvest(0);
 
         address[] memory benefactors = new address[](1);
         benefactors[0] = alice;
 
         vm.prank(bob); // not alice's delegate
-        vm.expectRevert("NotDelegate");
+        vm.expectRevert(CypherAlignmentVault.NotDelegate.selector);
         vault.claimFeesAsDelegate(benefactors);
     }
 
@@ -393,7 +394,7 @@ contract CypherAlignmentVaultTest is Test {
         vault.delegateBenefactor(carol);
 
         _setupHarvestFees(0, 0.1 ether, true);
-        vault.harvest();
+        vault.harvest(0);
 
         uint256 carolBefore = carol.balance;
         uint256 aliceBefore = alice.balance;
@@ -409,7 +410,7 @@ contract CypherAlignmentVaultTest is Test {
 
     function test_withdrawProtocolFees_revertsIfNotTreasury() public {
         vm.prank(alice);
-        vm.expectRevert("Not treasury");
+        vm.expectRevert(Ownable.Unauthorized.selector);
         vault.withdrawProtocolFees();
     }
 
@@ -417,7 +418,7 @@ contract CypherAlignmentVaultTest is Test {
         vm.deal(address(this), 1 ether);
         vault.receiveContribution{value: 1 ether}(Currency.wrap(address(0)), 1 ether, alice);
         _setupHarvestFees(0, 1 ether, true);
-        vault.harvest(); // vault now holds 1 ETH, 0.01 ETH is protocol fees (1% default)
+        vault.harvest(0); // vault now holds 1 ETH, 0.01 ETH is protocol fees (1% default)
 
         uint256 treasuryBefore = protocolTreasury.balance;
         vm.prank(protocolTreasury);
@@ -436,7 +437,7 @@ contract CypherAlignmentVaultTest is Test {
     }
 
     function test_setProtocolYieldCutBps_revertsAboveMax() public {
-        vm.expectRevert("Max 10%");
+        vm.expectRevert(CypherAlignmentVault.ExceedsMaxBps.selector);
         vault.setProtocolYieldCutBps(1001);
     }
 
@@ -455,7 +456,7 @@ contract CypherAlignmentVaultTest is Test {
         vm.deal(address(this), 1 ether);
         vault.receiveContribution{value: 1 ether}(Currency.wrap(address(0)), 1 ether, alice);
         _setupHarvestFees(0, 0.1 ether, true);
-        vault.harvest();
+        vault.harvest(0);
 
         vm.prank(alice);
         vault.claimFees();
@@ -510,7 +511,7 @@ contract CypherAlignmentVaultTest is Test {
 
         // 2. LP position goes live, harvest fees
         _setupHarvestFees(0, 1 ether, true);
-        vault.harvest();
+        vault.harvest(0);
 
         // 3. Alice claims — should receive 99% of 1 ETH (1% protocol taken)
         uint256 aliceBefore = alice.balance;
@@ -533,7 +534,7 @@ contract CypherAlignmentVaultTest is Test {
 
         // Harvest 3 ETH in fees
         _setupHarvestFees(0, 3 ether, true);
-        vault.harvest();
+        vault.harvest(0);
 
         // benefactorFees = 3 ETH * 99% = 2.97 ETH
         uint256 benefactorFees = 3 ether * 9900 / 10000;
@@ -557,7 +558,7 @@ contract CypherAlignmentVaultTest is Test {
 
         // Round 1: harvest 1 ETH
         _setupHarvestFees(0, 1 ether, true);
-        vault.harvest();
+        vault.harvest(0);
 
         // Alice claims round 1
         vm.prank(alice);
@@ -568,7 +569,7 @@ contract CypherAlignmentVaultTest is Test {
         weth.mint(address(positionManager), 2 ether);
         positionManager.setFees(1, 0, 2 ether);
         vm.deal(address(weth), 2 ether);
-        vault.harvest();
+        vault.harvest(0);
 
         // Bob claims both rounds at once
         vm.prank(bob);

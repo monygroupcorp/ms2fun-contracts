@@ -6,6 +6,34 @@ import {ReentrancyGuard} from "solady/utils/ReentrancyGuard.sol";
 import {IGrandCentral} from "../interfaces/IGrandCentral.sol";
 
 contract ShareOffering is ReentrancyGuard {
+    // ============ Custom Errors ============
+
+    error Unauthorized();
+    error InvalidAddress();
+    error ZeroPrice();
+    error ZeroShares();
+    error ZeroDuration();
+    error MinExceedsTotal();
+    error CapBelowMin();
+    error ActiveTrancheExists();
+    error NotActive();
+    error WindowNotClosed();
+    error PastDeadline();
+    error ArrayLengthMismatch();
+    error CommitmentMismatch();
+    error ZeroAmount();
+    error IncompleteBuyers();
+    error TransferFailed();
+    error MintFailed();
+    error OutsideWindow();
+    error NotWhitelisted();
+    error ExceedsSupply();
+    error ExceedsCap();
+    error BelowMinimum();
+    error WrongETHAmount();
+    error NotRefundable();
+    error NoCommitment();
+
     // ============ Enums ============
 
     enum TrancheStatus { Inactive, Active, Finalized, Cancelled }
@@ -61,14 +89,14 @@ contract ShareOffering is ReentrancyGuard {
     // ============ Modifiers ============
 
     modifier onlyDAO() {
-        require(msg.sender == dao || msg.sender == safe, "!dao");
+        if (msg.sender != dao && msg.sender != safe) revert Unauthorized();
         _;
     }
 
     // ============ Constructor ============
 
     constructor(address _dao) {
-        require(_dao != address(0), "invalid dao");
+        if (_dao == address(0)) revert InvalidAddress();
         dao = _dao;
         safe = IGrandCentral(_dao).safe();
     }
@@ -83,23 +111,22 @@ contract ShareOffering is ReentrancyGuard {
         uint256 maxSharesPerAddress,
         bytes32 whitelistRoot
     ) external onlyDAO returns (uint256 trancheId) {
-        require(pricePerShare > 0, "zero price");
-        require(totalShares > 0, "zero shares");
-        require(duration > 0, "zero duration");
+        if (pricePerShare == 0) revert ZeroPrice();
+        if (totalShares == 0) revert ZeroShares();
+        if (duration == 0) revert ZeroDuration();
         if (minShares > 0) {
-            require(minShares <= totalShares, "min > total");
+            if (minShares > totalShares) revert MinExceedsTotal();
         }
         if (maxSharesPerAddress > 0 && minShares > 0) {
-            require(maxSharesPerAddress >= minShares, "cap < min");
+            if (maxSharesPerAddress < minShares) revert CapBelowMin();
         }
 
         // Ensure no active tranche
         if (currentTrancheId > 0) {
             TrancheStatus s = _effectiveStatus(currentTrancheId);
-            require(
-                s == TrancheStatus.Finalized || s == TrancheStatus.Cancelled || s == TrancheStatus.Inactive,
-                "active tranche exists"
-            );
+            if (s != TrancheStatus.Finalized && s != TrancheStatus.Cancelled && s != TrancheStatus.Inactive) {
+                revert ActiveTrancheExists();
+            }
         }
 
         trancheId = ++currentTrancheId;
@@ -132,38 +159,38 @@ contract ShareOffering is ReentrancyGuard {
         uint256[] calldata amounts
     ) external onlyDAO nonReentrant {
         Tranche storage t = tranches[trancheId];
-        require(t.status == TrancheStatus.Active, "not active");
-        require(block.timestamp > t.endTime, "window not closed");
-        require(block.timestamp <= t.finalizeDeadline, "past deadline");
-        require(buyers.length == amounts.length, "!array parity");
+        if (t.status != TrancheStatus.Active) revert NotActive();
+        if (block.timestamp <= t.endTime) revert WindowNotClosed();
+        if (block.timestamp > t.finalizeDeadline) revert PastDeadline();
+        if (buyers.length != amounts.length) revert ArrayLengthMismatch();
 
         // Verify buyer arrays match commitments
         uint256 totalShares;
         for (uint256 i = 0; i < buyers.length; i++) {
-            require(commitments[trancheId][buyers[i]] == amounts[i], "commitment mismatch");
-            require(amounts[i] > 0, "zero amount");
+            if (commitments[trancheId][buyers[i]] != amounts[i]) revert CommitmentMismatch();
+            if (amounts[i] == 0) revert ZeroAmount();
             totalShares += amounts[i];
         }
-        require(totalShares == t.committedShares, "incomplete buyers");
+        if (totalShares != t.committedShares) revert IncompleteBuyers();
 
         t.status = TrancheStatus.Finalized;
 
         // Forward ETH to Safe
         (bool sent,) = safe.call{value: t.totalETHCommitted}("");
-        require(sent, "ETH transfer failed");
+        if (!sent) revert TransferFailed();
 
         // Mint shares to buyers via DAO
         (bool success,) = dao.call(
             abi.encodeWithSignature("mintShares(address[],uint256[])", buyers, amounts)
         );
-        require(success, "mint failed");
+        if (!success) revert MintFailed();
 
         emit TrancheFinalized(trancheId, t.committedShares, t.totalETHCommitted);
     }
 
     function cancel(uint256 trancheId) external onlyDAO {
         Tranche storage t = tranches[trancheId];
-        require(t.status == TrancheStatus.Active, "not active");
+        if (t.status != TrancheStatus.Active) revert NotActive();
         t.status = TrancheStatus.Cancelled;
         emit TrancheCancelled(trancheId);
     }
@@ -176,33 +203,33 @@ contract ShareOffering is ReentrancyGuard {
         bytes32[] calldata proof
     ) external payable nonReentrant {
         Tranche storage t = tranches[trancheId];
-        require(t.status == TrancheStatus.Active, "not active");
-        require(block.timestamp >= t.startTime && block.timestamp <= t.endTime, "outside window");
-        require(sharesToBuy > 0, "zero shares");
+        if (t.status != TrancheStatus.Active) revert NotActive();
+        if (block.timestamp < t.startTime || block.timestamp > t.endTime) revert OutsideWindow();
+        if (sharesToBuy == 0) revert ZeroShares();
 
         // Whitelist check
         if (t.whitelistRoot != bytes32(0)) {
             bytes32 leaf = keccak256(abi.encodePacked(msg.sender));
-            require(MerkleProofLib.verify(proof, t.whitelistRoot, leaf), "not whitelisted");
+            if (!MerkleProofLib.verify(proof, t.whitelistRoot, leaf)) revert NotWhitelisted();
         }
 
         // Supply check
-        require(t.committedShares + sharesToBuy <= t.totalShares, "exceeds supply");
+        if (t.committedShares + sharesToBuy > t.totalShares) revert ExceedsSupply();
 
         // Per-address cap
         uint256 existing = commitments[trancheId][msg.sender];
         if (t.maxSharesPerAddress > 0) {
-            require(existing + sharesToBuy <= t.maxSharesPerAddress, "exceeds cap");
+            if (existing + sharesToBuy > t.maxSharesPerAddress) revert ExceedsCap();
         }
 
         // Minimum on first commitment
         if (existing == 0 && t.minShares > 0) {
-            require(sharesToBuy >= t.minShares, "below minimum");
+            if (sharesToBuy < t.minShares) revert BelowMinimum();
         }
 
         // Exact payment
         uint256 cost = sharesToBuy * t.pricePerShare;
-        require(msg.value == cost, "wrong ETH amount");
+        if (msg.value != cost) revert WrongETHAmount();
 
         commitments[trancheId][msg.sender] = existing + sharesToBuy;
         t.committedShares += sharesToBuy;
@@ -214,10 +241,10 @@ contract ShareOffering is ReentrancyGuard {
     function refund(uint256 trancheId) external nonReentrant {
         Tranche storage t = tranches[trancheId];
         TrancheStatus s = _effectiveStatus(trancheId);
-        require(s == TrancheStatus.Cancelled || (s == TrancheStatus.Active && block.timestamp > t.finalizeDeadline), "not refundable");
+        if (s != TrancheStatus.Cancelled && !(s == TrancheStatus.Active && block.timestamp > t.finalizeDeadline)) revert NotRefundable();
 
         uint256 shares = commitments[trancheId][msg.sender];
-        require(shares > 0, "no commitment");
+        if (shares == 0) revert NoCommitment();
 
         uint256 ethAmount = shares * t.pricePerShare;
         commitments[trancheId][msg.sender] = 0;
@@ -225,7 +252,7 @@ contract ShareOffering is ReentrancyGuard {
         t.totalETHCommitted -= ethAmount;
 
         (bool sent,) = msg.sender.call{value: ethAmount}("");
-        require(sent, "ETH transfer failed");
+        if (!sent) revert TransferFailed();
 
         emit Refunded(trancheId, msg.sender, shares, ethAmount);
     }

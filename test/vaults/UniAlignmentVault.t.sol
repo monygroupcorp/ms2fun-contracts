@@ -7,11 +7,14 @@ import {TestableUniAlignmentVault} from "../helpers/TestableUniAlignmentVault.so
 import {MockEXECToken} from "../mocks/MockEXECToken.sol";
 import {MockZRouter} from "../mocks/MockZRouter.sol";
 import {MockVaultPriceValidator} from "../mocks/MockVaultPriceValidator.sol";
+import {MockAlignmentRegistry} from "../mocks/MockAlignmentRegistry.sol";
 import {IVaultPriceValidator} from "../../src/interfaces/IVaultPriceValidator.sol";
+import {IAlignmentRegistry} from "../../src/master/interfaces/IAlignmentRegistry.sol";
 import {Currency} from "v4-core/types/Currency.sol";
 import {PoolKey} from "v4-core/types/PoolKey.sol";
 import {IHooks} from "v4-core/interfaces/IHooks.sol";
 import {LibClone} from "solady/utils/LibClone.sol";
+import {Ownable} from "solady/auth/Ownable.sol";
 
 /**
  * @title UniAlignmentVaultTest
@@ -33,7 +36,10 @@ contract UniAlignmentVaultTest is Test {
 
     MockZRouter public mockZRouter;
     MockVaultPriceValidator public mockValidator;
+    MockAlignmentRegistry public mockAlignmentRegistry;
     TestableUniAlignmentVault public vaultImpl;
+
+    uint256 constant TARGET_ID = 1;
 
     // Events
     event ContributionReceived(address indexed benefactor, uint256 amount);
@@ -56,6 +62,9 @@ contract UniAlignmentVaultTest is Test {
         // Deploy mock peripherals
         mockZRouter = new MockZRouter();
         mockValidator = new MockVaultPriceValidator();
+        mockAlignmentRegistry = new MockAlignmentRegistry();
+        mockAlignmentRegistry.setTargetActive(TARGET_ID, true);
+        mockAlignmentRegistry.setTokenInTarget(TARGET_ID, address(alignmentToken), true);
 
         // Pre-fund MockZRouter for both swap directions
         vm.deal(address(mockZRouter), 100 ether);
@@ -71,7 +80,9 @@ contract UniAlignmentVaultTest is Test {
             address(mockZRouter),
             3000,
             60,
-            IVaultPriceValidator(address(mockValidator))
+            IVaultPriceValidator(address(mockValidator)),
+            IAlignmentRegistry(address(mockAlignmentRegistry)),
+            TARGET_ID
         );
 
         // Set V4 pool key for conversion tests (using native ETH)
@@ -115,44 +126,50 @@ contract UniAlignmentVaultTest is Test {
         return TestableUniAlignmentVault(payable(LibClone.clone(address(vaultImpl))));
     }
 
+    function _initVault(TestableUniAlignmentVault v) internal {
+        v.initialize(
+            mockWETH, mockPoolManager, address(alignmentToken),
+            address(mockZRouter), 3000, 60,
+            IVaultPriceValidator(address(mockValidator)),
+            IAlignmentRegistry(address(mockAlignmentRegistry)), TARGET_ID
+        );
+    }
+
     function test_Initialize_RevertsOnInvalidWETH() public {
         TestableUniAlignmentVault v = _freshClone();
-        vm.expectRevert("Invalid WETH");
+        vm.expectRevert(UniAlignmentVault.InvalidAddress.selector);
         v.initialize(address(0), mockPoolManager,
             address(alignmentToken),
             address(mockZRouter), 3000, 60,
-            IVaultPriceValidator(address(mockValidator)));
+            IVaultPriceValidator(address(mockValidator)),
+            IAlignmentRegistry(address(mockAlignmentRegistry)), TARGET_ID);
     }
 
     function test_Initialize_RevertsOnInvalidPoolManager() public {
         TestableUniAlignmentVault v = _freshClone();
-        vm.expectRevert("Invalid pool manager");
+        vm.expectRevert(UniAlignmentVault.InvalidAddress.selector);
         v.initialize(mockWETH, address(0),
             address(alignmentToken),
             address(mockZRouter), 3000, 60,
-            IVaultPriceValidator(address(mockValidator)));
+            IVaultPriceValidator(address(mockValidator)),
+            IAlignmentRegistry(address(mockAlignmentRegistry)), TARGET_ID);
     }
 
     function test_Initialize_RevertsOnInvalidAlignmentToken() public {
         TestableUniAlignmentVault v = _freshClone();
-        vm.expectRevert("Invalid alignment token");
+        vm.expectRevert(UniAlignmentVault.InvalidAddress.selector);
         v.initialize(mockWETH, mockPoolManager,
             address(0),
             address(mockZRouter), 3000, 60,
-            IVaultPriceValidator(address(mockValidator)));
+            IVaultPriceValidator(address(mockValidator)),
+            IAlignmentRegistry(address(mockAlignmentRegistry)), TARGET_ID);
     }
 
     function test_Initialize_RevertsOnDoubleInit() public {
         TestableUniAlignmentVault v = _freshClone();
-        v.initialize(mockWETH, mockPoolManager,
-            address(alignmentToken),
-            address(mockZRouter), 3000, 60,
-            IVaultPriceValidator(address(mockValidator)));
-        vm.expectRevert("Already initialized");
-        v.initialize(mockWETH, mockPoolManager,
-            address(alignmentToken),
-            address(mockZRouter), 3000, 60,
-            IVaultPriceValidator(address(mockValidator)));
+        _initVault(v);
+        vm.expectRevert(Ownable.AlreadyInitialized.selector);
+        _initVault(v);
     }
 
     // ========== Direct ETH Contribution Tests (receive) ==========
@@ -246,14 +263,14 @@ contract UniAlignmentVaultTest is Test {
 
     function test_ReceiveHookTax_RevertsOnZeroAmount() public {
         vm.startPrank(alice);
-        vm.expectRevert("Amount must be positive");
+        vm.expectRevert(UniAlignmentVault.AmountMustBePositive.selector);
         vault.receiveContribution(Currency.wrap(address(0)), 0, bob);
         vm.stopPrank();
     }
 
     function test_ReceiveHookTax_RevertsOnInvalidBenefactor() public {
         vm.startPrank(alice);
-        vm.expectRevert("Invalid benefactor");
+        vm.expectRevert(UniAlignmentVault.InvalidAddress.selector);
         vault.receiveContribution{value: 1 ether}(Currency.wrap(address(0)), 1 ether, address(0));
         vm.stopPrank();
     }
@@ -437,7 +454,7 @@ contract UniAlignmentVaultTest is Test {
 
     function test_ConvertAndAddLiquidity_RevertsWhenNoPendingETH() public {
         vm.prank(dave);
-        vm.expectRevert("No pending ETH to convert");
+        vm.expectRevert(UniAlignmentVault.NoPendingETH.selector);
         vault.convertAndAddLiquidity(0);
     }
 
@@ -445,7 +462,7 @@ contract UniAlignmentVaultTest is Test {
         // We can't actually set alignment token to zero because of constructor check
         // Instead, we test that the revert message exists by trying to deploy with zero
         // This test verifies the check is in place
-        vm.expectRevert("Invalid token");
+        vm.expectRevert(UniAlignmentVault.InvalidAddress.selector);
         vm.prank(owner);
         vault.setAlignmentToken(address(0));
     }
@@ -453,12 +470,7 @@ contract UniAlignmentVaultTest is Test {
     function test_ConvertAndAddLiquidity_RevertsWhenNoV4PoolSet() public {
         // Deploy new vault without V4 pool set
         TestableUniAlignmentVault newVault = _freshClone();
-        newVault.initialize(
-            mockWETH, mockPoolManager,
-            address(alignmentToken),
-            address(mockZRouter), 3000, 60,
-            IVaultPriceValidator(address(mockValidator))
-        );
+        _initVault(newVault);
 
         vm.deal(alice, 10 ether);
         vm.prank(alice);
@@ -466,7 +478,7 @@ contract UniAlignmentVaultTest is Test {
         assertTrue(s1);
 
         vm.prank(dave);
-        vm.expectRevert("V4 pool key not set");
+        vm.expectRevert(UniAlignmentVault.PoolKeyNotSet.selector);
         newVault.convertAndAddLiquidity(0);
     }
 
@@ -522,7 +534,7 @@ contract UniAlignmentVaultTest is Test {
 
     function test_RecordAccumulatedFees_RevertsOnZeroAmount() public {
         vm.startPrank(owner);
-        vm.expectRevert("Fee amount must be positive");
+        vm.expectRevert(UniAlignmentVault.AmountMustBePositive.selector);
         vault.recordAccumulatedFees(0);
         vm.stopPrank();
     }
@@ -549,7 +561,7 @@ contract UniAlignmentVaultTest is Test {
 
     function test_DepositFees_RevertsOnZeroAmount() public {
         vm.startPrank(owner);
-        vm.expectRevert("Amount must be positive");
+        vm.expectRevert(UniAlignmentVault.AmountMustBePositive.selector);
         vault.depositFees{value: 0}();
         vm.stopPrank();
     }
@@ -674,7 +686,7 @@ contract UniAlignmentVaultTest is Test {
 
     function test_ClaimFees_RevertsWhenNoShares() public {
         vm.prank(alice);
-        vm.expectRevert("No shares");
+        vm.expectRevert(UniAlignmentVault.NoShares.selector);
         vault.claimFees();
     }
 
@@ -687,7 +699,7 @@ contract UniAlignmentVaultTest is Test {
         vault.convertAndAddLiquidity(0);
 
         vm.prank(alice);
-        vm.expectRevert("No fees to claim");
+        vm.expectRevert(UniAlignmentVault.NoFeesToClaim.selector);
         vault.claimFees();
     }
 
@@ -708,7 +720,7 @@ contract UniAlignmentVaultTest is Test {
 
         // Second claim without new fees should revert
         vm.prank(alice);
-        vm.expectRevert("No new fees to claim");
+        vm.expectRevert(UniAlignmentVault.NoFeesToClaim.selector);
         vault.claimFees();
     }
 
@@ -832,6 +844,8 @@ contract UniAlignmentVaultTest is Test {
 
     function test_SetAlignmentToken_OwnerCanUpdate() public {
         address newToken = address(0x9999);
+        // Register new token in the same alignment target
+        mockAlignmentRegistry.setTokenInTarget(TARGET_ID, newToken, true);
 
         vm.prank(owner);
         vault.setAlignmentToken(newToken);
@@ -841,7 +855,7 @@ contract UniAlignmentVaultTest is Test {
 
     function test_SetAlignmentToken_RevertsOnZeroAddress() public {
         vm.prank(owner);
-        vm.expectRevert("Invalid token");
+        vm.expectRevert(UniAlignmentVault.InvalidAddress.selector);
         vault.setAlignmentToken(address(0));
     }
 
@@ -849,6 +863,30 @@ contract UniAlignmentVaultTest is Test {
         vm.prank(alice);
         vm.expectRevert();
         vault.setAlignmentToken(address(0x9999));
+    }
+
+    function test_SetAlignmentToken_RevertsWhenPendingETH() public {
+        address newToken = address(0x9999);
+        mockAlignmentRegistry.setTokenInTarget(TARGET_ID, newToken, true);
+
+        // Contribute ETH so totalPendingETH > 0
+        vm.deal(alice, 1 ether);
+        vm.prank(alice);
+        (bool s,) = address(vault).call{value: 1 ether}("");
+        require(s);
+
+        vm.prank(owner);
+        vm.expectRevert(UniAlignmentVault.PendingETHNotConverted.selector);
+        vault.setAlignmentToken(newToken);
+    }
+
+    function test_SetAlignmentToken_RevertsWhenTokenNotInTarget() public {
+        address rogueToken = address(0xBAD);
+        // NOT registered in the alignment target
+
+        vm.prank(owner);
+        vm.expectRevert(UniAlignmentVault.TokenNotInTarget.selector);
+        vault.setAlignmentToken(rogueToken);
     }
 
     function test_SetV4PoolKey_OwnerCanUpdate() public {
@@ -876,7 +914,7 @@ contract UniAlignmentVaultTest is Test {
         });
 
         vm.prank(owner);
-        vm.expectRevert("Invalid pool key: no currencies set");
+        vm.expectRevert(UniAlignmentVault.InvalidPoolKey.selector);
         vault.setV4PoolKey(invalidPoolKey);
     }
 
@@ -903,7 +941,7 @@ contract UniAlignmentVaultTest is Test {
 
     function test_SetConversionRewardBps_RevertsOnTooHighValue() public {
         vm.prank(owner);
-        vm.expectRevert("Reward too high (max 0.1 ETH)");
+        vm.expectRevert(UniAlignmentVault.RewardTooHigh.selector);
         vault.setStandardConversionReward(0.2 ether);
     }
 
@@ -1110,7 +1148,7 @@ contract UniAlignmentVaultTest is Test {
 
     event ProtocolYieldCollected(uint256 amount);
     event ProtocolYieldCutUpdated(uint256 newBps);
-    event ProtocolTreasuryUpdated(address indexed newTreasury);
+    event ProtocolTreasuryUpdated(address indexed oldTreasury, address indexed newTreasury);
     event ProtocolFeesWithdrawn(uint256 amount);
 
     function test_YieldCut_DefaultIs100Bps() public view {
@@ -1149,7 +1187,7 @@ contract UniAlignmentVaultTest is Test {
 
     function test_YieldCut_SetProtocolYieldCutBps_RevertsAboveMax() public {
         vm.prank(owner);
-        vm.expectRevert("Max 15%");
+        vm.expectRevert(UniAlignmentVault.ExceedsMaxBps.selector);
         vault.setProtocolYieldCutBps(1501);
     }
 
@@ -1163,7 +1201,7 @@ contract UniAlignmentVaultTest is Test {
         address treasury = address(0xFEE);
         vm.prank(owner);
         vm.expectEmit(true, true, true, true);
-        emit ProtocolTreasuryUpdated(treasury);
+        emit ProtocolTreasuryUpdated(address(0), treasury);
         vault.setProtocolTreasury(treasury);
 
         assertEq(vault.protocolTreasury(), treasury, "Treasury should be set");
@@ -1171,7 +1209,7 @@ contract UniAlignmentVaultTest is Test {
 
     function test_YieldCut_SetProtocolTreasury_RevertsOnZero() public {
         vm.prank(owner);
-        vm.expectRevert("Invalid treasury");
+        vm.expectRevert(UniAlignmentVault.InvalidAddress.selector);
         vault.setProtocolTreasury(address(0));
     }
 
@@ -1213,7 +1251,7 @@ contract UniAlignmentVaultTest is Test {
         // We'll set yield cut to 0 first, verify no protocol fees, then check withdrawal reverts
         assertEq(vault.accumulatedProtocolFees(), 0);
 
-        vm.expectRevert("No fees");
+        vm.expectRevert(UniAlignmentVault.NoFeesToClaim.selector);
         vault.withdrawProtocolFees();
     }
 
@@ -1260,13 +1298,13 @@ contract UniAlignmentVaultTest is Test {
         assertEq(vault.accumulatedProtocolFees(), 0, "Cleared after withdrawal");
 
         // Second withdrawal should revert
-        vm.expectRevert("No fees");
+        vm.expectRevert(UniAlignmentVault.NoFeesToClaim.selector);
         vault.withdrawProtocolFees();
     }
 
     function test_YieldCut_WithdrawProtocolFees_RevertsNoTreasury() public {
         // Treasury not set (default address(0))
-        vm.expectRevert("Treasury not set");
+        vm.expectRevert(UniAlignmentVault.TreasuryNotSet.selector);
         vault.withdrawProtocolFees();
     }
 
@@ -1274,7 +1312,7 @@ contract UniAlignmentVaultTest is Test {
         vm.prank(owner);
         vault.setProtocolTreasury(address(0xFEE));
 
-        vm.expectRevert("No fees");
+        vm.expectRevert(UniAlignmentVault.NoFeesToClaim.selector);
         vault.withdrawProtocolFees();
     }
 
@@ -1312,7 +1350,7 @@ contract UniAlignmentVaultTest is Test {
 
         // No fees to withdraw, but the access control check should pass
         vm.prank(alice);
-        vm.expectRevert("No fees");
+        vm.expectRevert(UniAlignmentVault.NoFeesToClaim.selector);
         vault.withdrawProtocolFees();
         // If it reverted with "No fees" (not Unauthorized), access control passed
     }

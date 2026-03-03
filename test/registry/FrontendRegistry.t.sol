@@ -2,6 +2,7 @@
 pragma solidity ^0.8.24;
 
 import {Test, console} from "forge-std/Test.sol";
+import {Ownable} from "solady/auth/Ownable.sol";
 import {FrontendRegistry} from "../../src/registry/FrontendRegistry.sol";
 import {IFrontendRegistry} from "../../src/registry/interfaces/IFrontendRegistry.sol";
 import {LibClone} from "solady/utils/LibClone.sol";
@@ -61,7 +62,7 @@ contract FrontendRegistryTest is Test {
         vm.prank(owner);
         registry.addEnsName(node1);
         vm.prank(owner);
-        vm.expectRevert("Already managed");
+        vm.expectRevert(FrontendRegistry.AlreadyManaged.selector);
         registry.addEnsName(node1);
     }
 
@@ -89,7 +90,7 @@ contract FrontendRegistryTest is Test {
 
     function test_removeEnsName_revertsIfNotManaged() public {
         vm.prank(owner);
-        vm.expectRevert("Not managed");
+        vm.expectRevert(FrontendRegistry.NotManaged.selector);
         registry.removeEnsName(node1);
     }
 
@@ -218,7 +219,7 @@ contract FrontendRegistryTest is Test {
         address[] memory contracts = new address[](0);
 
         vm.prank(owner);
-        vm.expectRevert("Node not managed");
+        vm.expectRevert(FrontendRegistry.NodeNotManaged.selector);
         registry.publishRelease(IFrontendRegistry.ReleaseType.SITE_ONLY, sampleHash, "1.0.0", "notes", contracts, nodes);
     }
 
@@ -308,11 +309,11 @@ contract FrontendRegistryTest is Test {
         _publishTwoReleases();
 
         vm.prank(owner);
-        vm.expectRevert("Invalid release ID");
+        vm.expectRevert(FrontendRegistry.InvalidReleaseId.selector);
         registry.pointNodeToRelease(node1, 0);
 
         vm.prank(owner);
-        vm.expectRevert("Invalid release ID");
+        vm.expectRevert(FrontendRegistry.InvalidReleaseId.selector);
         registry.pointNodeToRelease(node1, 99);
     }
 
@@ -321,7 +322,7 @@ contract FrontendRegistryTest is Test {
         bytes32 unknown = keccak256("unknown.eth");
 
         vm.prank(owner);
-        vm.expectRevert("Node not managed");
+        vm.expectRevert(FrontendRegistry.NodeNotManaged.selector);
         registry.pointNodeToRelease(unknown, 1);
     }
 
@@ -334,7 +335,7 @@ contract FrontendRegistryTest is Test {
     // ── Initialization & Upgradeability ──
 
     function test_initialize_revertsOnDoubleInit() public {
-        vm.expectRevert("Already initialized");
+        vm.expectRevert(Ownable.AlreadyInitialized.selector);
         registry.initialize(owner, address(resolver));
     }
 
@@ -343,7 +344,7 @@ contract FrontendRegistryTest is Test {
         address proxy = LibClone.deployERC1967(newImpl);
         FrontendRegistry r = FrontendRegistry(proxy);
 
-        vm.expectRevert("Invalid owner");
+        vm.expectRevert(FrontendRegistry.InvalidAddress.selector);
         r.initialize(address(0), address(resolver));
     }
 
@@ -352,7 +353,7 @@ contract FrontendRegistryTest is Test {
         address proxy = LibClone.deployERC1967(newImpl);
         FrontendRegistry r = FrontendRegistry(proxy);
 
-        vm.expectRevert("Invalid resolver");
+        vm.expectRevert(FrontendRegistry.InvalidAddress.selector);
         r.initialize(owner, address(0));
     }
 

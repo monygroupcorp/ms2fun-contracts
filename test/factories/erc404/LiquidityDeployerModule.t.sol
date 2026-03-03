@@ -68,7 +68,7 @@ contract LiquidityDeployerModuleTest is Test {
             1 ether, 100 ether, address(0x1)
         );
         // Send less ETH than ethReserve — module checks msg.value == ethReserve
-        vm.expectRevert("ETH mismatch");
+        vm.expectRevert(LiquidityDeployerModule.ETHMismatch.selector);
         module.deployLiquidity{value: 0.5 ether}(p);
     }
 
@@ -76,12 +76,12 @@ contract LiquidityDeployerModuleTest is Test {
         ILiquidityDeployerModule.DeployParams memory p = _params(
             1 ether, 100 ether, address(0x1)
         );
-        vm.expectRevert("ETH mismatch");
+        vm.expectRevert(LiquidityDeployerModule.ETHMismatch.selector);
         module.deployLiquidity{value: 0}(p);
     }
 
     function test_unlockCallback_revertsIfNotPoolManager() public {
-        vm.expectRevert("Not pool manager");
+        vm.expectRevert(LiquidityDeployerModule.NotPoolManager.selector);
         module.unlockCallback(bytes(""));
     }
 

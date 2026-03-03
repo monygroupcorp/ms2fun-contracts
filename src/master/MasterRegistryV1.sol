@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import {UUPSUpgradeable} from "solady/utils/UUPSUpgradeable.sol";
-import {Ownable} from "solady/auth/Ownable.sol";
+import {SafeOwnableUUPS} from "../shared/SafeOwnableUUPS.sol";
 import {IMasterRegistry} from "./interfaces/IMasterRegistry.sol";
 import {IAlignmentRegistry} from "./interfaces/IAlignmentRegistry.sol";
+import {IGrandCentral} from "../dao/interfaces/IGrandCentral.sol";
 import {IComponentRegistry} from "../registry/interfaces/IComponentRegistry.sol";
 import {MetadataUtils} from "../shared/libraries/MetadataUtils.sol";
 import {IFactoryInstance} from "../interfaces/IFactoryInstance.sol";
@@ -17,7 +17,32 @@ import {IInstanceLifecycle} from "../interfaces/IInstanceLifecycle.sol";
  * @dev UUPS upgradeable. Owner is the DAO (GrandCentral + Safe).
  *      Alignment target curation is handled by AlignmentRegistryV1.
  */
-contract MasterRegistryV1 is UUPSUpgradeable, Ownable, IMasterRegistry {
+contract MasterRegistryV1 is SafeOwnableUUPS, IMasterRegistry {
+    // ── Custom Errors ──
+    error InvalidAddress();
+    error InvalidContractType();
+    error InvalidTitle();
+    error InvalidName();
+    error InvalidMetadataURI();
+    error AlreadyRegistered();
+    error NotRegistered();
+    error FactoryNotActive();
+    error FactoryHasNoProtocol();
+    error InstanceHasNoVault();
+    error VaultMismatch();
+    error VaultNotDeployed();
+    error InstanceHasNoTreasury();
+    error MissingInstanceType();
+    error NameAlreadyTaken();
+    error TargetNotActive();
+    error TokenNotInTarget();
+    error VaultMustBeContract();
+    error VaultAlreadyInArray();
+    error NoVaults();
+    error NoAlignmentToken();
+    error NotAgentConductor();
+    error GrandCentralNotSet();
+
     // ── Core State ──
     uint256 public nextFactoryId;
     bool private _initialized;
@@ -39,8 +64,15 @@ contract MasterRegistryV1 is UUPSUpgradeable, Ownable, IMasterRegistry {
     IAlignmentRegistry public alignmentRegistry;
     IComponentRegistry public componentRegistry;
 
+    // ── Agent Management ──
+    mapping(address => bool) public isAgent;
+    IGrandCentral public grandCentral;
+
     // Events
+    event AlignmentRegistrySet(address indexed oldRegistry, address indexed newRegistry);
     event CreatorInstanceAdded(address indexed creator, address indexed instance);
+    event AgentUpdated(address indexed agent, bool authorized);
+    event GrandCentralSet(address indexed grandCentral);
 
     constructor() {
         _initializeOwner(msg.sender);
@@ -51,8 +83,8 @@ contract MasterRegistryV1 is UUPSUpgradeable, Ownable, IMasterRegistry {
      * @param _owner Address of the DAO or owner
      */
     function initialize(address _owner) public {
-        require(!_initialized, "Already initialized");
-        require(_owner != address(0), "Invalid owner");
+        if (_initialized) revert AlreadyInitialized();
+        if (_owner == address(0)) revert InvalidAddress();
 
         _initialized = true;
         _setOwner(_owner);
@@ -62,16 +94,42 @@ contract MasterRegistryV1 is UUPSUpgradeable, Ownable, IMasterRegistry {
     // ============ Alignment Registry Wiring ============
 
     function setAlignmentRegistry(address _alignmentRegistry) external onlyOwner {
-        require(_alignmentRegistry != address(0), "Invalid registry");
+        if (_alignmentRegistry == address(0)) revert InvalidAddress();
+        address old = address(alignmentRegistry);
         alignmentRegistry = IAlignmentRegistry(_alignmentRegistry);
+        emit AlignmentRegistrySet(old, _alignmentRegistry);
     }
 
     // ============ ComponentRegistry Wiring ============
 
     function setComponentRegistry(address _componentRegistry) external onlyOwner {
-        require(_componentRegistry != address(0), "Invalid registry");
+        if (_componentRegistry == address(0)) revert InvalidAddress();
         componentRegistry = IComponentRegistry(_componentRegistry);
         emit ComponentRegistrySet(_componentRegistry);
+    }
+
+    // ============ GrandCentral Wiring ============
+
+    function setGrandCentral(address _grandCentral) external onlyOwner {
+        if (_grandCentral == address(0)) revert InvalidAddress();
+        grandCentral = IGrandCentral(_grandCentral);
+        emit GrandCentralSet(_grandCentral);
+    }
+
+    // ============ Agent Management ============
+
+    /// @notice Authorize or deauthorize a protocol agent (DAO only, via Timelock)
+    function setAgent(address agent, bool authorized) external onlyOwner {
+        isAgent[agent] = authorized;
+        emit AgentUpdated(agent, authorized);
+    }
+
+    /// @notice Emergency agent revocation (agent conductor, no Timelock)
+    function revokeAgent(address agent) external {
+        if (address(grandCentral) == address(0)) revert GrandCentralNotSet();
+        if (!grandCentral.isAgentConductor(msg.sender)) revert NotAgentConductor();
+        isAgent[agent] = false;
+        emit AgentUpdated(agent, false);
     }
 
     // ============ Factory Registration ============
@@ -87,14 +145,14 @@ contract MasterRegistryV1 is UUPSUpgradeable, Ownable, IMasterRegistry {
         string memory metadataURI,
         bytes32[] memory features
     ) external onlyOwner {
-        require(factoryAddress != address(0), "Invalid factory address");
-        require(bytes(contractType).length > 0, "Invalid contract type");
-        require(!registeredFactories[factoryAddress], "Factory already registered");
-        require(MetadataUtils.isValidName(title), "Invalid title");
-        require(MetadataUtils.isValidURI(metadataURI), "Invalid metadata URI");
+        if (factoryAddress == address(0)) revert InvalidAddress();
+        if (bytes(contractType).length == 0) revert InvalidContractType();
+        if (registeredFactories[factoryAddress]) revert AlreadyRegistered();
+        if (!MetadataUtils.isValidName(title)) revert InvalidTitle();
+        if (!MetadataUtils.isValidURI(metadataURI)) revert InvalidMetadataURI();
 
         address factoryProtocol = IFactory(factoryAddress).protocol();
-        require(factoryProtocol != address(0), "Factory has no protocol");
+        if (factoryProtocol == address(0)) revert FactoryHasNoProtocol();
 
         uint256 factoryId = nextFactoryId++;
         factoryIdToAddress[factoryId] = factoryAddress;
@@ -120,8 +178,8 @@ contract MasterRegistryV1 is UUPSUpgradeable, Ownable, IMasterRegistry {
     // ============ Factory Deactivation ============
 
     function deactivateFactory(address factoryAddress) external override onlyOwner {
-        require(registeredFactories[factoryAddress], "Factory not registered");
-        require(factoryInfo[factoryAddress].active, "Factory already inactive");
+        if (!registeredFactories[factoryAddress]) revert NotRegistered();
+        if (!factoryInfo[factoryAddress].active) revert FactoryNotActive();
         factoryInfo[factoryAddress].active = false;
         emit FactoryDeactivated(factoryAddress, factoryInfo[factoryAddress].factoryId);
     }
@@ -139,29 +197,26 @@ contract MasterRegistryV1 is UUPSUpgradeable, Ownable, IMasterRegistry {
         string memory metadataURI,
         address vault
     ) external override {
-        require(registeredFactories[factory], "Factory not registered");
-        require(factoryInfo[factory].active, "Factory not active");
-        require(msg.sender == factory, "Only factory can register instance");
-        require(instance != address(0), "Invalid instance");
-        require(creator != address(0), "Invalid creator");
-        require(MetadataUtils.isValidName(name), "Invalid name");
-        require(MetadataUtils.isValidURI(metadataURI), "Invalid metadata URI");
+        if (!registeredFactories[factory]) revert NotRegistered();
+        if (!factoryInfo[factory].active) revert FactoryNotActive();
+        if (msg.sender != factory) revert Unauthorized();
+        if (instance == address(0)) revert InvalidAddress();
+        if (creator == address(0)) revert InvalidAddress();
+        if (!MetadataUtils.isValidName(name)) revert InvalidName();
+        if (!MetadataUtils.isValidURI(metadataURI)) revert InvalidMetadataURI();
 
         address instanceVault = IFactoryInstance(instance).vault();
-        require(instanceVault != address(0), "Instance has no vault");
-        require(instanceVault == vault, "Vault mismatch");
-        require(instanceVault.code.length > 0, "Vault not deployed");
+        if (instanceVault == address(0)) revert InstanceHasNoVault();
+        if (instanceVault != vault) revert VaultMismatch();
+        if (instanceVault.code.length == 0) revert VaultNotDeployed();
 
         address instanceTreasury = IFactoryInstance(instance).protocolTreasury();
-        require(instanceTreasury != address(0), "Instance has no treasury");
+        if (instanceTreasury == address(0)) revert InstanceHasNoTreasury();
 
-        require(
-            IInstanceLifecycle(instance).instanceType() != bytes32(0),
-            "Instance must implement IInstanceLifecycle"
-        );
+        if (IInstanceLifecycle(instance).instanceType() == bytes32(0)) revert MissingInstanceType();
 
         bytes32 nameHash = MetadataUtils.toNameHash(name);
-        require(!nameHashes[nameHash], "Name already taken");
+        if (nameHashes[nameHash]) revert NameAlreadyTaken();
 
         nameHashes[nameHash] = true;
 
@@ -187,17 +242,17 @@ contract MasterRegistryV1 is UUPSUpgradeable, Ownable, IMasterRegistry {
 
     function getFactoryInfo(uint256 factoryId) external view returns (FactoryInfo memory) {
         address factoryAddress = factoryIdToAddress[factoryId];
-        require(factoryAddress != address(0), "Factory not found");
+        if (factoryAddress == address(0)) revert NotRegistered();
         return factoryInfo[factoryAddress];
     }
 
     function getFactoryInfoByAddress(address factoryAddress) external view returns (FactoryInfo memory) {
-        require(registeredFactories[factoryAddress], "Factory not registered");
+        if (!registeredFactories[factoryAddress]) revert NotRegistered();
         return factoryInfo[factoryAddress];
     }
 
     function getInstanceInfo(address instance) external view returns (IMasterRegistry.InstanceInfo memory) {
-        require(instanceInfo[instance].instance != address(0), "Instance not found");
+        if (instanceInfo[instance].instance == address(0)) revert NotRegistered();
         return instanceInfo[instance];
     }
 
@@ -241,19 +296,19 @@ contract MasterRegistryV1 is UUPSUpgradeable, Ownable, IMasterRegistry {
         uint256 targetId
     ) external override {
         bool isActiveFactory = registeredFactories[msg.sender] && factoryInfo[msg.sender].active;
-        require(isActiveFactory || msg.sender == owner(), "Not authorized");
+        if (!isActiveFactory && msg.sender != owner()) revert Unauthorized();
 
-        require(vault != address(0), "Invalid vault address");
-        require(creator != address(0), "Invalid creator");
-        require(bytes(name).length > 0 && bytes(name).length <= 256, "Invalid name");
-        require(!registeredVaults[vault], "Vault already registered");
-        require(MetadataUtils.isValidURI(metadataURI), "Invalid metadata URI");
-        require(vault.code.length > 0, "Vault must be a contract");
+        if (vault == address(0)) revert InvalidAddress();
+        if (creator == address(0)) revert InvalidAddress();
+        if (bytes(name).length == 0 || bytes(name).length > 256) revert InvalidName();
+        if (registeredVaults[vault]) revert AlreadyRegistered();
+        if (!MetadataUtils.isValidURI(metadataURI)) revert InvalidMetadataURI();
+        if (vault.code.length == 0) revert VaultMustBeContract();
 
         // Alignment validation via AlignmentRegistry
-        require(alignmentRegistry.isAlignmentTargetActive(targetId), "Target not active");
+        if (!alignmentRegistry.isAlignmentTargetActive(targetId)) revert TargetNotActive();
         address vaultToken = _getVaultAlignmentToken(vault);
-        require(alignmentRegistry.isTokenInTarget(targetId, vaultToken), "Token not in target assets");
+        if (!alignmentRegistry.isTokenInTarget(targetId, vaultToken)) revert TokenNotInTarget();
 
         registeredVaults[vault] = true;
 
@@ -271,7 +326,7 @@ contract MasterRegistryV1 is UUPSUpgradeable, Ownable, IMasterRegistry {
     }
 
     function getVaultInfo(address vault) external view override returns (VaultInfo memory) {
-        require(registeredVaults[vault], "Vault not registered");
+        if (!registeredVaults[vault]) revert NotRegistered();
         return vaultInfo[vault];
     }
 
@@ -280,7 +335,7 @@ contract MasterRegistryV1 is UUPSUpgradeable, Ownable, IMasterRegistry {
     }
 
     function deactivateVault(address vault) external override onlyOwner {
-        require(registeredVaults[vault], "Vault not registered");
+        if (!registeredVaults[vault]) revert NotRegistered();
         vaultInfo[vault].active = false;
         emit VaultDeactivated(vault);
     }
@@ -288,16 +343,16 @@ contract MasterRegistryV1 is UUPSUpgradeable, Ownable, IMasterRegistry {
     // ============ Instance Vault Migration ============
 
     function migrateVault(address instance, address newVault) external override {
-        require(msg.sender == instance, "Only instance can migrate");
-        require(instanceInfo[instance].instance != address(0), "Instance not registered");
-        require(registeredVaults[newVault] && vaultInfo[newVault].active, "New vault not active");
+        if (msg.sender != instance) revert Unauthorized();
+        if (instanceInfo[instance].instance == address(0)) revert NotRegistered();
+        if (!registeredVaults[newVault] || !vaultInfo[newVault].active) revert FactoryNotActive();
 
         address[] storage vaults = instanceInfo[instance].vaults;
         uint256 genesisTargetId = vaultInfo[vaults[0]].targetId;
-        require(vaultInfo[newVault].targetId == genesisTargetId, "Vault target mismatch");
+        if (vaultInfo[newVault].targetId != genesisTargetId) revert VaultMismatch();
 
         for (uint256 i = 0; i < vaults.length; i++) {
-            require(vaults[i] != newVault, "Vault already in array");
+            if (vaults[i] == newVault) revert VaultAlreadyInArray();
         }
 
         vaults.push(newVault);
@@ -310,7 +365,7 @@ contract MasterRegistryV1 is UUPSUpgradeable, Ownable, IMasterRegistry {
 
     function getActiveVault(address instance) external view override returns (address) {
         address[] storage vaults = instanceInfo[instance].vaults;
-        require(vaults.length > 0, "No vaults");
+        if (vaults.length == 0) revert NoVaults();
         return vaults[vaults.length - 1];
     }
 
@@ -320,11 +375,8 @@ contract MasterRegistryV1 is UUPSUpgradeable, Ownable, IMasterRegistry {
         (bool success, bytes memory data) = vault.staticcall(
             abi.encodeWithSignature("alignmentToken()")
         );
-        require(success && data.length >= 32, "Vault has no alignment token");
+        if (!success || data.length < 32) revert NoAlignmentToken();
         return abi.decode(data, (address));
     }
 
-    // ============ UUPS ============
-
-    function _authorizeUpgrade(address newImplementation) internal override onlyOwner {}
 }

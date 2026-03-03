@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import { UUPSUpgradeable } from "solady/utils/UUPSUpgradeable.sol";
-import { Ownable } from "solady/auth/Ownable.sol";
+import { SafeOwnableUUPS } from "../shared/SafeOwnableUUPS.sol";
 import { SafeTransferLib } from "solady/utils/SafeTransferLib.sol";
 import { IMasterRegistry } from "../master/interfaces/IMasterRegistry.sol";
 import { IGlobalMessageRegistry } from "./interfaces/IGlobalMessageRegistry.sol";
@@ -16,7 +15,17 @@ import { IGlobalMessageRegistry } from "./interfaces/IGlobalMessageRegistry.sol"
  *      All message data is emitted via events for off-chain indexing.
  *      UUPS upgradeable. Owner is the DAO via Timelock.
  */
-contract GlobalMessageRegistry is UUPSUpgradeable, Ownable, IGlobalMessageRegistry {
+contract GlobalMessageRegistry is SafeOwnableUUPS, IGlobalMessageRegistry {
+
+    // ┌─────────────────────────┐
+    // │      Custom Errors      │
+    // └─────────────────────────┘
+
+    error InvalidAddress();
+    error InstanceMustBeCaller();
+    error NotFromApprovedFactory();
+    error EmptyBatch();
+    error NoETHToWithdraw();
 
     // ┌─────────────────────────┐
     // │      State Variables    │
@@ -42,6 +51,7 @@ contract GlobalMessageRegistry is UUPSUpgradeable, Ownable, IGlobalMessageRegist
     );
 
     event MasterRegistrySet(address indexed masterRegistry);
+    event ETHWithdrawn(address indexed to, uint256 amount);
 
     // ┌─────────────────────────┐
     // │      Constructor        │
@@ -52,15 +62,13 @@ contract GlobalMessageRegistry is UUPSUpgradeable, Ownable, IGlobalMessageRegist
     }
 
     function initialize(address _owner, address _masterRegistry) public {
-        require(!_initialized, "Already initialized");
-        require(_owner != address(0), "Invalid owner");
-        require(_masterRegistry != address(0), "Invalid master registry");
+        if (_initialized) revert AlreadyInitialized();
+        if (_owner == address(0)) revert InvalidAddress();
+        if (_masterRegistry == address(0)) revert InvalidAddress();
         _initialized = true;
         _setOwner(_owner);
         masterRegistry = IMasterRegistry(_masterRegistry);
     }
-
-    function _authorizeUpgrade(address) internal override onlyOwner {}
 
     // ┌─────────────────────────┐
     // │    Write Functions      │
@@ -78,12 +86,9 @@ contract GlobalMessageRegistry is UUPSUpgradeable, Ownable, IGlobalMessageRegist
         address instance,
         bytes calldata messageData
     ) external override {
-        require(instance == msg.sender, "Instance must be caller");
-        require(
-            masterRegistry.isInstanceFromApprovedFactory(msg.sender),
-            "Not from approved factory"
-        );
-        require(sender != address(0), "Invalid sender");
+        if (instance != msg.sender) revert InstanceMustBeCaller();
+        if (!masterRegistry.isInstanceFromApprovedFactory(msg.sender)) revert NotFromApprovedFactory();
+        if (sender == address(0)) revert InvalidAddress();
 
         _post(instance, sender, messageData);
     }
@@ -137,7 +142,7 @@ contract GlobalMessageRegistry is UUPSUpgradeable, Ownable, IGlobalMessageRegist
      */
     function postBatch(PostParams[] calldata posts) external {
         uint256 len = posts.length;
-        require(len > 0, "Empty batch");
+        if (len == 0) revert EmptyBatch();
 
         uint256 id = messageCount;
         for (uint256 i; i < len; ++i) {
@@ -160,15 +165,16 @@ contract GlobalMessageRegistry is UUPSUpgradeable, Ownable, IGlobalMessageRegist
     // └─────────────────────────┘
 
     function setMasterRegistry(address _masterRegistry) external onlyOwner {
-        require(_masterRegistry != address(0), "Invalid master registry");
+        if (_masterRegistry == address(0)) revert InvalidAddress();
         masterRegistry = IMasterRegistry(_masterRegistry);
         emit MasterRegistrySet(_masterRegistry);
     }
 
     function withdrawETH() external onlyOwner {
         uint256 balance = address(this).balance;
-        require(balance > 0, "No ETH to withdraw");
+        if (balance == 0) revert NoETHToWithdraw();
         SafeTransferLib.safeTransferETH(msg.sender, balance);
+        emit ETHWithdrawn(msg.sender, balance);
     }
 
     // ┌─────────────────────────┐

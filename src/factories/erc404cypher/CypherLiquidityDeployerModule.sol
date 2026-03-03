@@ -8,12 +8,21 @@ import {IAlgebraFactory, IAlgebraPool, IAlgebraNFTPositionManager} from "../../i
 import {CypherAlignmentVault} from "../../vaults/cypher/CypherAlignmentVault.sol";
 import {Currency} from "v4-core/types/Currency.sol";
 import {ILiquidityDeployerModule} from "../../interfaces/ILiquidityDeployerModule.sol";
+import {RevenueSplitLib} from "../../shared/libraries/RevenueSplitLib.sol";
+
+interface IWETH {
+    function deposit() external payable;
+}
 
 /// @title CypherLiquidityDeployerModule
 /// @notice Called by ERC404BondingInstance at graduation.
 ///         Creates Algebra pool, mints LP to vault, registers benefactor.
 contract CypherLiquidityDeployerModule is ILiquidityDeployerModule {
     using FixedPointMathLib for uint256;
+
+    error ETHMismatch();
+    error InvalidParams();
+    error ZeroLiquidity();
 
     address public immutable algebraFactory;
     address public immutable positionManager;
@@ -49,8 +58,8 @@ contract CypherLiquidityDeployerModule is ILiquidityDeployerModule {
     /// @dev Caller must have pre-transferred tokenReserve to this contract.
     ///      ETH must equal p.ethReserve exactly.
     function deployLiquidity(DeployParams calldata p) external payable override {
-        require(msg.value == p.ethReserve, "ETH mismatch");
-        require(p.token != address(0) && p.vault != address(0), "Invalid params");
+        if (msg.value != p.ethReserve) revert ETHMismatch();
+        if (p.token == address(0) || p.vault == address(0)) revert InvalidParams();
 
         PoolSetupResult memory r = _setupPool(p);
         _postMint(p, r);
@@ -58,9 +67,10 @@ contract CypherLiquidityDeployerModule is ILiquidityDeployerModule {
 
     function _setupPool(ILiquidityDeployerModule.DeployParams calldata p) private returns (PoolSetupResult memory r) {
         // Fixed 1/19/80 split: 1% protocol, 19% vault, 80% LP
-        r.protocolFee = p.ethReserve / 100;
-        r.vaultCut    = (p.ethReserve * 19) / 100;
-        r.ethToLP     = p.ethReserve - r.protocolFee - r.vaultCut;
+        RevenueSplitLib.Split memory s = RevenueSplitLib.split(p.ethReserve);
+        r.protocolFee = s.protocolCut;
+        r.vaultCut    = s.vaultCut;
+        r.ethToLP     = s.remainder;
 
         // ── Compute sqrtPriceX96 internally from token ordering ──
         bool tokenIsZero = p.token < weth;
@@ -71,8 +81,7 @@ contract CypherLiquidityDeployerModule is ILiquidityDeployerModule {
         );
 
         // ── Wrap ETH to WETH for LP ──
-        (bool depositOk,) = weth.call{value: r.ethToLP}(abi.encodeWithSignature("deposit()"));
-        require(depositOk, "WETH deposit failed");
+        IWETH(weth).deposit{value: r.ethToLP}();
 
         // ── Create Algebra pool ──
         r.pool = IAlgebraFactory(algebraFactory).createPool(p.token, weth, "");
@@ -102,7 +111,7 @@ contract CypherLiquidityDeployerModule is ILiquidityDeployerModule {
                 deadline: block.timestamp
             })
         );
-        require(liquidity > 0, "Zero liquidity");
+        if (liquidity == 0) revert ZeroLiquidity();
     }
 
     function _postMint(ILiquidityDeployerModule.DeployParams calldata p, PoolSetupResult memory r) private {

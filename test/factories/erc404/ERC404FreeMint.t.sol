@@ -102,6 +102,7 @@ contract ERC404FreeMintTest is Test {
     }
 
     function _deploy(uint256 alloc, GatingScope scope, address gatingModule) internal returns (ERC404BondingInstance) {
+        vm.prank(creator);
         address inst = factory.createInstance(
             _identity(), "ipfs://meta", address(mockDeployer), gatingModule,
             _freeMint(alloc, scope)
@@ -125,7 +126,7 @@ contract ERC404FreeMintTest is Test {
 
     function test_freeMint_claim_mintsOneUnit() public {
         ERC404BondingInstance inst = _deploy(FREE_MINT_COUNT, GatingScope.BOTH, address(0));
-        uint256 unit = inst.UNIT();
+        uint256 unit = inst.unit();
 
         vm.prank(user1);
         inst.claimFreeMint("");
@@ -176,12 +177,12 @@ contract ERC404FreeMintTest is Test {
     function test_freeMint_reducesEffectiveBondingCap() public {
         // NFT_COUNT=10, free=3 → bonding cap covers 7 NFTs worth
         ERC404BondingInstance inst = _deploy(FREE_MINT_COUNT, GatingScope.BOTH, address(0));
-        uint256 unit = inst.UNIT();
-        uint256 cap = inst.MAX_SUPPLY() - inst.LIQUIDITY_RESERVE() - (FREE_MINT_COUNT * unit);
-        // totalBondingSupply starts at 0; can buy up to cap, not full MAX_SUPPLY
+        uint256 unit = inst.unit();
+        uint256 cap = inst.maxSupply() - inst.liquidityReserve() - (FREE_MINT_COUNT * unit);
+        // totalBondingSupply starts at 0; can buy up to cap, not full maxSupply
         assertEq(inst.freeMintAllocation(), FREE_MINT_COUNT);
         // Verify the contract holds full supply
-        assertEq(inst.balanceOf(address(inst)), inst.MAX_SUPPLY());
+        assertEq(inst.balanceOf(address(inst)), inst.maxSupply());
     }
 
     // ── GatingScope: BOTH ──────────────────────────────────────────────────────
@@ -204,12 +205,11 @@ contract ERC404FreeMintTest is Test {
         });
         tierGatingModule.configureFor(address(0), tiers); // pre-configure (factory passes address(0))
 
-        vm.startPrank(protocol);
+        vm.prank(creator);
         address inst = factory.createInstance(
             _identity(), "ipfs://meta", address(mockDeployer), address(tierGatingModule),
             _freeMint(FREE_MINT_COUNT, GatingScope.BOTH)
         );
-        vm.stopPrank();
 
         ERC404BondingInstance instance = ERC404BondingInstance(payable(inst));
 
@@ -241,12 +241,11 @@ contract ERC404FreeMintTest is Test {
             tierUnlockTimes: new uint256[](0)
         }));
 
-        vm.startPrank(protocol);
+        vm.prank(creator);
         address inst = factory.createInstance(
             _identity(), "ipfs://meta", address(mockDeployer), address(tierGatingModule),
             _freeMint(FREE_MINT_COUNT, GatingScope.FREE_MINT_ONLY)
         );
-        vm.stopPrank();
 
         ERC404BondingInstance instance = ERC404BondingInstance(payable(inst));
 
@@ -258,7 +257,7 @@ contract ERC404FreeMintTest is Test {
         vm.stopPrank();
 
         // Buy with no password (open tier = bytes32(0)) — should succeed because scope is FREE_MINT_ONLY
-        uint256 buyAmount = instance.UNIT();
+        uint256 buyAmount = instance.unit();
         uint256 maxCost = 10 ether; // generous cap; exact cost not the point of this test
         vm.deal(user1, maxCost);
         vm.prank(user1);
@@ -285,12 +284,11 @@ contract ERC404FreeMintTest is Test {
             tierUnlockTimes: new uint256[](0)
         }));
 
-        vm.startPrank(protocol);
+        vm.prank(creator);
         address inst = factory.createInstance(
             _identity(), "ipfs://meta", address(mockDeployer), address(tierGatingModule),
             _freeMint(FREE_MINT_COUNT, GatingScope.PAID_ONLY)
         );
-        vm.stopPrank();
 
         ERC404BondingInstance instance = ERC404BondingInstance(payable(inst));
 

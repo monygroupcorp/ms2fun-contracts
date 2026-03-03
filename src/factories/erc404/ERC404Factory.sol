@@ -67,16 +67,38 @@ contract ERC404Factory is OwnableRoles, ReentrancyGuard, IFactory {
         address indexed vault
     );
     event VaultCapabilityWarning(address indexed vault, bytes32 indexed capability);
+    error ProtocolRoleNotTransferable();
+    error InvalidAddress();
+    error InvalidImplementation();
+    error InvalidGlobalMessageRegistry();
+    error InvalidLaunchManager();
+    error InvalidComponentRegistry();
+    error InvalidNftCount();
+    error InvalidName();
+    error InvalidSymbol();
+    error InvalidOwner();
+    error VaultRequired();
+    error VaultMustBeContract();
+    error NameAlreadyTaken();
+    error FreeMintAllocationExceedsNftCount();
+    error UnapprovedLiquidityDeployer();
+    error UnapprovedGatingModule();
+    error UnapprovedCurveComputer();
+    error TreasuryNotSet();
+    error NoProtocolFees();
+    error MaxBondingFeeExceeded();
+    error NotAuthorizedAgent();
+
     event ProtocolTreasuryUpdated(address indexed oldTreasury, address indexed newTreasury);
     event ProtocolFeesWithdrawn(address indexed treasury, uint256 amount);
     event BondingFeeUpdated(uint256 newBps);
 
     constructor(CoreConfig memory core, ModuleConfig memory modules) {
-        require(core.implementation != address(0), "Invalid implementation");
-        require(core.protocol != address(0), "Invalid protocol");
-        require(modules.globalMessageRegistry != address(0), "Invalid global message registry");
-        require(modules.launchManager != address(0), "Invalid launch manager");
-        require(modules.componentRegistry != address(0), "Invalid component registry");
+        if (core.implementation == address(0)) revert InvalidImplementation();
+        if (core.protocol == address(0)) revert InvalidAddress();
+        if (modules.globalMessageRegistry == address(0)) revert InvalidGlobalMessageRegistry();
+        if (modules.launchManager == address(0)) revert InvalidLaunchManager();
+        if (modules.componentRegistry == address(0)) revert InvalidComponentRegistry();
         _initializeOwner(core.protocol);
         _grantRoles(core.protocol, PROTOCOL_ROLE);
         implementation = core.implementation;
@@ -85,6 +107,25 @@ contract ERC404Factory is OwnableRoles, ReentrancyGuard, IFactory {
         launchManager = LaunchManager(modules.launchManager);
         tierGatingModule = PasswordTierGatingModule(modules.tierGatingModule);
         componentRegistry = IComponentRegistry(modules.componentRegistry);
+    }
+
+    /// @notice Transfer PROTOCOL_ROLE to a new address. Only callable by current PROTOCOL_ROLE holder.
+    function transferProtocolRole(address newProtocol) external onlyRoles(PROTOCOL_ROLE) {
+        if (newProtocol == address(0)) revert InvalidAddress();
+        _removeRoles(msg.sender, PROTOCOL_ROLE);
+        _grantRoles(newProtocol, PROTOCOL_ROLE);
+    }
+
+    /// @dev Prevent owner from granting/revoking PROTOCOL_ROLE via the base OwnableRoles interface.
+    function grantRoles(address user, uint256 roles) public payable override onlyOwner {
+        if (roles & PROTOCOL_ROLE != 0) revert ProtocolRoleNotTransferable();
+        super.grantRoles(user, roles);
+    }
+
+    /// @dev Prevent owner from granting/revoking PROTOCOL_ROLE via the base OwnableRoles interface.
+    function revokeRoles(address user, uint256 roles) public payable override onlyOwner {
+        if (roles & PROTOCOL_ROLE != 0) revert ProtocolRoleNotTransferable();
+        super.revokeRoles(user, roles);
     }
 
     /// @notice Create an instance with a caller-supplied liquidity deployer and optional gating module.
@@ -99,7 +140,7 @@ contract ERC404Factory is OwnableRoles, ReentrancyGuard, IFactory {
         FreeMintParams calldata freeMint
     ) external payable nonReentrant returns (address instance) {
         if (gatingModule != address(0)) {
-            require(componentRegistry.isApprovedComponent(gatingModule), "Unapproved gating module");
+            if (!componentRegistry.isApprovedComponent(gatingModule)) revert UnapprovedGatingModule();
         }
         return _createInstanceCore(identity, metadataURI, liquidityDeployer, gatingModule, freeMint);
     }
@@ -130,17 +171,25 @@ contract ERC404Factory is OwnableRoles, ReentrancyGuard, IFactory {
         accumulatedProtocolFees += msg.value;
 
         // Validate identity
-        require(identity.nftCount > 0, "Invalid NFT count");
-        require(bytes(identity.name).length > 0, "Invalid name");
-        require(bytes(identity.symbol).length > 0, "Invalid symbol");
-        require(identity.owner != address(0), "Invalid owner");
-        require(identity.vault != address(0), "Vault required");
-        require(identity.vault.code.length > 0, "Vault must be a contract");
-        require(!masterRegistry.isNameTaken(identity.name), "Name already taken");
-        require(freeMint.allocation < identity.nftCount, "Free mint allocation exceeds NFT count");
+        if (identity.nftCount == 0) revert InvalidNftCount();
+        if (bytes(identity.name).length == 0) revert InvalidName();
+        if (bytes(identity.symbol).length == 0) revert InvalidSymbol();
+        if (identity.owner == address(0)) revert InvalidOwner();
+        if (identity.vault == address(0)) revert VaultRequired();
+        if (identity.vault.code.length == 0) revert VaultMustBeContract();
+
+        // Agent-on-behalf-of check
+        bool agentCreated = false;
+        if (msg.sender != identity.owner) {
+            if (!masterRegistry.isAgent(msg.sender)) revert NotAuthorizedAgent();
+            agentCreated = true;
+        }
+
+        if (masterRegistry.isNameTaken(identity.name)) revert NameAlreadyTaken();
+        if (freeMint.allocation >= identity.nftCount) revert FreeMintAllocationExceedsNftCount();
 
         // Validate liquidity deployer
-        require(componentRegistry.isApprovedComponent(liquidityDeployer), "Unapproved liquidity deployer");
+        if (!componentRegistry.isApprovedComponent(liquidityDeployer)) revert UnapprovedLiquidityDeployer();
 
         // Soft vault capability check
         try IAlignmentVault(payable(identity.vault)).supportsCapability(keccak256("YIELD_GENERATION"))
@@ -152,7 +201,7 @@ contract ERC404Factory is OwnableRoles, ReentrancyGuard, IFactory {
 
         // Deploy clone and initialize via helpers (avoids stack-too-deep)
         instance = LibClone.clone(implementation);
-        _initializeInstance(instance, identity, liquidityDeployer, gatingModule, freeMint);
+        _initializeInstance(instance, identity, liquidityDeployer, gatingModule, freeMint, agentCreated);
         _finalizeInstance(instance, identity, metadataURI);
     }
 
@@ -161,11 +210,12 @@ contract ERC404Factory is OwnableRoles, ReentrancyGuard, IFactory {
         IdentityParams calldata identity,
         address liquidityDeployer,
         address gatingModule,
-        FreeMintParams calldata freeMint
+        FreeMintParams calldata freeMint,
+        bool agentCreated
     ) private {
         // Fetch preset and validate its curve computer
         LaunchManager.Preset memory preset = launchManager.getPreset(identity.presetId);
-        require(componentRegistry.isApprovedComponent(preset.curveComputer), "Unapproved curve computer");
+        if (!componentRegistry.isApprovedComponent(preset.curveComputer)) revert UnapprovedCurveComputer();
 
         uint256 unit = preset.unitPerNFT * 1e18;
         // Curve is computed over the paid-bonding portion only (excludes free mint tranche)
@@ -200,6 +250,9 @@ contract ERC404Factory is OwnableRoles, ReentrancyGuard, IFactory {
         ERC404BondingInstance(payable(instance)).initializeFreeMint(
             freeMint.allocation, freeMint.scope
         );
+        if (agentCreated) {
+            ERC404BondingInstance(payable(instance)).setAgentDelegationFromFactory();
+        }
     }
 
     function _finalizeInstance(
@@ -240,23 +293,23 @@ contract ERC404Factory is OwnableRoles, ReentrancyGuard, IFactory {
     }
 
     function setProtocolTreasury(address _treasury) external onlyRoles(PROTOCOL_ROLE) {
-        require(_treasury != address(0), "Invalid treasury");
+        if (_treasury == address(0)) revert InvalidAddress();
         address old = protocolTreasury;
         protocolTreasury = _treasury;
         emit ProtocolTreasuryUpdated(old, _treasury);
     }
 
     function withdrawProtocolFees() external onlyRoles(PROTOCOL_ROLE) {
-        require(protocolTreasury != address(0), "Treasury not set");
+        if (protocolTreasury == address(0)) revert TreasuryNotSet();
         uint256 amount = accumulatedProtocolFees;
-        require(amount > 0, "No protocol fees");
+        if (amount == 0) revert NoProtocolFees();
         accumulatedProtocolFees = 0;
         SafeTransferLib.safeTransferETH(protocolTreasury, amount);
         emit ProtocolFeesWithdrawn(protocolTreasury, amount);
     }
 
     function setBondingFeeBps(uint256 _bps) external onlyRoles(PROTOCOL_ROLE) {
-        require(_bps <= 300, "Max 3%");
+        if (_bps > 300) revert MaxBondingFeeExceeded();
         bondingFeeBps = _bps;
         emit BondingFeeUpdated(_bps);
     }

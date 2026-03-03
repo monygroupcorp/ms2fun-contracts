@@ -135,6 +135,17 @@ contract MockMasterRegistry is IMasterRegistry {
 
     function setComponentRegistry(address) external override {}
 
+    // Agent tracking for testing
+    mapping(address => bool) private _agents;
+
+    function isAgent(address agent) external view returns (bool) {
+        return _agents[agent];
+    }
+
+    function setAgent(address agent, bool authorized) external {
+        _agents[agent] = authorized;
+    }
+
     // Namespace tracking for name collision tests
     mapping(bytes32 => bool) private _nameHashes;
 

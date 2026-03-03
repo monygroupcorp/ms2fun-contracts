@@ -72,6 +72,12 @@ contract ZAMMAlignmentVault is IAlignmentVault, Ownable, ReentrancyGuard {
     using SafeERC20 for IERC20;
     using FixedPointMathLib for uint256;
 
+    // ── Solady ReentrancyGuard slot ─────────────────────────────────────
+    // Mirrors Solady's `_REENTRANCY_GUARD_SLOT` (private constant).
+    // Derived as: uint72(bytes9(keccak256("_REENTRANCY_GUARD_SLOT")))
+    // If Solady changes this slot, the static assert below will fail at compile time.
+    uint256 private constant _RG_SLOT = 0x929eee149b4bd21268;
+
     // ── Errors ────────────────────────────────────────────────────────────
     error VaultAlreadyInitialized();
     error ETHOnly();
@@ -79,11 +85,18 @@ contract ZAMMAlignmentVault is IAlignmentVault, Ownable, ReentrancyGuard {
     error NotDelegate();
     error ZeroContributions();
     error InsufficientOutput();
+    error TransferFailed();
+    error ExceedsMaxBps();
 
     // ── Events ────────────────────────────────────────────────────────────
     event LiquidityAdded(uint256 ethSwapped, uint256 tokenReceived, uint256 lpMinted, uint256 callerReward);
     event Harvested(uint256 totalFees, uint256 benefactorFees, uint256 callerReward);
     event DelegateSet(address indexed benefactor, address indexed delegate);
+    event ConversionRewardUpdated(uint256 newReward);
+    event HarvestRewardUpdated(uint256 newReward);
+    event ProtocolYieldCutUpdated(uint256 newBps);
+    event ProtocolTreasuryUpdated(address indexed oldTreasury, address indexed newTreasury);
+    event ProtocolFeesWithdrawn(uint256 amount);
 
     // ── Core config (locked post-init) ───────────────────────────────────
     address public zamm;
@@ -158,9 +171,7 @@ contract ZAMMAlignmentVault is IAlignmentVault, Ownable, ReentrancyGuard {
     }
 
     function _isLocked() internal view returns (bool locked) {
-        // Solady ReentrancyGuard sets slot 0x929eee149b4bd21268 to address() while locked.
-        uint256 slot = 0x929eee149b4bd21268;
-        assembly { locked := eq(sload(slot), address()) }
+        assembly { locked := eq(sload(_RG_SLOT), address()) }
     }
 
     function receiveContribution(Currency currency, uint256 /*amount*/, address benefactor)
@@ -216,7 +227,7 @@ contract ZAMMAlignmentVault is IAlignmentVault, Ownable, ReentrancyGuard {
         IZAMM.Pool memory pool = IZAMM(zamm).pools(poolId);
         uint256 ethToSwap;
         if (pool.reserve0 == 0) {
-            ethToSwap = deployETH / 2;
+            ethToSwap = deployETH / 2; // round down: extra wei goes to LP side
         } else {
             uint256 r0 = pool.reserve0;
             ethToSwap = FixedPointMathLib.sqrt(r0 * r0 + deployETH * r0) - r0;
@@ -235,15 +246,15 @@ contract ZAMMAlignmentVault is IAlignmentVault, Ownable, ReentrancyGuard {
             delete pendingContribution[b];
             if (contrib == 0) continue;
 
-            uint256 settled = contrib * deployETH / totalEth;
-            rewardDebt[b] += settled * accRewardPerContribution / 1e18;
+            uint256 settled = contrib * deployETH / totalEth; // round down: dust stays unallocated
+            rewardDebt[b] += settled * accRewardPerContribution / 1e18; // round down: benefactor cannot over-claim
             benefactorContribution[b] += settled;
             totalContributions += settled;
         }
 
         if (reward > 0) {
             (bool ok,) = msg.sender.call{value: reward}("");
-            require(ok);
+            if (!ok) revert TransferFailed();
         }
 
         emit LiquidityAdded(ethToSwap, r.tokenBought, lpMinted, reward);
@@ -268,8 +279,15 @@ contract ZAMMAlignmentVault is IAlignmentVault, Ownable, ReentrancyGuard {
         );
     }
 
-    function setConversionReward(uint256 amount) external onlyOwner { conversionReward = amount; }
-    function setHarvestReward(uint256 amount) external onlyOwner { harvestReward = amount; }
+    function setConversionReward(uint256 amount) external onlyOwner {
+        conversionReward = amount;
+        emit ConversionRewardUpdated(amount);
+    }
+
+    function setHarvestReward(uint256 amount) external onlyOwner {
+        harvestReward = amount;
+        emit HarvestRewardUpdated(amount);
+    }
 
     // ── harvest ───────────────────────────────────────────────────────────
 
@@ -285,11 +303,11 @@ contract ZAMMAlignmentVault is IAlignmentVault, Ownable, ReentrancyGuard {
         uint256 totalSupply = pool.supply;
         if (totalSupply == 0) return 0;
 
-        uint256 currentETH = uint256(pool.reserve0) * lpHeld / totalSupply;
+        uint256 currentETH = uint256(pool.reserve0) * lpHeld / totalSupply; // round down: conservative ETH valuation
         uint256 ethFees = currentETH > principalETH ? currentETH - principalETH : 0;
         if (ethFees == 0) return 0;
 
-        uint256 feeLP = lpHeld * ethFees / currentETH;
+        uint256 feeLP = lpHeld * ethFees / currentETH; // round down: slightly fewer LP tokens burned
         if (feeLP == 0) return 0;
 
         feesCollected = _removeFeeLP(feeLP, minEthOut);
@@ -298,21 +316,21 @@ contract ZAMMAlignmentVault is IAlignmentVault, Ownable, ReentrancyGuard {
         if (reward > feesCollected) reward = feesCollected;
         uint256 afterReward = feesCollected - reward;
 
-        uint256 protocolCut = afterReward * protocolYieldCutBps / 10000;
+        uint256 protocolCut = afterReward * protocolYieldCutBps / 10000; // round down: favors benefactors
         uint256 benefactorFees = afterReward - protocolCut;
 
         accumulatedProtocolFees += protocolCut;
 
         if (benefactorFees > 0 && totalContributions > 0) {
-            accRewardPerContribution += benefactorFees * 1e18 / totalContributions;
+            accRewardPerContribution += benefactorFees * 1e18 / totalContributions; // round down: dust stays in vault
         }
 
-        principalETH -= (principalETH * feeLP / lpHeld);
-        principalToken -= (principalToken * feeLP / lpHeld);
+        principalETH -= (principalETH * feeLP / lpHeld); // round down: slightly over-estimates remaining principal
+        principalToken -= (principalToken * feeLP / lpHeld); // round down: slightly over-estimates remaining principal
 
         if (reward > 0) {
             (bool ok,) = msg.sender.call{value: reward}("");
-            require(ok);
+            if (!ok) revert TransferFailed();
         }
 
         emit Harvested(feesCollected, benefactorFees, reward);
@@ -363,7 +381,7 @@ contract ZAMMAlignmentVault is IAlignmentVault, Ownable, ReentrancyGuard {
     function calculateClaimableAmount(address benefactor) external view override returns (uint256) {
         uint256 contrib = benefactorContribution[benefactor];
         if (contrib == 0) return 0;
-        return contrib * accRewardPerContribution / 1e18 - rewardDebt[benefactor];
+        return contrib * accRewardPerContribution / 1e18 - rewardDebt[benefactor]; // round down: favors vault
     }
 
     function _claim(address benefactor) internal returns (uint256 ethClaimed) {
@@ -376,11 +394,11 @@ contract ZAMMAlignmentVault is IAlignmentVault, Ownable, ReentrancyGuard {
     function _claimTo(address benefactor, address recipient) internal returns (uint256 ethClaimed) {
         uint256 contrib = benefactorContribution[benefactor];
         if (contrib == 0) return 0;
-        uint256 pending = contrib * accRewardPerContribution / 1e18 - rewardDebt[benefactor];
+        uint256 pending = contrib * accRewardPerContribution / 1e18 - rewardDebt[benefactor]; // round down: favors vault
         if (pending == 0) return 0;
-        rewardDebt[benefactor] = contrib * accRewardPerContribution / 1e18;
+        rewardDebt[benefactor] = contrib * accRewardPerContribution / 1e18; // round down: benefactor cannot over-claim
         (bool ok,) = recipient.call{value: pending}("");
-        require(ok);
+        if (!ok) revert TransferFailed();
         ethClaimed = pending;
         emit FeesClaimed(benefactor, pending);
     }
@@ -388,19 +406,23 @@ contract ZAMMAlignmentVault is IAlignmentVault, Ownable, ReentrancyGuard {
     // ── Governance (owner only) ───────────────────────────────────────────
 
     function setProtocolYieldCutBps(uint256 bps) external onlyOwner {
-        require(bps <= 10000);
+        if (bps > 10000) revert ExceedsMaxBps();
         protocolYieldCutBps = bps;
+        emit ProtocolYieldCutUpdated(bps);
     }
 
     function setProtocolTreasury(address treasury_) external onlyOwner {
+        address old = protocolTreasury;
         protocolTreasury = treasury_;
+        emit ProtocolTreasuryUpdated(old, treasury_);
     }
 
     function withdrawProtocolFees() external {
         uint256 amount = accumulatedProtocolFees;
         accumulatedProtocolFees = 0;
         (bool ok,) = protocolTreasury.call{value: amount}("");
-        require(ok);
+        if (!ok) revert TransferFailed();
+        emit ProtocolFeesWithdrawn(amount);
     }
 
     // ── View helpers ──────────────────────────────────────────────────────

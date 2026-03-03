@@ -166,7 +166,7 @@ contract ERC404FactoryTest is Test {
     function test_createInstance_vaultRequired() public {
         vm.deal(creator1, 1 ether);
         vm.startPrank(creator1);
-        vm.expectRevert("Vault required");
+        vm.expectRevert(ERC404Factory.VaultRequired.selector);
         factory.createInstance{value: INSTANCE_CREATION_FEE}(
             IdentityParams({
                 owner: creator1,
@@ -189,7 +189,7 @@ contract ERC404FactoryTest is Test {
     function test_createInstance_invalidName() public {
         vm.deal(creator1, 1 ether);
         vm.startPrank(creator1);
-        vm.expectRevert("Invalid name");
+        vm.expectRevert(ERC404Factory.InvalidName.selector);
         factory.createInstance{value: INSTANCE_CREATION_FEE}(
             _identity("", "TEST", creator1),
             "ipfs://metadata",
@@ -203,7 +203,7 @@ contract ERC404FactoryTest is Test {
     function test_createInstance_invalidSymbol() public {
         vm.deal(creator1, 1 ether);
         vm.startPrank(creator1);
-        vm.expectRevert("Invalid symbol");
+        vm.expectRevert(ERC404Factory.InvalidSymbol.selector);
         factory.createInstance{value: INSTANCE_CREATION_FEE}(
             _identity("TestToken", "", creator1),
             "ipfs://metadata",
@@ -217,7 +217,7 @@ contract ERC404FactoryTest is Test {
     function test_createInstance_invalidNftCount() public {
         vm.deal(creator1, 1 ether);
         vm.startPrank(creator1);
-        vm.expectRevert("Invalid NFT count");
+        vm.expectRevert(ERC404Factory.InvalidNftCount.selector);
         factory.createInstance{value: INSTANCE_CREATION_FEE}(
             IdentityParams({
                 owner: creator1,
@@ -240,7 +240,7 @@ contract ERC404FactoryTest is Test {
     function test_createInstance_invalidCreator() public {
         vm.deal(creator1, 1 ether);
         vm.startPrank(creator1);
-        vm.expectRevert("Invalid owner");
+        vm.expectRevert(ERC404Factory.InvalidOwner.selector);
         factory.createInstance{value: INSTANCE_CREATION_FEE}(
             IdentityParams({
                 owner: address(0),
@@ -351,6 +351,8 @@ contract ERC404FactoryTest is Test {
 
     function test_createInstance_differentCreator() public {
         vm.deal(creator1, 1 ether);
+        // creator1 must be a registered agent to create on behalf of creator2
+        mockRegistry.setAgent(creator1, true);
         vm.startPrank(creator1);
         address instance = factory.createInstance{value: INSTANCE_CREATION_FEE}(
             _identity("TestToken", "TEST", creator2),
@@ -360,6 +362,8 @@ contract ERC404FactoryTest is Test {
             FreeMintParams({allocation: 0, scope: GatingScope.BOTH})
         );
         assertTrue(instance != address(0));
+        // Agent-created instance should have delegation enabled
+        assertTrue(ERC404BondingInstance(payable(instance)).agentDelegationEnabled());
         vm.stopPrank();
     }
 
@@ -383,7 +387,7 @@ contract ERC404FactoryTest is Test {
 
     function test_SetProtocolTreasury_RevertZeroAddress() public {
         vm.startPrank(protocolAdmin);
-        vm.expectRevert("Invalid treasury");
+        vm.expectRevert(ERC404Factory.InvalidAddress.selector);
         factory.setProtocolTreasury(address(0));
         vm.stopPrank();
     }
@@ -413,7 +417,7 @@ contract ERC404FactoryTest is Test {
 
     function test_WithdrawProtocolFees_RevertNoTreasury() public {
         vm.startPrank(protocolAdmin);
-        vm.expectRevert("Treasury not set");
+        vm.expectRevert(ERC404Factory.TreasuryNotSet.selector);
         factory.withdrawProtocolFees();
         vm.stopPrank();
     }
@@ -421,7 +425,7 @@ contract ERC404FactoryTest is Test {
     function test_WithdrawProtocolFees_RevertNoBalance() public {
         vm.startPrank(protocolAdmin);
         factory.setProtocolTreasury(address(0xBEEF));
-        vm.expectRevert("No protocol fees");
+        vm.expectRevert(ERC404Factory.NoProtocolFees.selector);
         factory.withdrawProtocolFees();
         vm.stopPrank();
     }
@@ -439,7 +443,7 @@ contract ERC404FactoryTest is Test {
 
     function test_SetBondingFeeBps_RevertExceedsCap() public {
         vm.startPrank(protocolAdmin);
-        vm.expectRevert("Max 3%");
+        vm.expectRevert(ERC404Factory.MaxBondingFeeExceeded.selector);
         factory.setBondingFeeBps(301);
         vm.stopPrank();
     }
@@ -483,7 +487,7 @@ contract ERC404FactoryTest is Test {
             fee: 0, featuredDuration: 0, featuredRankBoost: 0,
             badge: PromotionBadges.BadgeType.NONE, badgeDuration: 0
         });
-        vm.expectRevert("Fee must be positive");
+        vm.expectRevert(abi.encodeWithSignature("FeeMustBePositive()"));
         launchMgr.setTierConfig(LaunchManager.CreationTier.PREMIUM, config);
         vm.stopPrank();
     }
@@ -677,15 +681,15 @@ contract ERC404FactoryTest is Test {
         );
         assertTrue(instance != address(0));
         ERC404BondingInstance inst = ERC404BondingInstance(payable(instance));
-        assertEq(inst.MAX_SUPPLY(), 100 * 1e6 * 1e18);
-        assertEq(inst.UNIT(), 1e6 * 1e18);
+        assertEq(inst.maxSupply(), 100 * 1e6 * 1e18);
+        assertEq(inst.unit(), 1e6 * 1e18);
         vm.stopPrank();
     }
 
     function test_createInstance_inactivePresetReverts() public {
         vm.deal(creator1, 1 ether);
         vm.startPrank(creator1);
-        vm.expectRevert("Preset not active");
+        vm.expectRevert(abi.encodeWithSignature("PresetNotActive()"));
         factory.createInstance{value: INSTANCE_CREATION_FEE}(
             IdentityParams({
                 owner: creator1,
@@ -708,7 +712,7 @@ contract ERC404FactoryTest is Test {
     function test_createInstance_zeroNftCountReverts() public {
         vm.deal(creator1, 1 ether);
         vm.startPrank(creator1);
-        vm.expectRevert("Invalid NFT count");
+        vm.expectRevert(ERC404Factory.InvalidNftCount.selector);
         factory.createInstance{value: INSTANCE_CREATION_FEE}(
             IdentityParams({
                 owner: creator1,
@@ -733,7 +737,7 @@ contract ERC404FactoryTest is Test {
     function test_createInstance_validatesLiquidityDeployer() public {
         vm.deal(creator1, 1 ether);
         vm.prank(creator1);
-        vm.expectRevert("Unapproved liquidity deployer");
+        vm.expectRevert(ERC404Factory.UnapprovedLiquidityDeployer.selector);
         factory.createInstance{value: INSTANCE_CREATION_FEE}(
             _identity("Token", "TKN", creator1),
             "ipfs://",
@@ -765,7 +769,7 @@ contract ERC404FactoryTest is Test {
 
         vm.deal(creator1, 1 ether);
         vm.prank(creator1);
-        vm.expectRevert("Unapproved gating module");
+        vm.expectRevert(ERC404Factory.UnapprovedGatingModule.selector);
         factory.createInstance{value: INSTANCE_CREATION_FEE}(
             _identity("TestToken", "TEST", creator1),
             "ipfs://Qmtest",

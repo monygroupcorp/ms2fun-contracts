@@ -140,7 +140,7 @@ contract GrandCentralVotingTest is Test {
         dao.submitVote(uint32(id), true);
 
         vm.prank(founder);
-        vm.expectRevert("voted");
+        vm.expectRevert(GrandCentral.AlreadyVoted.selector);
         dao.submitVote(uint32(id), true);
     }
 
@@ -225,7 +225,7 @@ contract GrandCentralVotingTest is Test {
         vm.prank(founder);
         uint256 id = dao.submitProposal(t, v, c, 0, "test");
 
-        vm.expectRevert("!ready");
+        vm.expectRevert(GrandCentral.NotReady.selector);
         _process(uint32(id), t, v, c);
     }
 
@@ -235,7 +235,7 @@ contract GrandCentralVotingTest is Test {
         uint32 id = _createAndPassProposal(t, v, c);
 
         v[0] = 5 ether;
-        vm.expectRevert("incorrect calldata");
+        vm.expectRevert(GrandCentral.IncorrectCalldata.selector);
         _process(id, t, v, c);
     }
 
@@ -267,7 +267,7 @@ contract GrandCentralVotingTest is Test {
         vm.warp(block.timestamp + VOTING_PERIOD + 1);
 
         vm.prank(founder);
-        vm.expectRevert("!voting");
+        vm.expectRevert(GrandCentral.NotVoting.selector);
         dao.cancelProposal(uint32(id));
     }
 
@@ -286,7 +286,7 @@ contract GrandCentralVotingTest is Test {
     function test_FundRagequitPool_RevertIfInsufficientFunds() public {
         // Safe only has 100 ether
         vm.prank(address(dao));
-        vm.expectRevert("insufficient general funds");
+        vm.expectRevert(GrandCentral.InsufficientGeneralFunds.selector);
         dao.fundRagequitPool(200 ether);
     }
 
@@ -381,7 +381,7 @@ contract GrandCentralVotingTest is Test {
 
     function test_Ragequit_RevertIfZeroBurn() public {
         vm.prank(alice);
-        vm.expectRevert("zero burn");
+        vm.expectRevert(GrandCentral.ZeroBurn.selector);
         dao.ragequit(0, 0);
     }
 

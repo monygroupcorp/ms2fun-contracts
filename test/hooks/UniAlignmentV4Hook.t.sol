@@ -11,6 +11,7 @@ import {PoolKey} from "v4-core/types/PoolKey.sol";
 import {SafeCast} from "v4-core/libraries/SafeCast.sol";
 import {LPFeeLibrary} from "v4-core/libraries/LPFeeLibrary.sol";
 import {UniAlignmentVault} from "../../src/vaults/uni/UniAlignmentVault.sol";
+import {UniAlignmentV4Hook} from "../../src/factories/erc404/hooks/UniAlignmentV4Hook.sol";
 import {ReentrancyGuard} from "solady/utils/ReentrancyGuard.sol";
 import {Ownable} from "solady/auth/Ownable.sol";
 
@@ -263,7 +264,7 @@ contract UniAlignmentV4HookTest is Test {
         IPoolManager.SwapParams memory params = _buyParams(1000e18);
 
         vm.prank(address(mockPoolManager));
-        vm.expectRevert("Pool currency0 must be native ETH");
+        vm.expectRevert(UniAlignmentV4Hook.PoolCurrency0MustBeNativeETH.selector);
         hook.afterSwap(alice, key, params, delta, bytes(""));
     }
 
@@ -282,7 +283,7 @@ contract UniAlignmentV4HookTest is Test {
         BalanceDelta delta = toBalanceDelta(int128(-1000e18), int128(1000e18));
 
         vm.prank(address(mockPoolManager));
-        vm.expectRevert("Pool currency0 must be native ETH");
+        vm.expectRevert(UniAlignmentV4Hook.PoolCurrency0MustBeNativeETH.selector);
         hook.afterSwap(alice, key, _buyParams(1000e18), delta, bytes(""));
     }
 
@@ -406,7 +407,7 @@ contract UniAlignmentV4HookTest is Test {
 
     function test_setLpFeeRate_rejectsAboveMax() public {
         vm.prank(owner);
-        vm.expectRevert("Rate too high");
+        vm.expectRevert(UniAlignmentV4Hook.RateTooHigh.selector);
         hook.setLpFeeRate(uint24(LPFeeLibrary.MAX_LP_FEE + 1));
     }
 
@@ -459,7 +460,7 @@ contract UniAlignmentV4HookTest is Test {
         IPoolManager.SwapParams memory params = _buyParams(1 ether);
 
         vm.prank(alice);
-        vm.expectRevert("Unauthorized");
+        vm.expectRevert(Ownable.Unauthorized.selector);
         hook.beforeSwap(alice, key, params, bytes(""));
     }
 
@@ -470,7 +471,7 @@ contract UniAlignmentV4HookTest is Test {
         BalanceDelta delta = _buyDelta(1000e18, 500e18);
 
         vm.prank(alice);
-        vm.expectRevert("Unauthorized");
+        vm.expectRevert(Ownable.Unauthorized.selector);
         hook.afterSwap(alice, key, _buyParams(1000e18), delta, bytes(""));
     }
 
@@ -597,6 +598,12 @@ contract UniAlignmentV4HookTest is Test {
 contract TestableHook is ReentrancyGuard, Ownable {
     using SafeCast for uint256;
 
+    error InvalidAddress();
+    error HookFeeTooHigh();
+    error LpFeeTooHigh();
+    error PoolCurrency0MustBeNativeETH();
+    error RateTooHigh();
+
     IPoolManager public immutable poolManager;
     UniAlignmentVault public immutable vault;
     address public immutable weth;
@@ -614,11 +621,11 @@ contract TestableHook is ReentrancyGuard, Ownable {
         uint256 _hookFeeBips,
         uint24 _initialLpFeeRate
     ) {
-        require(address(_poolManager) != address(0), "Invalid pool manager");
-        require(address(_vault) != address(0), "Invalid vault");
-        require(_owner != address(0), "Invalid owner");
-        require(_hookFeeBips <= 10000, "Hook fee too high");
-        require(_initialLpFeeRate <= LPFeeLibrary.MAX_LP_FEE, "LP fee too high");
+        if (address(_poolManager) == address(0)) revert InvalidAddress();
+        if (address(_vault) == address(0)) revert InvalidAddress();
+        if (_owner == address(0)) revert InvalidAddress();
+        if (_hookFeeBips > 10000) revert HookFeeTooHigh();
+        if (_initialLpFeeRate > LPFeeLibrary.MAX_LP_FEE) revert LpFeeTooHigh();
 
         _initializeOwner(_owner);
         poolManager = _poolManager;
@@ -629,7 +636,7 @@ contract TestableHook is ReentrancyGuard, Ownable {
     }
 
     modifier onlyPoolManager() {
-        require(msg.sender == address(poolManager), "Unauthorized");
+        if (msg.sender != address(poolManager)) revert Unauthorized();
         _;
     }
 
@@ -655,7 +662,7 @@ contract TestableHook is ReentrancyGuard, Ownable {
         BalanceDelta delta,
         bytes calldata
     ) external onlyPoolManager returns (bytes4, int128) {
-        require(Currency.unwrap(key.currency0) == address(0), "Pool currency0 must be native ETH");
+        if (Currency.unwrap(key.currency0) != address(0)) revert PoolCurrency0MustBeNativeETH();
 
         int128 amount0 = delta.amount0();
         uint256 ethMoved = amount0 < 0 ? uint256(uint128(-amount0)) : uint256(uint128(amount0));
@@ -673,7 +680,7 @@ contract TestableHook is ReentrancyGuard, Ownable {
 
     /// @dev MIRRORS production setLpFeeRate exactly
     function setLpFeeRate(uint24 _rate) external onlyOwner {
-        require(_rate <= LPFeeLibrary.MAX_LP_FEE, "Rate too high");
+        if (_rate > LPFeeLibrary.MAX_LP_FEE) revert RateTooHigh();
         lpFeeRate = _rate;
         emit LpFeeRateUpdated(_rate);
     }

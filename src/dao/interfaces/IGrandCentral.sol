@@ -131,6 +131,7 @@ interface IGrandCentral {
     function isAdmin(address conductor) external view returns (bool);
     function isManager(address conductor) external view returns (bool);
     function isGovernor(address conductor) external view returns (bool);
+    function isAgentConductor(address conductor) external view returns (bool);
     function setConductors(address[] calldata _conductors, uint256[] calldata _permissions) external;
     function mintShares(address[] calldata to, uint256[] calldata amount) external;
     function burnShares(address[] calldata from, uint256[] calldata amount) external;

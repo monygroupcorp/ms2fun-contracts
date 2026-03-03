@@ -409,5 +409,12 @@ contract ZAMMAlignmentVaultTest is Test {
         assertEq(vault.accumulatedProtocolFees(), 0);
     }
 
-}
+    // ── Solady slot invariant ────────────────────────────────────────────
 
+    function test_reentrancyGuardSlotMatchesSolady() public pure {
+        // Solady derives the slot as: uint72(bytes9(keccak256("_REENTRANCY_GUARD_SLOT")))
+        uint256 expected = uint256(uint72(bytes9(keccak256("_REENTRANCY_GUARD_SLOT"))));
+        assertEq(expected, 0x929eee149b4bd21268, "Solady reentrancy guard slot has changed");
+    }
+
+}

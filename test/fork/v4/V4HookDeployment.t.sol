@@ -8,6 +8,8 @@ import {UniAlignmentHookFactory} from "../../../src/factories/erc404/hooks/UniAl
 import {UniAlignmentV4Hook} from "../../../src/factories/erc404/hooks/UniAlignmentV4Hook.sol";
 import {UniAlignmentVault} from "../../../src/vaults/uni/UniAlignmentVault.sol";
 import {MockZRouter} from "../../mocks/MockZRouter.sol";
+import {MockAlignmentRegistry} from "../../mocks/MockAlignmentRegistry.sol";
+import {IAlignmentRegistry} from "../../../src/master/interfaces/IAlignmentRegistry.sol";
 import {MockVaultPriceValidator} from "../../mocks/MockVaultPriceValidator.sol";
 import {IVaultPriceValidator} from "../../../src/interfaces/IVaultPriceValidator.sol";
 import {LibClone} from "solady/utils/LibClone.sol";
@@ -49,6 +51,8 @@ contract V4HookDeploymentTest is ForkTestBase {
 
     UniAlignmentHookFactory public hookFactory;
     UniAlignmentVault public vault;
+    MockAlignmentRegistry public mockRegistry;
+    uint256 constant TARGET_ID = 1;
     IPoolManager public poolManager;
 
     bool public v4Available;
@@ -106,6 +110,11 @@ contract V4HookDeploymentTest is ForkTestBase {
 
         poolManager = IPoolManager(UNISWAP_V4_POOL_MANAGER);
 
+        // Setup mock alignment registry
+        mockRegistry = new MockAlignmentRegistry();
+        mockRegistry.setTargetActive(TARGET_ID, true);
+        mockRegistry.setTokenInTarget(TARGET_ID, USDC, true);
+
         // Deploy real vault (clone pattern)
         {
             UniAlignmentVault _impl = new UniAlignmentVault();
@@ -117,7 +126,9 @@ contract V4HookDeploymentTest is ForkTestBase {
                 address(new MockZRouter()),
                 3000,
                 60,
-                IVaultPriceValidator(address(new MockVaultPriceValidator()))
+                IVaultPriceValidator(address(new MockVaultPriceValidator())),
+                IAlignmentRegistry(address(mockRegistry)),
+                TARGET_ID
             );
         }
 

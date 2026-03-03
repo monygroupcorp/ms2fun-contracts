@@ -30,7 +30,7 @@ contract ERC404StakingModuleTest is Test {
     function test_enableStaking_onlyRegisteredInstance() public {
         // Unregistered address cannot enable staking
         vm.prank(address(0xDEAD));
-        vm.expectRevert("Not registered instance");
+        vm.expectRevert(ERC404StakingModule.NotRegisteredInstance.selector);
         module.enableStaking();
     }
 
@@ -44,13 +44,13 @@ contract ERC404StakingModuleTest is Test {
         vm.prank(instance1);
         module.enableStaking();
         vm.prank(instance1);
-        vm.expectRevert("Already enabled");
+        vm.expectRevert(ERC404StakingModule.AlreadyEnabled.selector);
         module.enableStaking();
     }
 
     function test_recordStake_requiresStakingEnabled() public {
         vm.prank(instance1);
-        vm.expectRevert("Staking not enabled");
+        vm.expectRevert(ERC404StakingModule.StakingNotEnabled.selector);
         module.recordStake(user1, 100 ether);
     }
 
@@ -96,7 +96,7 @@ contract ERC404StakingModuleTest is Test {
         module.recordStake(user1, 100 ether);
 
         vm.prank(instance1);
-        vm.expectRevert("Insufficient staked balance");
+        vm.expectRevert(ERC404StakingModule.InsufficientStakedBalance.selector);
         module.recordUnstake(user1, 101 ether);
     }
 
@@ -186,7 +186,7 @@ contract ERC404StakingModuleTest is Test {
         module.recordStake(user1, 100 ether);
 
         vm.prank(instance1);
-        vm.expectRevert("No pending rewards");
+        vm.expectRevert(ERC404StakingModule.NoPendingRewards.selector);
         module.computeClaim(user1);
     }
 

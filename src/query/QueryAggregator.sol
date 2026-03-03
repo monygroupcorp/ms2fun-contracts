@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import {UUPSUpgradeable} from "solady/utils/UUPSUpgradeable.sol";
-import {Ownable} from "solady/auth/Ownable.sol";
+import {SafeOwnableUUPS} from "../shared/SafeOwnableUUPS.sol";
 import {IMasterRegistry} from "../master/interfaces/IMasterRegistry.sol";
 import {IAlignmentVault} from "../interfaces/IAlignmentVault.sol";
 import {IInstance} from "../interfaces/IInstance.sol";
@@ -54,8 +53,18 @@ interface IERC404Staking {
  *      - Individual instance contracts (dynamic card data)
  *
  *      Vault leaderboards and instance enumeration are handled off-chain via EventIndexer.
+ *
+ *      FAILURE TOLERANCE: All external calls in hydration/portfolio methods use silent
+ *      try/catch so that a single broken or upgraded contract never reverts the batch.
+ *      Missing data surfaces as zero-values / empty strings in the returned structs.
  */
-contract QueryAggregator is UUPSUpgradeable, Ownable {
+contract QueryAggregator is SafeOwnableUUPS {
+    // ============ Custom Errors ============
+
+    error InvalidAddress();
+    error LimitTooHigh();
+    error TooManyInstances();
+
     // ============ Data Structures ============
 
     /// @notice All data needed to render a project card in the UI
@@ -155,11 +164,11 @@ contract QueryAggregator is UUPSUpgradeable, Ownable {
         address _globalMessageRegistry,
         address _owner
     ) external {
-        require(!_initialized, "Already initialized");
-        require(_masterRegistry != address(0), "Invalid master registry");
-        require(_featuredQueueManager != address(0), "Invalid featured queue manager");
-        require(_globalMessageRegistry != address(0), "Invalid global message registry");
-        require(_owner != address(0), "Invalid owner");
+        if (_initialized) revert AlreadyInitialized();
+        if (_masterRegistry == address(0)) revert InvalidAddress();
+        if (_featuredQueueManager == address(0)) revert InvalidAddress();
+        if (_globalMessageRegistry == address(0)) revert InvalidAddress();
+        if (_owner == address(0)) revert InvalidAddress();
 
         _initialized = true;
         _setOwner(_owner);
@@ -186,7 +195,7 @@ contract QueryAggregator is UUPSUpgradeable, Ownable {
             uint256 totalFeatured
         )
     {
-        require(limit <= MAX_QUERY_LIMIT, "Limit too high");
+        if (limit > MAX_QUERY_LIMIT) revert LimitTooHigh();
 
         // Get active featured instances — getFeaturedInstances handles filtering,
         // pagination clamping, and returns the true active total in one call
@@ -210,7 +219,7 @@ contract QueryAggregator is UUPSUpgradeable, Ownable {
     function getProjectCardsBatch(address[] calldata instances)
         external view returns (ProjectCard[] memory cards)
     {
-        require(instances.length <= MAX_QUERY_LIMIT, "Too many instances");
+        if (instances.length > MAX_QUERY_LIMIT) revert TooManyInstances();
 
         cards = new ProjectCard[](instances.length);
         for (uint256 i = 0; i < instances.length; i++) {
@@ -285,61 +294,64 @@ contract QueryAggregator is UUPSUpgradeable, Ownable {
 
     /**
      * @notice Hydrate an instance address into a full ProjectCard
-     * @param instance Instance address
-     * @return card Fully populated ProjectCard
+     * @dev Each data source is fetched independently; any single failure
+     *      leaves that section as zero-values without affecting the rest.
      */
     function _hydrateProject(address instance) internal view returns (ProjectCard memory card) {
-        // 1. Get registry info
+        card.instance = instance;
+
+        // 1. Registry info (if this fails, we still populate what we can from other sources)
         try masterRegistry.getInstanceInfo(instance) returns (IMasterRegistry.InstanceInfo memory info) {
-            card.instance = instance;
             card.name = info.name;
             card.metadataURI = info.metadataURI;
             card.creator = info.creator;
             card.registeredAt = info.registeredAt;
             card.factory = info.factory;
-            address activeVault = info.vaults.length > 0 ? info.vaults[info.vaults.length - 1] : address(0);
-            card.vault = activeVault;
+            card.vault = info.vaults.length > 0 ? info.vaults[info.vaults.length - 1] : address(0);
+        } catch {}
 
-            // 2. Get factory info
-            try masterRegistry.getFactoryInfoByAddress(info.factory) returns (IMasterRegistry.FactoryInfo memory factoryInfo) {
-                card.contractType = factoryInfo.contractType;
-                card.factoryTitle = factoryInfo.title;
-            } catch {}
+        // 2–5 don't depend on step 1 succeeding — they use card fields or instance directly
+        _hydrateFactory(card);
+        _hydrateVault(card);
+        _hydrateCardData(card);
+        _hydrateFeatured(card);
+    }
 
-            // 3. Get vault info
-            if (activeVault != address(0)) {
-                try masterRegistry.getVaultInfo(activeVault) returns (IMasterRegistry.VaultInfo memory vaultInfo) {
-                    card.vaultName = vaultInfo.name;
-                } catch {}
+    function _hydrateFactory(ProjectCard memory card) private view {
+        if (card.factory == address(0)) return;
+        try masterRegistry.getFactoryInfoByAddress(card.factory) returns (IMasterRegistry.FactoryInfo memory info) {
+            card.contractType = info.contractType;
+            card.factoryTitle = info.title;
+        } catch {}
+    }
+
+    function _hydrateVault(ProjectCard memory card) private view {
+        if (card.vault == address(0)) return;
+        try masterRegistry.getVaultInfo(card.vault) returns (IMasterRegistry.VaultInfo memory info) {
+            card.vaultName = info.name;
+        } catch {}
+    }
+
+    function _hydrateCardData(ProjectCard memory card) private view {
+        try IInstance(card.instance).getCardData() returns (
+            uint256 price, uint256 supply, uint256 max, bool active, bytes memory extra
+        ) {
+            card.currentPrice = price;
+            card.totalSupply = supply;
+            card.maxSupply = max;
+            card.isActive = active;
+            card.extraData = extra;
+        } catch {}
+    }
+
+    function _hydrateFeatured(ProjectCard memory card) private view {
+        try featuredQueueManager.getRentalInfo(card.instance) returns (
+            address, uint256 rank, uint256 expires, bool active
+        ) {
+            if (active) {
+                card.featuredRank = rank;
+                card.featuredExpires = expires;
             }
-
-            // 4. Get dynamic data from instance
-            try IInstance(instance).getCardData() returns (
-                uint256 price,
-                uint256 supply,
-                uint256 maxSupply,
-                bool active,
-                bytes memory extra
-            ) {
-                card.currentPrice = price;
-                card.totalSupply = supply;
-                card.maxSupply = maxSupply;
-                card.isActive = active;
-                card.extraData = extra;
-            } catch {}
-
-            // 5. Get featured status
-            try featuredQueueManager.getRentalInfo(instance) returns (
-                address,
-                uint256 rank,
-                uint256 expires,
-                bool isActive
-            ) {
-                if (isActive) {
-                    card.featuredRank    = rank;
-                    card.featuredExpires = expires;
-                }
-            } catch {}
         } catch {}
     }
 
@@ -356,7 +368,7 @@ contract QueryAggregator is UUPSUpgradeable, Ownable {
         try IERC404Balance(instance).balanceOf(user) returns (uint256 balance) {
             holding.tokenBalance = balance;
             // NFT balance is tokenBalance / 1e24 (1M tokens per NFT)
-            holding.nftBalance = balance / (1000000 * 1e18);
+            holding.nftBalance = balance / (1000000 * 1e18); // round down: view-only, standard integer NFT count
         } catch {}
 
         // Get staking info
@@ -487,7 +499,4 @@ contract QueryAggregator is UUPSUpgradeable, Ownable {
         }
     }
 
-    // ============ UUPS ============
-
-    function _authorizeUpgrade(address) internal override onlyOwner {}
 }

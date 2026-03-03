@@ -49,6 +49,10 @@ error FreeMintDisabled();
 error FreeMintAlreadyClaimed();
 error FreeMintExhausted();
 error FreeMintNotInitialized();
+error PurchaseTooSmall();
+error OnlyFactory();
+error NotInitialized();
+error MetadataAlreadySet();
 
 /**
  * @title ERC404BondingInstance
@@ -85,10 +89,10 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IInstanceLife
     string private _name;
     string private _symbol;
 
-    uint256 public MAX_SUPPLY;
-    uint256 public LIQUIDITY_RESERVE;
+    uint256 public maxSupply;
+    uint256 public liquidityReserve;
     BondingCurveMath.Params public curveParams;
-    uint256 public UNIT;
+    uint256 public unit;
 
     address public factory;
     IAlignmentVault public vault;
@@ -108,6 +112,7 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IInstanceLife
 
     // Gating module (address(0) = open gating)
     IGatingModule public gatingModule;
+    bool public agentDelegationEnabled;
     bool public gatingActive;
 
     // Liquidity deployer — set once in initialize(), AMM-agnostic
@@ -133,6 +138,7 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IInstanceLife
     event RerollCompleted(address indexed user, uint256 tokensReturned);
     event BondingFeePaid(address indexed buyer, uint256 feeAmount);
     event FreeMintClaimed(address indexed user);
+    event AgentDelegationChanged(bool enabled);
 
     // ┌─────────────────────────┐
     // │      Constructor        │
@@ -169,10 +175,10 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IInstanceLife
         factory = msg.sender;
         vault = IAlignmentVault(payable(vault_));
 
-        MAX_SUPPLY = bonding.maxSupply;
-        LIQUIDITY_RESERVE = (bonding.maxSupply * bonding.liquidityReservePercent) / 100;
+        maxSupply = bonding.maxSupply;
+        liquidityReserve = (bonding.maxSupply * bonding.liquidityReservePercent) / 100; // round down: slightly less reserved for LP
         curveParams = bonding.curve;
-        UNIT = bonding.unit;
+        unit = bonding.unit;
 
         liquidityDeployer = ILiquidityDeployerModule(_liquidityDeployer);
         gatingModule = IGatingModule(_gatingModule);
@@ -186,8 +192,8 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IInstanceLife
      * @notice Set protocol params. Called by factory immediately after initialize().
      */
     function initializeProtocol(ProtocolParams calldata protocol) external {
-        require(msg.sender == factory, "Only factory");
-        require(_initialized, "Not initialized");
+        if (msg.sender != factory) revert OnlyFactory();
+        if (!_initialized) revert NotInitialized();
 
         if (protocol.globalMessageRegistry == address(0)) revert InvalidGlobalMessageRegistry();
 
@@ -205,8 +211,8 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IInstanceLife
         string calldata symbol_,
         string calldata styleUri_
     ) external {
-        require(msg.sender == factory, "Only factory");
-        require(bytes(_name).length == 0, "Already set");
+        if (msg.sender != factory) revert OnlyFactory();
+        if (bytes(_name).length != 0) revert MetadataAlreadySet();
         _name = name_;
         _symbol = symbol_;
         styleUri = styleUri_;
@@ -216,11 +222,24 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IInstanceLife
     /// @param allocation NFT count reserved for free claims (0 = disabled).
     /// @param scope      Controls which entry points the gating module guards.
     function initializeFreeMint(uint256 allocation, GatingScope scope) external {
-        require(msg.sender == factory, "Only factory");
-        require(!_freeMintInitialized, "Already set");
+        if (msg.sender != factory) revert OnlyFactory();
+        if (_freeMintInitialized) revert AlreadyInitialized();
         _freeMintInitialized = true;
         freeMintAllocation = allocation;
         gatingScope = scope;
+    }
+
+    /// @notice Toggle agent delegation for this instance
+    function setAgentDelegation(bool enabled) external {
+        if (msg.sender != owner()) revert InvalidOwner();
+        agentDelegationEnabled = enabled;
+        emit AgentDelegationChanged(enabled);
+    }
+
+    /// @notice Called by factory to enable delegation for agent-created instances
+    function setAgentDelegationFromFactory() external {
+        if (msg.sender != factory) revert OnlyFactory();
+        agentDelegationEnabled = true;
     }
 
     /// @notice Claim one free mint (= 1 NFT worth of tokens) at zero ETH cost.
@@ -232,15 +251,15 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IInstanceLife
 
         if (address(gatingModule) != address(0) && gatingActive
             && gatingScope != GatingScope.PAID_ONLY) {
-            (bool allowed, bool permanent) = gatingModule.canMint(msg.sender, UNIT, gatingData);
+            (bool allowed, bool permanent) = gatingModule.canMint(msg.sender, unit, gatingData);
             if (!allowed) revert GatingNotAllowed();
             if (permanent) gatingActive = false;
-            gatingModule.onMint(msg.sender, UNIT);
+            gatingModule.onMint(msg.sender, unit);
         }
 
         freeMintClaimed[msg.sender] = true;
         freeMintsClaimed++;
-        _transfer(address(this), msg.sender, UNIT);
+        _transfer(address(this), msg.sender, unit);
         emit FreeMintClaimed(msg.sender);
     }
 
@@ -301,7 +320,7 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IInstanceLife
         if (deadline != 0 && block.timestamp > deadline) revert TransactionExpired();
         if (!bondingActive) revert BondingNotActive();
         if (graduated) revert BondingEnded();
-        if (totalBondingSupply + amount > MAX_SUPPLY - LIQUIDITY_RESERVE - (freeMintAllocation * UNIT)) revert ExceedsBonding();
+        if (totalBondingSupply + amount > maxSupply - liquidityReserve - (freeMintAllocation * unit)) revert ExceedsBonding();
 
         // Gating check (address(0) or gatingActive==false = open)
         if (address(gatingModule) != address(0) && gatingActive
@@ -314,7 +333,8 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IInstanceLife
         }
 
         uint256 totalCost = BondingCurveMath.calculateCost(curveParams, totalBondingSupply, amount);
-        uint256 bondingFee = (totalCost * bondingFeeBps) / 10000;
+        if (totalCost == 0) revert PurchaseTooSmall();
+        uint256 bondingFee = (totalCost * bondingFeeBps) / 10000; // round down: favors buyer
         uint256 totalWithFee = totalCost + bondingFee;
         if (maxCost < totalWithFee) revert MaxCostExceeded();
         if (msg.value < totalWithFee) revert LowETHValue();
@@ -359,7 +379,7 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IInstanceLife
         if (!bondingActive) revert BondingNotActive();
         if (graduated) revert BondingEnded();
 
-        uint256 maxBondingSupply = MAX_SUPPLY - LIQUIDITY_RESERVE - (freeMintAllocation * UNIT);
+        uint256 maxBondingSupply = maxSupply - liquidityReserve - (freeMintAllocation * unit);
         if (totalBondingSupply >= maxBondingSupply) revert ExceedsBonding();
 
         uint256 balance = balanceOf(msg.sender);
@@ -399,7 +419,7 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IInstanceLife
         if (tokenAmount < exemptCount * unit) revert TokenAmountMustRepresentNFT();
 
         uint256 rerollAmount = tokenAmount - (exemptCount * unit);
-        if (rerollAmount / unit == 0) revert TokenAmountMustRepresentNFT();
+        if (rerollAmount / unit == 0) revert TokenAmountMustRepresentNFT(); // round down: standard integer NFT count
 
         uint256 balanceBefore = addressData.balance;
 
@@ -439,7 +459,7 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IInstanceLife
         if (graduated) revert AlreadyDeployed();
         if (reserve == 0) revert NoReserve();
 
-        uint256 maxBondingSupply = MAX_SUPPLY - LIQUIDITY_RESERVE - (freeMintAllocation * UNIT);
+        uint256 maxBondingSupply = maxSupply - liquidityReserve - (freeMintAllocation * unit);
         bool isFull = totalBondingSupply >= maxBondingSupply;
         bool isMatured = bondingMaturityTime != 0 && block.timestamp >= bondingMaturityTime;
         if (!isFull && !isMatured) {
@@ -451,12 +471,12 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IInstanceLife
         reserve = 0;
         bondingActive = false;
 
-        _transfer(address(this), address(liquidityDeployer), LIQUIDITY_RESERVE);
+        _transfer(address(this), address(liquidityDeployer), liquidityReserve);
 
         liquidityDeployer.deployLiquidity{value: ethToSend}(
             ILiquidityDeployerModule.DeployParams({
                 ethReserve: ethToSend,
-                tokenReserve: LIQUIDITY_RESERVE,
+                tokenReserve: liquidityReserve,
                 protocolTreasury: protocolTreasury,
                 vault: address(vault),
                 token: address(this),
@@ -465,7 +485,7 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IInstanceLife
         );
 
         graduated = true;
-        emit LiquidityDeployed(address(liquidityDeployer), LIQUIDITY_RESERVE, ethToSend);
+        emit LiquidityDeployed(address(liquidityDeployer), liquidityReserve, ethToSend);
         emit StateChanged(STATE_GRADUATED);
     }
 
@@ -481,7 +501,7 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IInstanceLife
 
     function name() public view override returns (string memory) { return _name; }
     function symbol() public view override returns (string memory) { return _symbol; }
-    function _unit() internal view override returns (uint256) { return UNIT; }
+    function _unit() internal view override returns (uint256) { return unit; }
     function _tokenURI(uint256) internal pure override returns (string memory) { return ""; }
     function _skipNFTDefault(address) internal pure override returns (bool) { return false; }
 

@@ -6,6 +6,35 @@ import {IGrandCentral} from "./interfaces/IGrandCentral.sol";
 import {IAvatar, Operation} from "./interfaces/IAvatar.sol";
 
 contract GrandCentral is IGrandCentral, ReentrancyGuard {
+    // ============ Custom Errors ============
+
+    error InvalidAddress();
+    error AmountMustBePositive();
+    error Unauthorized();
+    error ArrayLengthMismatch();
+    error InsufficientShares();
+    error InsufficientLoot();
+    error ProposalExpired();
+    error EmptyProposal();
+    error NotSubmitted();
+    error NotVoting();
+    error NotReady();
+    error NotMember();
+    error AlreadyVoted();
+    error PreviousProposalNotProcessed();
+    error IncorrectCalldata();
+    error NotCancellable();
+    error InsufficientGeneralFunds();
+    error NoMembers();
+    error ZeroBurn();
+    error NothingToClaim();
+    error AdminLockActive();
+    error ManagerLockActive();
+    error GovernorLockActive();
+    error VotingPeriodTooShort();
+    error GracePeriodTooShort();
+    error InsufficientSponsorShares();
+
     // ============ Share Accounting ============
 
     mapping(address => uint256) public shares;
@@ -52,7 +81,7 @@ contract GrandCentral is IGrandCentral, ReentrancyGuard {
     address public immutable safe;
 
     // ============ Conductor System ============
-    // Permissions: 1=admin, 2=manager, 4=governor (bitmask)
+    // Permissions: 1=admin, 2=manager, 4=governor, 8=agentConductor (bitmask)
 
     mapping(address => uint256) public conductors;
     bool public adminLock;
@@ -62,17 +91,17 @@ contract GrandCentral is IGrandCentral, ReentrancyGuard {
     // ============ Modifiers ============
 
     modifier daoOnly() {
-        require(msg.sender == address(this), "!dao");
+        if (msg.sender != address(this)) revert Unauthorized();
         _;
     }
 
     modifier daoOrManager() {
-        require(msg.sender == address(this) || isManager(msg.sender), "!dao & !manager");
+        if (msg.sender != address(this) && !isManager(msg.sender)) revert Unauthorized();
         _;
     }
 
     modifier daoOrGovernor() {
-        require(msg.sender == address(this) || isGovernor(msg.sender), "!dao & !governor");
+        if (msg.sender != address(this) && !isGovernor(msg.sender)) revert Unauthorized();
         _;
     }
 
@@ -88,10 +117,10 @@ contract GrandCentral is IGrandCentral, ReentrancyGuard {
         uint256 _sponsorThreshold,
         uint256 _minRetentionPercent
     ) {
-        require(_safe != address(0), "invalid safe");
-        require(_founder != address(0), "invalid founder");
-        require(_initialShares > 0, "no shares");
-        require(_votingPeriod > 0, "no voting period");
+        if (_safe == address(0)) revert InvalidAddress();
+        if (_founder == address(0)) revert InvalidAddress();
+        if (_initialShares == 0) revert AmountMustBePositive();
+        if (_votingPeriod == 0) revert VotingPeriodTooShort();
 
         safe = _safe;
         votingPeriod = _votingPeriod;
@@ -106,14 +135,14 @@ contract GrandCentral is IGrandCentral, ReentrancyGuard {
     // ============ Share Management ============
 
     function mintShares(address[] calldata to, uint256[] calldata amount) external daoOrManager {
-        require(to.length == amount.length, "!array parity");
+        if (to.length != amount.length) revert ArrayLengthMismatch();
         for (uint256 i = 0; i < to.length; i++) {
             _mintShares(to[i], amount[i]);
         }
     }
 
     function burnShares(address[] calldata from, uint256[] calldata amount) external daoOrManager {
-        require(from.length == amount.length, "!array parity");
+        if (from.length != amount.length) revert ArrayLengthMismatch();
         for (uint256 i = 0; i < from.length; i++) {
             _burnShares(from[i], amount[i]);
         }
@@ -128,13 +157,13 @@ contract GrandCentral is IGrandCentral, ReentrancyGuard {
         _writeCheckpoint(_memberCheckpoints[to], uint224(shares[to]));
         _writeCheckpoint(_totalSharesCheckpoints, uint224(totalShares));
 
-        rewardDebt[to] = (shares[to] + loot[to]) * rewardPerShare / PRECISION;
+        rewardDebt[to] = (shares[to] + loot[to]) * rewardPerShare / PRECISION; // round down: member cannot over-claim
 
         emit SharesMinted(to, amount);
     }
 
     function _burnShares(address from, uint256 amount) internal {
-        require(shares[from] >= amount, "insufficient shares");
+        if (shares[from] < amount) revert InsufficientShares();
 
         _settleClaims(from);
 
@@ -144,7 +173,7 @@ contract GrandCentral is IGrandCentral, ReentrancyGuard {
         _writeCheckpoint(_memberCheckpoints[from], uint224(shares[from]));
         _writeCheckpoint(_totalSharesCheckpoints, uint224(totalShares));
 
-        rewardDebt[from] = (shares[from] + loot[from]) * rewardPerShare / PRECISION;
+        rewardDebt[from] = (shares[from] + loot[from]) * rewardPerShare / PRECISION; // round down: member cannot over-claim
 
         emit SharesBurned(from, amount);
     }
@@ -152,14 +181,14 @@ contract GrandCentral is IGrandCentral, ReentrancyGuard {
     // ============ Loot Management ============
 
     function mintLoot(address[] calldata to, uint256[] calldata amount) external daoOrManager {
-        require(to.length == amount.length, "!array parity");
+        if (to.length != amount.length) revert ArrayLengthMismatch();
         for (uint256 i = 0; i < to.length; i++) {
             _mintLoot(to[i], amount[i]);
         }
     }
 
     function burnLoot(address[] calldata from, uint256[] calldata amount) external daoOrManager {
-        require(from.length == amount.length, "!array parity");
+        if (from.length != amount.length) revert ArrayLengthMismatch();
         for (uint256 i = 0; i < from.length; i++) {
             _burnLoot(from[i], amount[i]);
         }
@@ -174,13 +203,13 @@ contract GrandCentral is IGrandCentral, ReentrancyGuard {
         _writeCheckpoint(_memberLootCheckpoints[to], uint224(loot[to]));
         _writeCheckpoint(_totalLootCheckpoints, uint224(totalLoot));
 
-        rewardDebt[to] = (shares[to] + loot[to]) * rewardPerShare / PRECISION;
+        rewardDebt[to] = (shares[to] + loot[to]) * rewardPerShare / PRECISION; // round down: member cannot over-claim
 
         emit LootMinted(to, amount);
     }
 
     function _burnLoot(address from, uint256 amount) internal {
-        require(loot[from] >= amount, "insufficient loot");
+        if (loot[from] < amount) revert InsufficientLoot();
 
         _settleClaims(from);
 
@@ -190,7 +219,7 @@ contract GrandCentral is IGrandCentral, ReentrancyGuard {
         _writeCheckpoint(_memberLootCheckpoints[from], uint224(loot[from]));
         _writeCheckpoint(_totalLootCheckpoints, uint224(totalLoot));
 
-        rewardDebt[from] = (shares[from] + loot[from]) * rewardPerShare / PRECISION;
+        rewardDebt[from] = (shares[from] + loot[from]) * rewardPerShare / PRECISION; // round down: member cannot over-claim
 
         emit LootBurned(from, amount);
     }
@@ -200,7 +229,7 @@ contract GrandCentral is IGrandCentral, ReentrancyGuard {
     function _settleClaims(address member) internal {
         uint256 weight = shares[member] + loot[member];
         if (weight > 0 && rewardPerShare > 0) {
-            uint256 pending = (weight * rewardPerShare / PRECISION) - rewardDebt[member];
+            uint256 pending = (weight * rewardPerShare / PRECISION) - rewardDebt[member]; // round down: favors pool
             if (pending > 0) {
                 claimsPoolBalance -= pending;
                 IAvatar(safe).execTransactionFromModule(member, pending, "", Operation.Call);
@@ -245,7 +274,7 @@ contract GrandCentral is IGrandCentral, ReentrancyGuard {
         uint256 low = 0;
         uint256 high = len - 1;
         while (low < high) {
-            uint256 mid = (low + high + 1) / 2;
+            uint256 mid = (low + high + 1) / 2; // round up: standard upper-bound binary search
             if (ckpts[mid].timestamp <= timestamp) {
                 low = mid;
             } else {
@@ -264,12 +293,9 @@ contract GrandCentral is IGrandCentral, ReentrancyGuard {
         uint32 expiration,
         string calldata details
     ) external nonReentrant returns (uint256) {
-        require(targets.length == values.length && values.length == calldatas.length, "!array parity");
-        require(targets.length > 0, "empty proposal");
-        require(
-            expiration == 0 || expiration > block.timestamp + votingPeriod + gracePeriod,
-            "expired"
-        );
+        if (targets.length != values.length || values.length != calldatas.length) revert ArrayLengthMismatch();
+        if (targets.length == 0) revert EmptyProposal();
+        if (expiration != 0 && expiration <= block.timestamp + votingPeriod + gracePeriod) revert ProposalExpired();
 
         bool selfSponsor = shares[msg.sender] >= sponsorThreshold && sponsorThreshold > 0;
 
@@ -313,12 +339,9 @@ contract GrandCentral is IGrandCentral, ReentrancyGuard {
 
     function sponsorProposal(uint32 id) external nonReentrant {
         Proposal storage prop = proposals[id];
-        require(shares[msg.sender] >= sponsorThreshold, "!sponsor");
-        require(state(id) == ProposalState.Submitted, "!submitted");
-        require(
-            prop.expiration == 0 || prop.expiration > block.timestamp + votingPeriod + gracePeriod,
-            "expired"
-        );
+        if (shares[msg.sender] < sponsorThreshold) revert InsufficientSponsorShares();
+        if (state(id) != ProposalState.Submitted) revert NotSubmitted();
+        if (prop.expiration != 0 && prop.expiration <= block.timestamp + votingPeriod + gracePeriod) revert ProposalExpired();
 
         prop.votingStarts = uint32(block.timestamp);
         // SAFETY: unchecked is safe — votingPeriod + gracePeriod are uint32
@@ -337,11 +360,11 @@ contract GrandCentral is IGrandCentral, ReentrancyGuard {
 
     function submitVote(uint32 id, bool approved) external nonReentrant {
         Proposal storage prop = proposals[id];
-        require(state(id) == ProposalState.Voting, "!voting");
+        if (state(id) != ProposalState.Voting) revert NotVoting();
 
         uint256 balance = getSharesAt(msg.sender, prop.votingStarts);
-        require(balance > 0, "!member");
-        require(!memberVoted[msg.sender][id], "voted");
+        if (balance == 0) revert NotMember();
+        if (memberVoted[msg.sender][id]) revert AlreadyVoted();
 
         // SAFETY: unchecked is safe — yesVotes/noVotes are uint256.
         // balance is a member's share count, bounded by totalShares.
@@ -369,21 +392,17 @@ contract GrandCentral is IGrandCentral, ReentrancyGuard {
         bytes[] calldata calldatas
     ) external nonReentrant {
         Proposal storage prop = proposals[id];
-        require(state(id) == ProposalState.Ready, "!ready");
+        if (state(id) != ProposalState.Ready) revert NotReady();
 
         ProposalState prevState = state(prop.prevProposalId);
-        require(
-            prevState == ProposalState.Processed ||
-            prevState == ProposalState.Cancelled ||
-            prevState == ProposalState.Defeated ||
-            prevState == ProposalState.Unborn,
-            "prev!processed"
-        );
+        if (
+            prevState != ProposalState.Processed &&
+            prevState != ProposalState.Cancelled &&
+            prevState != ProposalState.Defeated &&
+            prevState != ProposalState.Unborn
+        ) revert PreviousProposalNotProcessed();
 
-        require(
-            keccak256(abi.encode(targets, values, calldatas)) == prop.proposalDataHash,
-            "incorrect calldata"
-        );
+        if (keccak256(abi.encode(targets, values, calldatas)) != prop.proposalDataHash) revert IncorrectCalldata();
 
         prop.status[1] = true; // processed
 
@@ -396,7 +415,7 @@ contract GrandCentral is IGrandCentral, ReentrancyGuard {
             okToExecute = false;
 
         if (okToExecute && minRetentionPercent > 0 &&
-            totalShares < (prop.maxTotalSharesAtYesVote * minRetentionPercent) / 100)
+            totalShares < (prop.maxTotalSharesAtYesVote * minRetentionPercent) / 100) // round down: harder to fail retention check (conservative)
             okToExecute = false;
 
         if (prop.yesVotes > prop.noVotes && okToExecute) {
@@ -432,11 +451,8 @@ contract GrandCentral is IGrandCentral, ReentrancyGuard {
 
     function cancelProposal(uint32 id) external nonReentrant {
         Proposal storage prop = proposals[id];
-        require(state(id) == ProposalState.Voting, "!voting");
-        require(
-            msg.sender == prop.sponsor || isGovernor(msg.sender),
-            "!cancellable"
-        );
+        if (state(id) != ProposalState.Voting) revert NotVoting();
+        if (msg.sender != prop.sponsor && !isGovernor(msg.sender)) revert NotCancellable();
         prop.status[0] = true;
         emit ProposalCancelled(id);
     }
@@ -466,37 +482,31 @@ contract GrandCentral is IGrandCentral, ReentrancyGuard {
     }
 
     function fundRagequitPool(uint256 amount) external daoOrManager {
-        require(
-            safe.balance >= ragequitPool + claimsPoolBalance + amount,
-            "insufficient general funds"
-        );
+        if (safe.balance < ragequitPool + claimsPoolBalance + amount) revert InsufficientGeneralFunds();
         ragequitPool += amount;
         emit RagequitPoolFunded(amount, ragequitPool);
     }
 
     function fundClaimsPool(uint256 amount) external daoOrManager {
         uint256 totalWeight = totalShares + totalLoot;
-        require(totalWeight > 0, "no members");
-        require(
-            safe.balance >= ragequitPool + claimsPoolBalance + amount,
-            "insufficient general funds"
-        );
+        if (totalWeight == 0) revert NoMembers();
+        if (safe.balance < ragequitPool + claimsPoolBalance + amount) revert InsufficientGeneralFunds();
         claimsPoolBalance += amount;
-        rewardPerShare += (amount * PRECISION) / totalWeight;
+        rewardPerShare += (amount * PRECISION) / totalWeight; // round down: dust stays in pool
         emit ClaimsPoolFunded(amount, rewardPerShare);
     }
 
     function ragequit(uint256 sharesToBurn, uint256 lootToBurn) external nonReentrant {
-        require(shares[msg.sender] >= sharesToBurn, "insufficient shares");
-        require(loot[msg.sender] >= lootToBurn, "insufficient loot");
-        require(sharesToBurn + lootToBurn > 0, "zero burn");
+        if (shares[msg.sender] < sharesToBurn) revert InsufficientShares();
+        if (loot[msg.sender] < lootToBurn) revert InsufficientLoot();
+        if (sharesToBurn + lootToBurn == 0) revert ZeroBurn();
 
         uint256 totalWeight = totalShares + totalLoot;
         uint256 burnWeight = sharesToBurn + lootToBurn;
 
         uint256 payout = 0;
         if (ragequitPool > 0 && totalWeight > 0) {
-            payout = (burnWeight * ragequitPool) / totalWeight;
+            payout = (burnWeight * ragequitPool) / totalWeight; // round down: dust stays in ragequit pool
             ragequitPool -= payout;
         }
 
@@ -512,9 +522,9 @@ contract GrandCentral is IGrandCentral, ReentrancyGuard {
 
     function claim() external nonReentrant {
         uint256 pending = pendingClaim(msg.sender);
-        require(pending > 0, "nothing to claim");
+        if (pending == 0) revert NothingToClaim();
 
-        rewardDebt[msg.sender] = (shares[msg.sender] + loot[msg.sender]) * rewardPerShare / PRECISION;
+        rewardDebt[msg.sender] = (shares[msg.sender] + loot[msg.sender]) * rewardPerShare / PRECISION; // round down: member cannot over-claim
         claimsPoolBalance -= pending;
         IAvatar(safe).execTransactionFromModule(msg.sender, pending, "", Operation.Call);
 
@@ -524,16 +534,13 @@ contract GrandCentral is IGrandCentral, ReentrancyGuard {
     function pendingClaim(address member) public view returns (uint256) {
         uint256 weight = shares[member] + loot[member];
         if (weight == 0) return 0;
-        return (weight * rewardPerShare / PRECISION) - rewardDebt[member];
+        return (weight * rewardPerShare / PRECISION) - rewardDebt[member]; // round down: favors pool
     }
 
     function executeStipend(address beneficiary, uint256 amount) external nonReentrant {
-        require(isManager(msg.sender), "!manager");
-        require(beneficiary != address(0), "invalid beneficiary");
-        require(
-            safe.balance >= ragequitPool + claimsPoolBalance + amount,
-            "insufficient general funds"
-        );
+        if (!isManager(msg.sender)) revert Unauthorized();
+        if (beneficiary == address(0)) revert InvalidAddress();
+        if (safe.balance < ragequitPool + claimsPoolBalance + amount) revert InsufficientGeneralFunds();
         IAvatar(safe).execTransactionFromModule(beneficiary, amount, "", Operation.Call);
         emit StipendExecuted(beneficiary, amount, msg.sender);
     }
@@ -555,16 +562,21 @@ contract GrandCentral is IGrandCentral, ReentrancyGuard {
         return (p & 4) != 0;
     }
 
+    function isAgentConductor(address conductor) public view returns (bool) {
+        uint256 p = conductors[conductor];
+        return (p & 8) != 0;
+    }
+
     function setConductors(
         address[] calldata _conductors,
         uint256[] calldata _permissions
     ) external daoOnly {
-        require(_conductors.length == _permissions.length, "!array parity");
+        if (_conductors.length != _permissions.length) revert ArrayLengthMismatch();
         for (uint256 i = 0; i < _conductors.length; i++) {
             uint256 permission = _permissions[i];
-            if (adminLock) require(permission & 1 == 0, "admin lock");
-            if (managerLock) require(permission & 2 == 0, "manager lock");
-            if (governorLock) require(permission & 4 == 0, "governor lock");
+            if (adminLock && (permission & 1 != 0)) revert AdminLockActive();
+            if (managerLock && (permission & 2 != 0)) revert ManagerLockActive();
+            if (governorLock && (permission & 4 != 0)) revert GovernorLockActive();
             conductors[_conductors[i]] = permission;
             emit ConductorSet(_conductors[i], permission);
         }
@@ -582,11 +594,11 @@ contract GrandCentral is IGrandCentral, ReentrancyGuard {
         uint256 _minRetentionPercent
     ) external daoOrGovernor {
         if (_votingPeriod != 0) {
-            require(_votingPeriod >= 1 days, "voting period too short");
+            if (_votingPeriod < 1 days) revert VotingPeriodTooShort();
             votingPeriod = _votingPeriod;
         }
         if (_gracePeriod != 0) {
-            require(_gracePeriod >= 1 days, "grace period too short");
+            if (_gracePeriod < 1 days) revert GracePeriodTooShort();
             gracePeriod = _gracePeriod;
         }
         quorumPercent = _quorumPercent;

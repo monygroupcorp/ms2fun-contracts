@@ -2,6 +2,7 @@
 pragma solidity ^0.8.24;
 
 import {Test} from "forge-std/Test.sol";
+import {Ownable} from "solady/auth/Ownable.sol";
 import {GlobalMessageRegistry} from "../../src/registry/GlobalMessageRegistry.sol";
 import {MockMasterRegistry} from "../mocks/MockMasterRegistry.sol";
 import {MessageTypes} from "../../src/libraries/MessageTypes.sol";
@@ -41,18 +42,18 @@ contract GlobalMessageRegistryTest is Test {
 
     function test_initialize_revertZeroOwner() public {
         GlobalMessageRegistry r = new GlobalMessageRegistry();
-        vm.expectRevert("Invalid owner");
+        vm.expectRevert(GlobalMessageRegistry.InvalidAddress.selector);
         r.initialize(address(0), address(masterRegistry));
     }
 
     function test_initialize_revertZeroRegistry() public {
         GlobalMessageRegistry r = new GlobalMessageRegistry();
-        vm.expectRevert("Invalid master registry");
+        vm.expectRevert(GlobalMessageRegistry.InvalidAddress.selector);
         r.initialize(owner, address(0));
     }
 
     function test_initialize_revertAlreadyInitialized() public {
-        vm.expectRevert("Already initialized");
+        vm.expectRevert(Ownable.AlreadyInitialized.selector);
         registry.initialize(owner, address(masterRegistry));
     }
 
@@ -88,7 +89,7 @@ contract GlobalMessageRegistryTest is Test {
         bytes memory messageData = abi.encode(uint8(0), uint256(0), bytes32(0), bytes32(0), "x");
 
         vm.prank(user1); // user1 is not `instance`
-        vm.expectRevert("Instance must be caller");
+        vm.expectRevert(GlobalMessageRegistry.InstanceMustBeCaller.selector);
         registry.postForAction(user1, instance, messageData);
     }
 
@@ -96,7 +97,7 @@ contract GlobalMessageRegistryTest is Test {
         bytes memory messageData = abi.encode(uint8(0), uint256(0), bytes32(0), bytes32(0), "x");
 
         vm.prank(instance);
-        vm.expectRevert("Invalid sender");
+        vm.expectRevert(GlobalMessageRegistry.InvalidAddress.selector);
         registry.postForAction(address(0), instance, messageData);
     }
 
@@ -239,7 +240,7 @@ contract GlobalMessageRegistryTest is Test {
         GlobalMessageRegistry.PostParams[] memory posts = new GlobalMessageRegistry.PostParams[](0);
 
         vm.prank(user1);
-        vm.expectRevert("Empty batch");
+        vm.expectRevert(GlobalMessageRegistry.EmptyBatch.selector);
         registry.postBatch(posts);
     }
 
@@ -268,7 +269,7 @@ contract GlobalMessageRegistryTest is Test {
     }
 
     function test_setMasterRegistry_revertZero() public {
-        vm.expectRevert("Invalid master registry");
+        vm.expectRevert(GlobalMessageRegistry.InvalidAddress.selector);
         registry.setMasterRegistry(address(0));
     }
 
@@ -282,7 +283,7 @@ contract GlobalMessageRegistryTest is Test {
     receive() external payable {}
 
     function test_withdrawETH_revertNoBalance() public {
-        vm.expectRevert("No ETH to withdraw");
+        vm.expectRevert(GlobalMessageRegistry.NoETHToWithdraw.selector);
         registry.withdrawETH();
     }
 

@@ -110,7 +110,7 @@ contract VaultRegistryTest is Test {
 
     function test_RegisterVault_RevertsOnZeroAddress() public {
         vm.prank(user1);
-        vm.expectRevert("Invalid vault address");
+        vm.expectRevert(VaultRegistry.InvalidAddress.selector);
         registry.registerVault{value: VAULT_FEE}(
             address(0),
             "Test Vault",
@@ -120,7 +120,7 @@ contract VaultRegistryTest is Test {
 
     function test_RegisterVault_RevertsOnEmptyName() public {
         vm.prank(user1);
-        vm.expectRevert("Invalid name");
+        vm.expectRevert(VaultRegistry.InvalidName.selector);
         registry.registerVault{value: VAULT_FEE}(
             address(mockVault1),
             "",
@@ -132,7 +132,7 @@ contract VaultRegistryTest is Test {
         string memory longName = new string(257);
 
         vm.prank(user1);
-        vm.expectRevert("Invalid name");
+        vm.expectRevert(VaultRegistry.InvalidName.selector);
         registry.registerVault{value: VAULT_FEE}(
             address(mockVault1),
             longName,
@@ -142,7 +142,7 @@ contract VaultRegistryTest is Test {
 
     function test_RegisterVault_RevertsOnInsufficientFee() public {
         vm.prank(user1);
-        vm.expectRevert("Insufficient registration fee");
+        vm.expectRevert(VaultRegistry.InsufficientFee.selector);
         registry.registerVault{value: VAULT_FEE - 1}(
             address(mockVault1),
             "Test Vault",
@@ -158,7 +158,7 @@ contract VaultRegistryTest is Test {
             "https://metadata.uri"
         );
 
-        vm.expectRevert("Vault already registered");
+        vm.expectRevert(VaultRegistry.AlreadyRegistered.selector);
         registry.registerVault{value: VAULT_FEE}(
             address(mockVault1),
             "Test Vault 2",
@@ -169,7 +169,7 @@ contract VaultRegistryTest is Test {
 
     function test_RegisterVault_RevertsOnEmptyMetadataURI() public {
         vm.prank(user1);
-        vm.expectRevert("Invalid metadata URI");
+        vm.expectRevert(VaultRegistry.InvalidMetadataURI.selector);
         registry.registerVault{value: VAULT_FEE}(
             address(mockVault1),
             "Test Vault",
@@ -181,7 +181,7 @@ contract VaultRegistryTest is Test {
         string memory longURI = new string(2049);
 
         vm.prank(user1);
-        vm.expectRevert("Invalid metadata URI");
+        vm.expectRevert(VaultRegistry.InvalidMetadataURI.selector);
         registry.registerVault{value: VAULT_FEE}(
             address(mockVault1),
             "Test Vault",
@@ -193,7 +193,7 @@ contract VaultRegistryTest is Test {
         address notContract = makeAddr("notContract");
 
         vm.prank(user1);
-        vm.expectRevert("Vault must be a contract");
+        vm.expectRevert(VaultRegistry.MustBeContract.selector);
         registry.registerVault{value: VAULT_FEE}(
             notContract,
             "Test Vault",
@@ -270,7 +270,7 @@ contract VaultRegistryTest is Test {
         );
 
         vm.prank(user2);
-        vm.expectRevert("Invalid hook address");
+        vm.expectRevert(VaultRegistry.InvalidAddress.selector);
         registry.registerHook{value: HOOK_FEE}(
             address(0),
             address(mockVault1),
@@ -281,7 +281,7 @@ contract VaultRegistryTest is Test {
 
     function test_RegisterHook_RevertsOnZeroVaultAddress() public {
         vm.prank(user2);
-        vm.expectRevert("Invalid vault address");
+        vm.expectRevert(VaultRegistry.InvalidAddress.selector);
         registry.registerHook{value: HOOK_FEE}(
             address(mockHook1),
             address(0),
@@ -292,7 +292,7 @@ contract VaultRegistryTest is Test {
 
     function test_RegisterHook_RevertsOnUnregisteredVault() public {
         vm.prank(user2);
-        vm.expectRevert("Vault must be registered");
+        vm.expectRevert(VaultRegistry.NotRegistered.selector);
         registry.registerHook{value: HOOK_FEE}(
             address(mockHook1),
             address(mockVault1),
@@ -310,7 +310,7 @@ contract VaultRegistryTest is Test {
         );
 
         vm.prank(user2);
-        vm.expectRevert("Invalid name");
+        vm.expectRevert(VaultRegistry.InvalidName.selector);
         registry.registerHook{value: HOOK_FEE}(
             address(mockHook1),
             address(mockVault1),
@@ -328,7 +328,7 @@ contract VaultRegistryTest is Test {
         );
 
         vm.prank(user2);
-        vm.expectRevert("Insufficient registration fee");
+        vm.expectRevert(VaultRegistry.InsufficientFee.selector);
         registry.registerHook{value: HOOK_FEE - 1}(
             address(mockHook1),
             address(mockVault1),
@@ -353,7 +353,7 @@ contract VaultRegistryTest is Test {
             "https://hook.metadata.uri"
         );
 
-        vm.expectRevert("Hook already registered");
+        vm.expectRevert(VaultRegistry.AlreadyRegistered.selector);
         registry.registerHook{value: HOOK_FEE}(
             address(mockHook1),
             address(mockVault1),
@@ -372,7 +372,7 @@ contract VaultRegistryTest is Test {
         );
 
         vm.prank(user2);
-        vm.expectRevert("Invalid metadata URI");
+        vm.expectRevert(VaultRegistry.InvalidMetadataURI.selector);
         registry.registerHook{value: HOOK_FEE}(
             address(mockHook1),
             address(mockVault1),
@@ -392,7 +392,7 @@ contract VaultRegistryTest is Test {
         address notContract = makeAddr("notContract");
 
         vm.prank(user2);
-        vm.expectRevert("Hook must be a contract");
+        vm.expectRevert(VaultRegistry.MustBeContract.selector);
         registry.registerHook{value: HOOK_FEE}(
             notContract,
             address(mockVault1),
@@ -435,7 +435,7 @@ contract VaultRegistryTest is Test {
     }
 
     function test_DeactivateVault_RevertsOnUnregisteredVault() public {
-        vm.expectRevert("Vault not registered");
+        vm.expectRevert(VaultRegistry.NotRegistered.selector);
         registry.deactivateVault(address(mockVault1));
     }
 
@@ -489,7 +489,7 @@ contract VaultRegistryTest is Test {
     }
 
     function test_DeactivateHook_RevertsOnUnregisteredHook() public {
-        vm.expectRevert("Hook not registered");
+        vm.expectRevert(VaultRegistry.NotRegistered.selector);
         registry.deactivateHook(address(mockHook1));
     }
 
@@ -512,7 +512,7 @@ contract VaultRegistryTest is Test {
     }
 
     function test_GetVaultInfo_RevertsOnUnregisteredVault() public {
-        vm.expectRevert("Vault not registered");
+        vm.expectRevert(VaultRegistry.NotRegistered.selector);
         registry.getVaultInfo(address(mockVault1));
     }
 
@@ -544,7 +544,7 @@ contract VaultRegistryTest is Test {
     }
 
     function test_GetHookInfo_RevertsOnUnregisteredHook() public {
-        vm.expectRevert("Hook not registered");
+        vm.expectRevert(VaultRegistry.NotRegistered.selector);
         registry.getHookInfo(address(mockHook1));
     }
 
@@ -644,7 +644,7 @@ contract VaultRegistryTest is Test {
     }
 
     function test_SetVaultRegistrationFee_RevertsOnZeroFee() public {
-        vm.expectRevert("Fee must be positive");
+        vm.expectRevert(VaultRegistry.FeeMustBePositive.selector);
         registry.setVaultRegistrationFee(0);
     }
 
@@ -668,7 +668,7 @@ contract VaultRegistryTest is Test {
     }
 
     function test_SetHookRegistrationFee_RevertsOnZeroFee() public {
-        vm.expectRevert("Fee must be positive");
+        vm.expectRevert(VaultRegistry.FeeMustBePositive.selector);
         registry.setHookRegistrationFee(0);
     }
 

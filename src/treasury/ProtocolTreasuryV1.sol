@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import {UUPSUpgradeable} from "solady/utils/UUPSUpgradeable.sol";
-import {Ownable} from "solady/auth/Ownable.sol";
+import {SafeOwnableUUPS} from "../shared/SafeOwnableUUPS.sol";
 import {SafeTransferLib} from "solady/utils/SafeTransferLib.sol";
 import {IPoolManager} from "v4-core/interfaces/IPoolManager.sol";
 import {IUnlockCallback} from "v4-core/interfaces/callback/IUnlockCallback.sol";
@@ -14,6 +13,7 @@ import {CurrencySettler} from "../libraries/v4/CurrencySettler.sol";
 import {LiquidityAmounts} from "../libraries/v4/LiquidityAmounts.sol";
 import {TickMath} from "v4-core/libraries/TickMath.sol";
 import {StateLibrary} from "v4-core/libraries/StateLibrary.sol";
+import {IMasterRegistry} from "../master/interfaces/IMasterRegistry.sol";
 
 interface IWETH {
     function deposit() external payable;
@@ -32,11 +32,26 @@ interface IERC20 {
  *      Manages protocol-owned V4 LP positions via receivePOL().
  *      Tracks revenue by source for accounting. Owner-gated withdrawals.
  */
-contract ProtocolTreasuryV1 is UUPSUpgradeable, Ownable, IUnlockCallback {
+contract ProtocolTreasuryV1 is SafeOwnableUUPS, IUnlockCallback {
     using PoolIdLibrary for PoolKey;
     using CurrencyLibrary for Currency;
     using CurrencySettler for Currency;
     using StateLibrary for IPoolManager;
+
+    // ============ Custom Errors ============
+    // Note: AlreadyInitialized() and Unauthorized() are inherited from Ownable
+
+    error InvalidAddress();
+    error NoValue();
+    error RegistryNotConfigured();
+    error NotRegisteredInstance();
+    error V4NotConfigured();
+    error WETHNotConfigured();
+    error POLAlreadyDeployed();
+    error NoPOLPosition();
+    error InsufficientBalance();
+    error InvalidRecipient();
+    error TransferFailed();
 
     // ============ Revenue Tracking ============
 
@@ -61,11 +76,13 @@ contract ProtocolTreasuryV1 is UUPSUpgradeable, Ownable, IUnlockCallback {
     event WETHUpdated(address indexed newWETH);
     event POLPositionDeployed(address indexed instance, uint128 liquidity, bytes32 salt);
     event POLFeesCollected(address indexed instance, uint256 amount0, uint256 amount1);
+    event MasterRegistryUpdated(address indexed newRegistry);
+    event RevenueConductorUpdated(address indexed conductor);
+    event RevenueRouted(address indexed conductor, address indexed safe, uint256 amount);
 
-    // ============ Authorized Router ============
+    // ============ Revenue Conductor ============
 
-    address public authorizedRouter;
-    event AuthorizedRouterSet(address indexed router);
+    address public revenueConductor;
 
     // ============ Initialization ============
 
@@ -75,6 +92,7 @@ contract ProtocolTreasuryV1 is UUPSUpgradeable, Ownable, IUnlockCallback {
 
     address public v4PoolManager;
     address public weth;
+    IMasterRegistry public masterRegistry;
 
     // POL position tracking
     struct POLPosition {
@@ -113,8 +131,8 @@ contract ProtocolTreasuryV1 is UUPSUpgradeable, Ownable, IUnlockCallback {
     }
 
     function initialize(address _owner) external {
-        require(!_initialized, "Already initialized");
-        require(_owner != address(0), "Invalid owner");
+        if (_initialized) revert AlreadyInitialized();
+        if (_owner == address(0)) revert InvalidAddress();
         _initialized = true;
         _setOwner(_owner);
     }
@@ -122,22 +140,28 @@ contract ProtocolTreasuryV1 is UUPSUpgradeable, Ownable, IUnlockCallback {
     // ============ V4 Configuration ============
 
     function setV4PoolManager(address _pm) external onlyOwner {
-        require(_pm != address(0), "Invalid pool manager");
+        if (_pm == address(0)) revert InvalidAddress();
         v4PoolManager = _pm;
         emit V4PoolManagerUpdated(_pm);
     }
 
     function setWETH(address _weth) external onlyOwner {
-        require(_weth != address(0), "Invalid WETH");
+        if (_weth == address(0)) revert InvalidAddress();
         weth = _weth;
         emit WETHUpdated(_weth);
+    }
+
+    function setMasterRegistry(address _registry) external onlyOwner {
+        if (_registry == address(0)) revert InvalidAddress();
+        masterRegistry = IMasterRegistry(_registry);
+        emit MasterRegistryUpdated(_registry);
     }
 
     // ============ Revenue Intake ============
 
     /// @notice Receive ETH with source attribution
     function deposit(Source source) external payable {
-        require(msg.value > 0, "No value");
+        if (msg.value == 0) revert NoValue();
         totalReceived[source] += msg.value;
         emit RevenueReceived(source, msg.sender, msg.value);
     }
@@ -158,9 +182,11 @@ contract ProtocolTreasuryV1 is UUPSUpgradeable, Ownable, IUnlockCallback {
         uint256 amount0,
         uint256 amount1
     ) external {
-        require(v4PoolManager != address(0), "V4 not configured");
-        require(weth != address(0), "WETH not configured");
-        require(_polPositions[msg.sender].liquidity == 0, "POL already deployed");
+        if (address(masterRegistry) == address(0)) revert RegistryNotConfigured();
+        if (!masterRegistry.isRegisteredInstance(msg.sender)) revert NotRegisteredInstance();
+        if (v4PoolManager == address(0)) revert V4NotConfigured();
+        if (weth == address(0)) revert WETHNotConfigured();
+        if (_polPositions[msg.sender].liquidity != 0) revert POLAlreadyDeployed();
 
         // Deterministic salt per instance
         bytes32 salt = keccak256(abi.encodePacked("POL", msg.sender));
@@ -207,7 +233,7 @@ contract ProtocolTreasuryV1 is UUPSUpgradeable, Ownable, IUnlockCallback {
     /// @notice Permissionless fee collection for a treasury-owned POL position
     function claimPOLFees(address instance) external returns (uint256 amount0, uint256 amount1) {
         POLPosition storage pos = _polPositions[instance];
-        require(pos.liquidity > 0, "No POL position");
+        if (pos.liquidity == 0) revert NoPOLPosition();
 
         CollectFeesCallbackData memory feeParams = CollectFeesCallbackData({
             poolKey: pos.poolKey,
@@ -235,7 +261,7 @@ contract ProtocolTreasuryV1 is UUPSUpgradeable, Ownable, IUnlockCallback {
     // ============ V4 Callback ============
 
     function unlockCallback(bytes calldata data) external returns (bytes memory) {
-        require(msg.sender == v4PoolManager, "Only PoolManager");
+        if (msg.sender != v4PoolManager) revert Unauthorized();
 
         CallbackData memory cbData = abi.decode(data, (CallbackData));
 
@@ -320,34 +346,44 @@ contract ProtocolTreasuryV1 is UUPSUpgradeable, Ownable, IUnlockCallback {
         return polInstances.length;
     }
 
-    // ============ Withdrawals (Owner Only) ============
+    // ============ Revenue Routing ============
 
-    function setAuthorizedRouter(address _router) external onlyOwner {
-        authorizedRouter = _router;
-        emit AuthorizedRouterSet(_router);
+    function setRevenueConductor(address _conductor) external onlyOwner {
+        revenueConductor = _conductor;
+        emit RevenueConductorUpdated(_conductor);
     }
 
-    function withdrawETH(address to, uint256 amount) external {
-        require(msg.sender == owner() || msg.sender == authorizedRouter, "!authorized");
-        require(to != address(0), "Invalid recipient");
-        require(amount <= address(this).balance, "Insufficient balance");
+    /// @notice Route ETH to the DAO Safe — callable only by the conductor, destination locked to DAO safe
+    function routeToDAO(address safe, uint256 amount) external {
+        if (msg.sender != revenueConductor) revert Unauthorized();
+        if (safe == address(0)) revert InvalidAddress();
+        if (amount > address(this).balance) revert InsufficientBalance();
+        SafeTransferLib.safeTransferETH(safe, amount);
+        emit RevenueRouted(msg.sender, safe, amount);
+    }
+
+    // ============ Withdrawals (Owner Only) ============
+
+    function withdrawETH(address to, uint256 amount) external onlyOwner {
+        if (to == address(0)) revert InvalidRecipient();
+        if (amount > address(this).balance) revert InsufficientBalance();
         SafeTransferLib.safeTransferETH(to, amount);
         emit ETHWithdrawn(to, amount);
     }
 
     function withdrawERC20(address token, address to, uint256 amount) external onlyOwner {
-        require(to != address(0), "Invalid recipient");
+        if (to == address(0)) revert InvalidRecipient();
         SafeTransferLib.safeTransfer(token, to, amount);
         emit ERC20Withdrawn(token, to, amount);
     }
 
     function withdrawERC721(address token, address to, uint256 tokenId) external onlyOwner {
-        require(to != address(0), "Invalid recipient");
+        if (to == address(0)) revert InvalidRecipient();
         // Use low-level call for ERC721 transferFrom(address,address,uint256)
         (bool success,) = token.call(
             abi.encodeWithSignature("transferFrom(address,address,uint256)", address(this), to, tokenId)
         );
-        require(success, "ERC721 transfer failed");
+        if (!success) revert TransferFailed();
         emit ERC721Withdrawn(token, to, tokenId);
     }
 
@@ -368,7 +404,4 @@ contract ProtocolTreasuryV1 is UUPSUpgradeable, Ownable, IUnlockCallback {
         return (totalReceived[source], totalWithdrawn[source]);
     }
 
-    // ============ UUPS ============
-
-    function _authorizeUpgrade(address) internal override onlyOwner {}
 }

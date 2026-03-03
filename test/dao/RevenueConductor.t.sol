@@ -6,6 +6,7 @@ import {GrandCentral} from "../../src/dao/GrandCentral.sol";
 import {RevenueConductor} from "../../src/dao/conductors/RevenueConductor.sol";
 import {ProtocolTreasuryV1} from "../../src/treasury/ProtocolTreasuryV1.sol";
 import {MockSafe} from "../mocks/MockSafe.sol";
+import {Ownable} from "solady/auth/Ownable.sol";
 
 contract RevenueConductorTest is Test {
     GrandCentral public dao;
@@ -37,8 +38,8 @@ contract RevenueConductorTest is Test {
         vm.prank(address(dao));
         dao.setConductors(addrs, perms);
 
-        // Authorize router on treasury
-        treasury.setAuthorizedRouter(address(router));
+        // Authorize conductor on treasury
+        treasury.setRevenueConductor(address(router));
 
         // Fund Safe so pool funding checks pass
         vm.deal(address(mockSafe), 100 ether);
@@ -58,17 +59,17 @@ contract RevenueConductorTest is Test {
     }
 
     function test_Constructor_RevertIfBpsMismatch() public {
-        vm.expectRevert("bps must sum to 10000");
+        vm.expectRevert(RevenueConductor.BpsMustSumTo10000.selector);
         new RevenueConductor(address(dao), address(treasury), 5000, 3000, 1000);
     }
 
     function test_Constructor_RevertIfZeroDao() public {
-        vm.expectRevert("invalid dao");
+        vm.expectRevert(RevenueConductor.InvalidAddress.selector);
         new RevenueConductor(address(0), address(treasury), 10000, 0, 0);
     }
 
     function test_Constructor_RevertIfZeroTreasury() public {
-        vm.expectRevert("invalid treasury");
+        vm.expectRevert(RevenueConductor.InvalidAddress.selector);
         new RevenueConductor(address(dao), address(0), 10000, 0, 0);
     }
 
@@ -77,7 +78,7 @@ contract RevenueConductorTest is Test {
     function test_Sweep_RevertIfNotShareholder() public {
         vm.deal(address(treasury), 10 ether);
         vm.prank(nobody);
-        vm.expectRevert("!shareholder");
+        vm.expectRevert(RevenueConductor.Unauthorized.selector);
         router.sweep();
     }
 
@@ -124,7 +125,7 @@ contract RevenueConductorTest is Test {
 
     function test_Sweep_RevertIfNoBalance() public {
         vm.prank(founder);
-        vm.expectRevert("nothing to route");
+        vm.expectRevert(RevenueConductor.NothingToRoute.selector);
         router.sweep();
     }
 
@@ -171,13 +172,13 @@ contract RevenueConductorTest is Test {
 
     function test_SetRatio_OnlyDAO() public {
         vm.prank(founder);
-        vm.expectRevert(bytes("!dao"));
+        vm.expectRevert(RevenueConductor.Unauthorized.selector);
         router.setRatio(5000, 3000, 2000);
     }
 
     function test_SetRatio_RevertIfBpsMismatch() public {
         vm.prank(address(dao));
-        vm.expectRevert("bps must sum to 10000");
+        vm.expectRevert(RevenueConductor.BpsMustSumTo10000.selector);
         router.setRatio(5000, 3000, 1000);
     }
 
@@ -218,20 +219,26 @@ contract RevenueConductorTest is Test {
         assertGt(dao.ragequitPool(), 0);
     }
 
-    // ============ Treasury — Authorized Router ============
+    // ============ Treasury — Revenue Conductor ============
 
-    function test_Treasury_AuthorizedRouterCanWithdraw() public {
+    function test_Treasury_ConductorCanRoute() public {
         vm.deal(address(treasury), 5 ether);
         vm.prank(founder);
         router.sweep();
-        // If we got here without revert, the authorized router withdrawal worked
         assertEq(router.totalRouted(), 5 ether);
     }
 
-    function test_Treasury_SetAuthorizedRouter_OnlyOwner() public {
+    function test_Treasury_SetRevenueConductor_OnlyOwner() public {
         vm.prank(nobody);
         vm.expectRevert();
-        treasury.setAuthorizedRouter(nobody);
+        treasury.setRevenueConductor(nobody);
+    }
+
+    function test_Treasury_RandomCannotRoute() public {
+        vm.deal(address(treasury), 5 ether);
+        vm.prank(nobody);
+        vm.expectRevert(Ownable.Unauthorized.selector);
+        treasury.routeToDAO(nobody, 5 ether);
     }
 
     function test_Treasury_RandomCannotWithdraw() public {

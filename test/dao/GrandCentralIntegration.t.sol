@@ -196,7 +196,7 @@ contract GrandCentralIntegrationTest is Test {
         stipend.execute();
         assertEq(founder.balance, 6 ether);
 
-        vm.expectRevert("too early");
+        vm.expectRevert(StipendConductor.TooEarly.selector);
         stipend.execute();
 
         vm.warp(block.timestamp + 30 days + 1);
@@ -268,7 +268,7 @@ contract GrandCentralIntegrationTest is Test {
         uint256 id = dao.submitProposal(targets, values, calldatas, 0, "ops");
 
         vm.prank(buyer);
-        vm.expectRevert("!member");
+        vm.expectRevert(GrandCentral.NotMember.selector);
         dao.submitVote(uint32(id), true);
     }
 

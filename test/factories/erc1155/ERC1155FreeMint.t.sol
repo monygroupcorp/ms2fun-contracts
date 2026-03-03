@@ -57,8 +57,10 @@ contract ERC1155FreeMintTest is Test {
     }
 
     function _addEdition(ERC1155Instance inst, uint256 supply) internal returns (uint256 editionId) {
-        vm.prank(protocol);
-        factory.setAgent(protocol, true);
+        // Creator enables delegation so agent can add editions via factory
+        vm.prank(creator);
+        inst.setAgentDelegation(true);
+        mockRegistry.setAgent(protocol, true);
         vm.prank(protocol);
         factory.addEdition(
             address(inst), "Piece 1", 0.01 ether, supply, "ipfs://edition",

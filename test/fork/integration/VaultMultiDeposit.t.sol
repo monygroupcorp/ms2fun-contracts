@@ -5,6 +5,8 @@ import { ForkTestBase } from "../helpers/ForkTestBase.sol";
 import { UniAlignmentVault } from "src/vaults/uni/UniAlignmentVault.sol";
 import { UniswapVaultPriceValidator } from "src/peripherals/UniswapVaultPriceValidator.sol";
 import { IVaultPriceValidator } from "src/interfaces/IVaultPriceValidator.sol";
+import { MockAlignmentRegistry } from "../../mocks/MockAlignmentRegistry.sol";
+import { IAlignmentRegistry } from "../../../src/master/interfaces/IAlignmentRegistry.sol";
 import { LibClone } from "solady/utils/LibClone.sol";
 import { Currency } from "v4-core/types/Currency.sol";
 import { PoolKey } from "v4-core/types/PoolKey.sol";
@@ -22,6 +24,8 @@ import { IHooks } from "v4-core/interfaces/IHooks.sol";
  */
 contract VaultMultiDepositTest is ForkTestBase {
     UniAlignmentVault vault;
+    MockAlignmentRegistry mockRegistry;
+    uint256 constant TARGET_ID = 1;
     address owner;
     address alice;
     address bob;
@@ -41,6 +45,12 @@ contract VaultMultiDepositTest is ForkTestBase {
         UniswapVaultPriceValidator priceValidator = new UniswapVaultPriceValidator(
             WETH, UNISWAP_V2_FACTORY, UNISWAP_V3_FACTORY, UNISWAP_V4_POOL_MANAGER, 1000
         );
+
+        // Setup mock alignment registry
+        mockRegistry = new MockAlignmentRegistry();
+        mockRegistry.setTargetActive(TARGET_ID, true);
+        mockRegistry.setTokenInTarget(TARGET_ID, alignmentToken, true);
+
         UniAlignmentVault vaultImpl = new UniAlignmentVault();
         vault = UniAlignmentVault(payable(LibClone.clone(address(vaultImpl))));
         vm.prank(owner);
@@ -51,7 +61,9 @@ contract VaultMultiDepositTest is ForkTestBase {
             address(0), // TODO: replace with deployed zRouter address
             3000,
             60,
-            IVaultPriceValidator(address(priceValidator))
+            IVaultPriceValidator(address(priceValidator)),
+            IAlignmentRegistry(address(mockRegistry)),
+            TARGET_ID
         );
 
         // Set V4 pool key - H-02: Hook requires native ETH (address(0)), not WETH

@@ -7,10 +7,12 @@ import {UniAlignmentVault} from "../../src/vaults/uni/UniAlignmentVault.sol";
 import {ZAMMAlignmentVault, IZAMM} from "../../src/vaults/zamm/ZAMMAlignmentVault.sol";
 import {MockVault} from "../mocks/MockVault.sol";
 import {MockVaultPriceValidator} from "../mocks/MockVaultPriceValidator.sol";
+import {MockAlignmentRegistry} from "../mocks/MockAlignmentRegistry.sol";
 import {MockZAMM} from "../mocks/MockZAMM.sol";
 import {MockZRouter} from "../mocks/MockZRouter.sol";
 import {MockEXECToken} from "../mocks/MockEXECToken.sol";
 import {IVaultPriceValidator} from "../../src/interfaces/IVaultPriceValidator.sol";
+import {IAlignmentRegistry} from "../../src/master/interfaces/IAlignmentRegistry.sol";
 import {Currency} from "v4-core/types/Currency.sol";
 import {LibClone} from "solady/utils/LibClone.sol";
 
@@ -38,6 +40,9 @@ contract VaultInterfaceComplianceTest is Test {
         // Deploy mock peripherals
         MockZRouter ultraMockZRouter = new MockZRouter();
         MockVaultPriceValidator mockValidator = new MockVaultPriceValidator();
+        MockAlignmentRegistry mockRegistry = new MockAlignmentRegistry();
+        mockRegistry.setTargetActive(1, true);
+        mockRegistry.setTokenInTarget(1, MOCK_ALIGNMENT_TOKEN, true);
 
         // Deploy UniAlignmentVault via clone+initialize pattern
         UniAlignmentVault impl = new UniAlignmentVault();
@@ -49,7 +54,9 @@ contract VaultInterfaceComplianceTest is Test {
             address(ultraMockZRouter),
             3000,
             60,
-            IVaultPriceValidator(address(mockValidator))
+            IVaultPriceValidator(address(mockValidator)),
+            IAlignmentRegistry(address(mockRegistry)),
+            1
         );
 
         // Deploy ZAMMAlignmentVault via clone+initialize pattern

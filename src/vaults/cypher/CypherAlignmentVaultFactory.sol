@@ -9,7 +9,7 @@ import {CypherAlignmentVault} from "./CypherAlignmentVault.sol";
 contract CypherAlignmentVaultFactory {
     address public immutable vaultImplementation;
 
-    event VaultCreated(address indexed vault, address indexed alignmentToken);
+    event VaultDeployed(address indexed vault, address indexed alignmentToken);
 
     constructor(address _vaultImplementation) {
         vaultImplementation = _vaultImplementation;
@@ -28,6 +28,6 @@ contract CypherAlignmentVaultFactory {
             positionManager, swapRouterAddr, weth, alignmentToken,
             protocolTreasury, liquidityDeployer
         );
-        emit VaultCreated(address(vault), alignmentToken);
+        emit VaultDeployed(address(vault), alignmentToken);
     }
 }

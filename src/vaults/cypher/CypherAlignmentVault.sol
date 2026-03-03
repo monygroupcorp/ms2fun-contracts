@@ -31,11 +31,16 @@ contract CypherAlignmentVault is IAlignmentVault, Ownable, ReentrancyGuard {
     error PositionAlreadyRegistered();
     error NoPosition();
     error ZeroContributions();
+    error NotDelegate();
+    error TransferFailed();
+    error ExceedsMaxBps();
 
     // ── Events ────────────────────────────────────────────────────────────
     event PositionRegistered(uint256 indexed tokenId, address pool, bool tokenIsZero, address benefactor, uint256 contribution);
     event Harvested(uint256 totalFeesETH, uint256 benefactorFees, uint256 protocolFees);
     event DelegateSet(address indexed benefactor, address indexed delegate);
+    event ProtocolYieldCutUpdated(uint256 newBps);
+    event ProtocolFeesWithdrawn(uint256 amount);
 
     // ── Config ────────────────────────────────────────────────────────────
     IAlgebraNFTPositionManager public positionManager;
@@ -108,7 +113,7 @@ contract CypherAlignmentVault is IAlignmentVault, Ownable, ReentrancyGuard {
 
     function _addContribution(address benefactor, uint256 amount) internal {
         // Snapshot debt for new contribution amount (MasterChef pattern)
-        rewardDebt[benefactor] += amount * accRewardPerContribution / 1e18;
+        rewardDebt[benefactor] += amount * accRewardPerContribution / 1e18; // round down: benefactor cannot over-claim
         benefactorContribution[benefactor] += amount;
         totalContributions += amount;
     }
@@ -136,7 +141,8 @@ contract CypherAlignmentVault is IAlignmentVault, Ownable, ReentrancyGuard {
     // ── harvest ───────────────────────────────────────────────────────────
 
     /// @notice Collect LP fees, swap to ETH, distribute via accumulator.
-    function harvest() external nonReentrant returns (uint256 feesETH) {
+    /// @param minAmountOut Minimum WETH to receive from alignment token swap (sandwich protection)
+    function harvest(uint256 minAmountOut) external nonReentrant returns (uint256 feesETH) {
         if (totalContributions == 0) revert ZeroContributions();
         if (lpTokenId == 0) revert NoPosition();
 
@@ -165,7 +171,7 @@ contract CypherAlignmentVault is IAlignmentVault, Ownable, ReentrancyGuard {
                     recipient: address(this),
                     deadline: block.timestamp,
                     amountIn: alignmentFees,
-                    amountOutMinimum: 0,
+                    amountOutMinimum: minAmountOut,
                     limitSqrtPrice: 0
                 })
             );
@@ -179,7 +185,7 @@ contract CypherAlignmentVault is IAlignmentVault, Ownable, ReentrancyGuard {
         feesETH = totalWETH;
 
         // Split: protocol cut, rest to benefactors
-        uint256 protocolCut = feesETH * protocolYieldCutBps / 10000;
+        uint256 protocolCut = feesETH * protocolYieldCutBps / 10000; // round down: favors benefactors
         uint256 benefactorFees = feesETH - protocolCut;
 
         accumulatedProtocolFees += protocolCut;
@@ -187,7 +193,7 @@ contract CypherAlignmentVault is IAlignmentVault, Ownable, ReentrancyGuard {
 
         // Update MasterChef accumulator
         if (benefactorFees > 0) {
-            accRewardPerContribution += benefactorFees * 1e18 / totalContributions;
+            accRewardPerContribution += benefactorFees * 1e18 / totalContributions; // round down: dust stays in vault
         }
 
         emit Harvested(feesETH, benefactorFees, protocolCut);
@@ -207,7 +213,7 @@ contract CypherAlignmentVault is IAlignmentVault, Ownable, ReentrancyGuard {
         for (uint256 i = 0; i < benefactors.length; i++) {
             address b = benefactors[i];
             address delegate = _benefactorDelegate[b] == address(0) ? b : _benefactorDelegate[b];
-            require(delegate == msg.sender, "NotDelegate");
+            if (delegate != msg.sender) revert NotDelegate();
             totalClaimed += _claimTo(b, msg.sender);
         }
     }
@@ -221,11 +227,11 @@ contract CypherAlignmentVault is IAlignmentVault, Ownable, ReentrancyGuard {
     function _claimTo(address benefactor, address recipient) internal returns (uint256 ethClaimed) {
         uint256 contrib = benefactorContribution[benefactor];
         if (contrib == 0) return 0;
-        uint256 pending = contrib * accRewardPerContribution / 1e18 - rewardDebt[benefactor];
+        uint256 pending = contrib * accRewardPerContribution / 1e18 - rewardDebt[benefactor]; // round down: favors vault
         if (pending == 0) return 0;
-        rewardDebt[benefactor] = contrib * accRewardPerContribution / 1e18;
+        rewardDebt[benefactor] = contrib * accRewardPerContribution / 1e18; // round down: benefactor cannot over-claim
         (bool ok,) = recipient.call{value: pending}("");
-        require(ok, "ETH transfer failed");
+        if (!ok) revert TransferFailed();
         ethClaimed = pending;
         emit FeesClaimed(benefactor, pending);
     }
@@ -233,16 +239,18 @@ contract CypherAlignmentVault is IAlignmentVault, Ownable, ReentrancyGuard {
     // ── Governance ────────────────────────────────────────────────────────
 
     function withdrawProtocolFees() external {
-        require(msg.sender == protocolTreasury, "Not treasury");
+        if (msg.sender != protocolTreasury) revert Unauthorized();
         uint256 amount = accumulatedProtocolFees;
         accumulatedProtocolFees = 0;
         (bool ok,) = protocolTreasury.call{value: amount}("");
-        require(ok);
+        if (!ok) revert TransferFailed();
+        emit ProtocolFeesWithdrawn(amount);
     }
 
     function setProtocolYieldCutBps(uint256 bps) external onlyOwner {
-        require(bps <= 1000, "Max 10%");
+        if (bps > 1000) revert ExceedsMaxBps();
         protocolYieldCutBps = bps;
+        emit ProtocolYieldCutUpdated(bps);
     }
 
     // ── IAlignmentVault compliance ────────────────────────────────────────
@@ -250,7 +258,7 @@ contract CypherAlignmentVault is IAlignmentVault, Ownable, ReentrancyGuard {
     function calculateClaimableAmount(address benefactor) external view override returns (uint256) {
         uint256 contrib = benefactorContribution[benefactor];
         if (contrib == 0) return 0;
-        return contrib * accRewardPerContribution / 1e18 - rewardDebt[benefactor];
+        return contrib * accRewardPerContribution / 1e18 - rewardDebt[benefactor]; // round down: favors vault
     }
 
     function getBenefactorContribution(address benefactor) external view override returns (uint256) {

@@ -3,6 +3,7 @@ pragma solidity ^0.8.20;
 
 import {Test} from "forge-std/Test.sol";
 import {PromotionBadges} from "../../src/promotion/PromotionBadges.sol";
+import {Ownable} from "solady/auth/Ownable.sol";
 
 contract PromotionBadgesTest is Test {
     PromotionBadges public badges;
@@ -147,7 +148,7 @@ contract PromotionBadgesTest is Test {
         vm.deal(buyer, 1 ether);
         vm.startPrank(buyer);
 
-        vm.expectRevert("Insufficient payment");
+        vm.expectRevert(PromotionBadges.InsufficientPayment.selector);
         badges.purchaseBadge{value: 0.001 ether}(
             instance1,
             PromotionBadges.BadgeType.SPOTLIGHT, // 0.01 ETH/day
@@ -161,7 +162,7 @@ contract PromotionBadgesTest is Test {
         vm.deal(buyer, 1 ether);
         vm.startPrank(buyer);
 
-        vm.expectRevert("Invalid badge");
+        vm.expectRevert(PromotionBadges.InvalidBadge.selector);
         badges.purchaseBadge{value: 0.01 ether}(
             instance1,
             PromotionBadges.BadgeType.NONE,
@@ -175,7 +176,7 @@ contract PromotionBadgesTest is Test {
         vm.deal(buyer, 1 ether);
         vm.startPrank(buyer);
 
-        vm.expectRevert("Invalid duration");
+        vm.expectRevert(PromotionBadges.InvalidDuration.selector);
         badges.purchaseBadge{value: 0.01 ether}(
             instance1,
             PromotionBadges.BadgeType.HIGHLIGHT,
@@ -189,7 +190,7 @@ contract PromotionBadgesTest is Test {
         vm.deal(buyer, 100 ether);
         vm.startPrank(buyer);
 
-        vm.expectRevert("Invalid duration");
+        vm.expectRevert(PromotionBadges.InvalidDuration.selector);
         badges.purchaseBadge{value: 100 ether}(
             instance1,
             PromotionBadges.BadgeType.HIGHLIGHT,
@@ -279,7 +280,7 @@ contract PromotionBadgesTest is Test {
         uint256 cost = (0.001 ether * duration) / 1 days;
         badges.purchaseBadge{value: cost}(instance1, PromotionBadges.BadgeType.HIGHLIGHT, duration);
 
-        vm.expectRevert("Different badge active");
+        vm.expectRevert(PromotionBadges.DifferentBadgeActive.selector);
         badges.purchaseBadge{value: 0.1 ether}(
             instance1,
             PromotionBadges.BadgeType.TRENDING,
@@ -387,7 +388,7 @@ contract PromotionBadgesTest is Test {
         vm.startPrank(owner);
         PromotionBadges badgesNoTreasury = new PromotionBadges(address(0));
 
-        vm.expectRevert("Treasury not set");
+        vm.expectRevert(PromotionBadges.TreasuryNotSet.selector);
         badgesNoTreasury.withdrawProtocolFees();
         vm.stopPrank();
     }
@@ -395,7 +396,7 @@ contract PromotionBadgesTest is Test {
     function test_withdrawProtocolFees_noBalance() public {
         vm.startPrank(owner);
 
-        vm.expectRevert("No fees");
+        vm.expectRevert(PromotionBadges.NoFees.selector);
         badges.withdrawProtocolFees();
 
         vm.stopPrank();
@@ -435,7 +436,7 @@ contract PromotionBadgesTest is Test {
     function test_setBadgePrice_invalidBadgeNone() public {
         vm.startPrank(owner);
 
-        vm.expectRevert("Invalid badge");
+        vm.expectRevert(PromotionBadges.InvalidBadge.selector);
         badges.setBadgePrice(PromotionBadges.BadgeType.NONE, 0.005 ether);
 
         vm.stopPrank();
@@ -466,7 +467,7 @@ contract PromotionBadgesTest is Test {
     function test_assignBadgeFor_unauthorized() public {
         vm.startPrank(factory);
 
-        vm.expectRevert("Not authorized");
+        vm.expectRevert(Ownable.Unauthorized.selector);
         badges.assignBadgeFor(instance1, PromotionBadges.BadgeType.HIGHLIGHT, 14 days);
 
         vm.stopPrank();
@@ -479,7 +480,7 @@ contract PromotionBadgesTest is Test {
 
         vm.startPrank(factory);
 
-        vm.expectRevert("Invalid badge");
+        vm.expectRevert(PromotionBadges.InvalidBadge.selector);
         badges.assignBadgeFor(instance1, PromotionBadges.BadgeType.NONE, 14 days);
 
         vm.stopPrank();
@@ -511,10 +512,10 @@ contract PromotionBadgesTest is Test {
     function test_setDurationBounds_invalidBounds() public {
         vm.startPrank(owner);
 
-        vm.expectRevert("Invalid bounds");
+        vm.expectRevert(PromotionBadges.InvalidBounds.selector);
         badges.setDurationBounds(0, 90 days); // min must be > 0
 
-        vm.expectRevert("Invalid bounds");
+        vm.expectRevert(PromotionBadges.InvalidBounds.selector);
         badges.setDurationBounds(30 days, 7 days); // max must be > min
 
         vm.stopPrank();
@@ -562,7 +563,7 @@ contract PromotionBadgesTest is Test {
     function test_setProtocolTreasury_revertZeroAddress() public {
         vm.startPrank(owner);
 
-        vm.expectRevert("Invalid treasury");
+        vm.expectRevert(PromotionBadges.InvalidAddress.selector);
         badges.setProtocolTreasury(address(0));
 
         vm.stopPrank();

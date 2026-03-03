@@ -33,6 +33,10 @@ interface IZAMM {
  *         Receives ETH + tokens, deploys ZAMM liquidity, pays graduation fees.
  */
 contract ZAMMLiquidityDeployerModule is ILiquidityDeployerModule {
+    error ETHMismatch();
+    error NoETHForPool();
+    error NoTokensForPool();
+
     address public immutable zamm;
     uint256 public immutable feeOrHook;
 
@@ -61,18 +65,18 @@ contract ZAMMLiquidityDeployerModule is ILiquidityDeployerModule {
      *      ETH must equal p.ethReserve exactly.
      */
     function deployLiquidity(DeployParams calldata p) external payable override {
-        require(msg.value == p.ethReserve, "ETH mismatch");
+        if (msg.value != p.ethReserve) revert ETHMismatch();
         PoolResult memory r = _deployPool(p);
         _payFees(p, r);
     }
 
     function _deployPool(ILiquidityDeployerModule.DeployParams calldata p) private returns (PoolResult memory r) {
         // Fixed 1/19/80 split: 1% protocol, 19% vault, 80% LP
-        r.protocolFee = p.ethReserve / 100;
-        r.vaultCut    = (p.ethReserve * 19) / 100;
+        r.protocolFee = p.ethReserve / 100; // round down (floor): dust absorbed by ethForPool
+        r.vaultCut    = (p.ethReserve * 19) / 100; // round down (floor): dust absorbed by ethForPool
         r.ethForPool  = p.ethReserve - r.protocolFee - r.vaultCut;
-        require(r.ethForPool > 0, "No ETH for pool");
-        require(p.tokenReserve > 0, "No tokens for pool");
+        if (r.ethForPool == 0) revert NoETHForPool();
+        if (p.tokenReserve == 0) revert NoTokensForPool();
 
         r.ethIsToken0 = address(0) < p.token;
         r.token0 = r.ethIsToken0 ? address(0) : p.token;

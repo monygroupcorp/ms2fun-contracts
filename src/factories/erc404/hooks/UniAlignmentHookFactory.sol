@@ -13,6 +13,14 @@ import {IAlignmentVault} from "../../../interfaces/IAlignmentVault.sol";
  * @dev Hooks are deployed via CREATE2 for deterministic addresses required by Uniswap V4
  */
 contract UniAlignmentHookFactory is Ownable, ReentrancyGuard {
+    error InsufficientFee();
+    error InvalidPoolManager();
+    error InvalidVault();
+    error InvalidWETH();
+    error InvalidCreator();
+    error InvalidFactory();
+    error InvalidTemplate();
+
     address public hookTemplate;
     uint256 public hookCreationFee;
 
@@ -58,11 +66,11 @@ contract UniAlignmentHookFactory is Ownable, ReentrancyGuard {
         uint256 hookFeeBips,
         uint24 initialLpFeeRate
     ) external payable nonReentrant returns (address hook) {
-        require(msg.value >= hookCreationFee, "Insufficient fee");
-        require(poolManager != address(0), "Invalid pool manager");
-        require(vault != address(0), "Invalid vault");
-        require(wethAddr != address(0), "Invalid WETH");
-        require(creator != address(0), "Invalid creator");
+        if (msg.value < hookCreationFee) revert InsufficientFee();
+        if (poolManager == address(0)) revert InvalidPoolManager();
+        if (vault == address(0)) revert InvalidVault();
+        if (wethAddr == address(0)) revert InvalidWETH();
+        if (creator == address(0)) revert InvalidCreator();
 
         // Deploy new hook instance using CREATE2 for deterministic address
         // Hook owner is always the protocol (hook factory owner), not the artist
@@ -100,7 +108,7 @@ contract UniAlignmentHookFactory is Ownable, ReentrancyGuard {
      * @param factory Address of the factory to authorize
      */
     function authorizeFactory(address factory) external onlyOwner {
-        require(factory != address(0), "Invalid factory");
+        if (factory == address(0)) revert InvalidFactory();
         authorizedFactories[factory] = true;
         emit FactoryAuthorized(factory);
     }
@@ -128,7 +136,7 @@ contract UniAlignmentHookFactory is Ownable, ReentrancyGuard {
      * @param _template New template address
      */
     function setHookTemplate(address _template) external onlyOwner {
-        require(_template != address(0), "Invalid template");
+        if (_template == address(0)) revert InvalidTemplate();
         address oldTemplate = hookTemplate;
         hookTemplate = _template;
         emit HookTemplateUpdated(oldTemplate, _template);

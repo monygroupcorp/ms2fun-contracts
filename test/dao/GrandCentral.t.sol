@@ -100,7 +100,7 @@ contract GrandCentralTest is Test {
         amounts[0] = 100;
 
         vm.prank(alice);
-        vm.expectRevert("!dao & !manager");
+        vm.expectRevert(GrandCentral.Unauthorized.selector);
         dao.mintShares(to, amounts);
     }
 
@@ -142,7 +142,7 @@ contract GrandCentralTest is Test {
         amounts[0] = 500;
 
         vm.prank(alice);
-        vm.expectRevert("!dao & !manager");
+        vm.expectRevert(GrandCentral.Unauthorized.selector);
         dao.mintLoot(to, amounts);
     }
 
@@ -176,7 +176,7 @@ contract GrandCentralTest is Test {
         amounts[0] = 1;
 
         vm.prank(address(dao));
-        vm.expectRevert("insufficient loot");
+        vm.expectRevert(GrandCentral.InsufficientLoot.selector);
         dao.burnLoot(from, amounts);
     }
 
@@ -216,7 +216,7 @@ contract GrandCentralTest is Test {
 
         // Alice (loot-only) tries to vote — should fail
         vm.prank(alice);
-        vm.expectRevert("!member");
+        vm.expectRevert(GrandCentral.NotMember.selector);
         dao.submitVote(uint32(id), true);
     }
 
@@ -237,7 +237,7 @@ contract GrandCentralTest is Test {
 
         // Alice tries to sponsor — should fail (loot doesn't count)
         vm.prank(alice);
-        vm.expectRevert("!sponsor");
+        vm.expectRevert(GrandCentral.InsufficientSponsorShares.selector);
         dao.sponsorProposal(uint32(id));
     }
 

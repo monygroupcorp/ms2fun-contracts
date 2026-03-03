@@ -115,7 +115,6 @@ All flagged functions have `nonReentrant` modifiers. Cross-function reentrancy r
 | M04_GriefingAttackTests | 10 | 10 | 0 |
 | M04_RewardLogicTests | 14 | 14 | 0 |
 | BondingCurveMathTest | 51 | 51 | 0 |
-| PricingMathTest | 36 | 36 | 0 |
 | FeatureUtilsTest | 21 | 21 | 0 |
 | MetadataUtilsTest | 25 | 25 | 0 |
 | HookAddressMinerTest | 13 | 13 | 0 |
@@ -196,7 +195,6 @@ All 5 TEST STUB markers and 2 mock stubs have been **removed** from `src/vaults/
 |------|-----|-------------|
 | `src/libraries/v4/LiquidityAmounts.sol` | 135 | V4 liquidity calculations |
 | `src/factories/erc404/libraries/BondingCurveMath.sol` | 123 | Bonding curve math |
-| `src/master/libraries/PricingMath.sol` | 113 | Queue pricing |
 | `src/libraries/GlobalMessagePacking.sol` | 106 | Bit-packing |
 | `src/shared/libraries/MetadataUtils.sol` | 105 | Metadata handling |
 | `src/factories/erc1155/libraries/EditionPricing.sol` | 99 | Edition pricing |

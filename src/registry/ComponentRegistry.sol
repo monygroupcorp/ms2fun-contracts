@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import {UUPSUpgradeable} from "solady/utils/UUPSUpgradeable.sol";
-import {Ownable} from "solady/auth/Ownable.sol";
+import {SafeOwnableUUPS} from "../shared/SafeOwnableUUPS.sol";
 import {IComponentRegistry} from "./interfaces/IComponentRegistry.sol";
 
 /**
@@ -13,7 +12,15 @@ import {IComponentRegistry} from "./interfaces/IComponentRegistry.sol";
  *      UUPS upgradeable. Owner is the DAO via Timelock.
  *      Revocation blocks new instance creation only — existing instances are unaffected.
  */
-contract ComponentRegistry is UUPSUpgradeable, Ownable, IComponentRegistry {
+contract ComponentRegistry is SafeOwnableUUPS, IComponentRegistry {
+
+    // ┌─────────────────────────┐
+    // │      Custom Errors      │
+    // └─────────────────────────┘
+
+    error InvalidAddress();
+    error AlreadyApproved();
+    error NotApproved();
 
     // ┌─────────────────────────┐
     // │      State Variables    │
@@ -42,13 +49,11 @@ contract ComponentRegistry is UUPSUpgradeable, Ownable, IComponentRegistry {
     }
 
     function initialize(address _owner) public {
-        require(!_initialized, "Already initialized");
-        require(_owner != address(0), "Invalid owner");
+        if (_initialized) revert AlreadyInitialized();
+        if (_owner == address(0)) revert InvalidAddress();
         _initialized = true;
         _setOwner(_owner);
     }
-
-    function _authorizeUpgrade(address) internal override onlyOwner {}
 
     // ┌─────────────────────────┐
     // │   DAO Mutations         │
@@ -56,8 +61,8 @@ contract ComponentRegistry is UUPSUpgradeable, Ownable, IComponentRegistry {
 
     /// @inheritdoc IComponentRegistry
     function approveComponent(address component, bytes32 tag, string calldata name) external onlyOwner {
-        require(component != address(0), "Invalid component");
-        require(!isApproved[component], "Already approved");
+        if (component == address(0)) revert InvalidAddress();
+        if (isApproved[component]) revert AlreadyApproved();
         isApproved[component] = true;
         componentTag[component] = tag;
         componentName[component] = name;
@@ -67,7 +72,7 @@ contract ComponentRegistry is UUPSUpgradeable, Ownable, IComponentRegistry {
 
     /// @inheritdoc IComponentRegistry
     function revokeComponent(address component) external onlyOwner {
-        require(isApproved[component], "Not approved");
+        if (!isApproved[component]) revert NotApproved();
         isApproved[component] = false;
         emit ComponentRevoked(component);
     }

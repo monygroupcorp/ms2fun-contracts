@@ -596,8 +596,7 @@ src/
 │   │   ├── IAlignmentRegistry.sol          # Alignment target/asset/ambassador interface
 │   │   └── IFeatureRegistry.sol
 │   └── libraries/
-│       ├── FeatureUtils.sol
-│       └── PricingMath.sol
+│       └── FeatureUtils.sol
 │
 ├── factories/
 │   ├── erc404/
@@ -674,3 +673,65 @@ src/
         ├── IHook.sol
         └── ILPConversion.sol
 ```
+
+---
+
+## Appendix: Rounding Direction Reference
+
+All integer division in this codebase rounds **down** (Solidity default floor division). Every division site is annotated inline with `// round down: <rationale>`. The table below provides a consolidated reference for auditors.
+
+### Design Principle
+
+**Floor-rounding always favors the pool/protocol/vault** — never the individual claimant. Rounding dust either stays in the shared pool (preventing over-withdrawal) or is absorbed by the remainder term in subtraction-based splits.
+
+### Revenue Split (RevenueSplitLib)
+
+| Expression | Favors | Dust Absorption |
+|---|---|---|
+| `amount / 100` (1% protocol) | Artist (remainder) | `remainder = amount - protocol - vault` absorbs all dust |
+| `amount * 19 / 100` (19% vault) | Artist (remainder) | Same — subtraction ensures exact conservation |
+
+### MasterChef / RewardPerToken Accumulators
+
+Used in: GrandCentral, ZAMMAlignmentVault, CypherAlignmentVault, ERC404StakingModule
+
+| Expression | Favors | Rationale |
+|---|---|---|
+| `rewardPerShare += amount * PRECISION / totalWeight` | Pool | Dust stays unclaimed in pool |
+| `rewardDebt = weight * rewardPerShare / PRECISION` | Pool | Member can never over-claim |
+| `pending = weight * rewardPerShare / PRECISION - rewardDebt` | Pool | Same floor; consistent with debt snapshot |
+
+### Share-Based Distribution (UniAlignmentVault)
+
+| Expression | Favors | Rationale |
+|---|---|---|
+| `sharePercent = contribution * 1e18 / ethToAdd` | Vault | Dust tracked in `accumulatedDustShares` |
+| `sharesToIssue = totalShares * sharePercent / 1e18` | Vault | Dust redistributed to largest contributor |
+| `currentShareValue = fees * shares / totalShares` | Vault | Benefactor cannot withdraw more than pool holds |
+
+### Basis-Point Fees
+
+| Expression | Favors | Rationale |
+|---|---|---|
+| `protocolCut = total * protocolYieldCutBps / 10000` | Benefactors | Protocol takes slightly less; `benefactorAmount = total - protocolCut` absorbs dust |
+| `bondingFee = totalCost * bondingFeeBps / 10000` | Buyer | Buyer pays slightly less; fee is additive so no conservation issue |
+| `hookFee = ethMoved * hookFeeBips / 10000` | Swapper | Swapper pays slightly less |
+| `reserveAmount = available * reserveBps / 10000` | Routable pool | Slightly more goes to dividend/ragequit |
+
+### Time-Based Pricing (FeaturedQueueManager, PromotionBadges)
+
+| Expression | Favors | Rationale |
+|---|---|---|
+| `cost = dailyRate * duration / 1 days` | Renter/Buyer | Sub-day fractions cost nothing — `msg.value >= cost` check ensures no under-payment |
+| `daysPassed = elapsed / 1 days` | Renter | Partial days don't trigger decay |
+
+### Other
+
+| Expression | Location | Note |
+|---|---|---|
+| `(low + high + 1) / 2` | GrandCentral binary search | Rounds **up** — standard upper-bound binary search to avoid infinite loop |
+| `maxTotalShares * minRetentionPercent / 100` | GrandCentral retention check | Rounds down — makes it slightly harder to fail the retention check (conservative) |
+| `balance / (1e6 * 1e18)` | QueryAggregator | View-only NFT count conversion; no value transfer |
+| `normFactor = maxBondingSupply / 1e18` | CurveParamsComputer | Normalization for safe math; guarded by `!= 0` fallback |
+| `deployETH / 2` | ZAMMAlignmentVault init | Extra wei goes to LP side |
+| `principalETH * feeLP / lpHeld` | ZAMMAlignmentVault harvest | Slightly over-estimates remaining principal (conservative) |

@@ -4,6 +4,16 @@ pragma solidity ^0.8.20;
 import {SafeTransferLib} from "solady/utils/SafeTransferLib.sol";
 
 contract StipendConductor {
+    // ============ Custom Errors ============
+
+    error InvalidAddress();
+    error Unauthorized();
+    error ZeroAmount();
+    error ZeroInterval();
+    error Revoked();
+    error TooEarly();
+    error StipendTransferFailed();
+
     address public immutable dao;
     address public beneficiary;
     uint256 public amount;
@@ -17,15 +27,15 @@ contract StipendConductor {
     event BeneficiaryUpdated(address indexed oldBeneficiary, address indexed newBeneficiary);
 
     modifier onlyDAO() {
-        require(msg.sender == dao, "!dao");
+        if (msg.sender != dao) revert Unauthorized();
         _;
     }
 
     constructor(address _dao, address _beneficiary, uint256 _amount, uint256 _interval) {
-        require(_dao != address(0), "invalid dao");
-        require(_beneficiary != address(0), "invalid beneficiary");
-        require(_amount > 0, "zero amount");
-        require(_interval > 0, "zero interval");
+        if (_dao == address(0)) revert InvalidAddress();
+        if (_beneficiary == address(0)) revert InvalidAddress();
+        if (_amount == 0) revert ZeroAmount();
+        if (_interval == 0) revert ZeroInterval();
         dao = _dao;
         beneficiary = _beneficiary;
         amount = _amount;
@@ -33,13 +43,13 @@ contract StipendConductor {
     }
 
     function execute() external {
-        require(!revoked, "revoked");
-        require(lastExecuted == 0 || block.timestamp >= lastExecuted + interval, "too early");
+        if (revoked) revert Revoked();
+        if (lastExecuted != 0 && block.timestamp < lastExecuted + interval) revert TooEarly();
         lastExecuted = block.timestamp;
         (bool success,) = dao.call(
             abi.encodeWithSignature("executeStipend(address,uint256)", beneficiary, amount)
         );
-        require(success, "stipend transfer failed");
+        if (!success) revert StipendTransferFailed();
         emit StipendExecuted(beneficiary, amount, block.timestamp);
     }
 
@@ -49,13 +59,13 @@ contract StipendConductor {
     }
 
     function updateAmount(uint256 _amount) external onlyDAO {
-        require(_amount > 0, "zero amount");
+        if (_amount == 0) revert ZeroAmount();
         emit StipendAmountUpdated(amount, _amount);
         amount = _amount;
     }
 
     function updateBeneficiary(address _beneficiary) external onlyDAO {
-        require(_beneficiary != address(0), "invalid beneficiary");
+        if (_beneficiary == address(0)) revert InvalidAddress();
         emit BeneficiaryUpdated(beneficiary, _beneficiary);
         beneficiary = _beneficiary;
     }

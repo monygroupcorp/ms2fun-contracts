@@ -13,6 +13,7 @@ import {StateLibrary} from "v4-core/libraries/StateLibrary.sol";
 import {PoolId} from "v4-core/types/PoolId.sol";
 import {CurrencySettler} from "../../libraries/v4/CurrencySettler.sol";
 import {FixedPointMathLib} from "solady/utils/FixedPointMathLib.sol";
+import {RevenueSplitLib} from "../../shared/libraries/RevenueSplitLib.sol";
 import {SafeTransferLib} from "solady/utils/SafeTransferLib.sol";
 import {IERC20} from "../../shared/interfaces/IERC20.sol";
 import {IAlignmentVault} from "../../interfaces/IAlignmentVault.sol";
@@ -36,6 +37,11 @@ contract LiquidityDeployerModule is IUnlockCallback, ILiquidityDeployerModule {
     using StateLibrary for IPoolManager;
     using CurrencySettler for Currency;
     using FixedPointMathLib for uint256;
+
+    error ETHMismatch();
+    error NoETHForPool();
+    error NoTokensForPool();
+    error NotPoolManager();
 
     address public immutable weth;
     IPoolManager public immutable v4PoolManager;
@@ -82,12 +88,12 @@ contract LiquidityDeployerModule is IUnlockCallback, ILiquidityDeployerModule {
 
     /**
      * @notice Deploy V4 liquidity on behalf of an ERC404BondingInstance.
-     * @dev Caller must have transferred LIQUIDITY_RESERVE tokens to this contract before calling.
+     * @dev Caller must have transferred liquidityReserve tokens to this contract before calling.
      *      ETH is sent as msg.value.
      * @param p Deployment parameters
      */
     function deployLiquidity(DeployParams calldata p) external payable override {
-        require(msg.value == p.ethReserve, "ETH mismatch");
+        if (msg.value != p.ethReserve) revert ETHMismatch();
         AmountsResult memory r = _computeAmounts(p);
         _setupPoolAndUnlock(p, r);
         _postUnlock(p, r);
@@ -170,7 +176,7 @@ contract LiquidityDeployerModule is IUnlockCallback, ILiquidityDeployerModule {
      */
     function unlockCallback(bytes calldata) external returns (bytes memory) {
         CallbackContext memory ctx = _ctx;
-        require(msg.sender == address(ctx.poolManager), "Not pool manager");
+        if (msg.sender != address(ctx.poolManager)) revert NotPoolManager();
 
         PoolId poolId = ctx.poolKey.toId();
         (uint160 sqrtPriceX96,,,) = ctx.poolManager.getSlot0(poolId);
@@ -208,16 +214,15 @@ contract LiquidityDeployerModule is IUnlockCallback, ILiquidityDeployerModule {
     // -------------------------------------------------------------------------
 
     function _computeAmounts(ILiquidityDeployerModule.DeployParams calldata p) internal pure returns (AmountsResult memory r) {
-        uint256 ethAvailable = p.ethReserve;
-
         // Fixed 1/19/80 split: 1% protocol, 19% vault, 80% LP
-        r.protocolFee = ethAvailable / 100;
-        r.vaultCut    = (ethAvailable * 19) / 100;
-        r.ethForPool  = ethAvailable - r.protocolFee - r.vaultCut;
+        RevenueSplitLib.Split memory s = RevenueSplitLib.split(p.ethReserve);
+        r.protocolFee = s.protocolCut;
+        r.vaultCut    = s.vaultCut;
+        r.ethForPool  = s.remainder;
         r.tokensForPool = p.tokenReserve;
 
-        require(r.ethForPool > 0, "No ETH for pool");
-        require(r.tokensForPool > 0, "No tokens for pool");
+        if (r.ethForPool == 0) revert NoETHForPool();
+        if (r.tokensForPool == 0) revert NoTokensForPool();
     }
 
     function _computeSqrtPrice(

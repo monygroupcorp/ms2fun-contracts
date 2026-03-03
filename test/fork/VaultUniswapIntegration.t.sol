@@ -6,6 +6,8 @@ import { UniAlignmentVault } from "src/vaults/uni/UniAlignmentVault.sol";
 import { UniswapVaultPriceValidator } from "src/peripherals/UniswapVaultPriceValidator.sol";
 import { IVaultPriceValidator } from "src/interfaces/IVaultPriceValidator.sol";
 import { LibClone } from "solady/utils/LibClone.sol";
+import { MockAlignmentRegistry } from "../mocks/MockAlignmentRegistry.sol";
+import { IAlignmentRegistry } from "src/master/interfaces/IAlignmentRegistry.sol";
 import { Currency } from "v4-core/types/Currency.sol";
 import { PoolKey } from "v4-core/types/PoolKey.sol";
 import { IHooks } from "v4-core/interfaces/IHooks.sol";
@@ -18,11 +20,13 @@ import { IHooks } from "v4-core/interfaces/IHooks.sol";
  */
 contract VaultUniswapIntegrationTest is ForkTestBase {
     UniAlignmentVault vault;
+    MockAlignmentRegistry mockRegistry;
     address owner;
     address alice;
     address bob;
     address charlie;
     address alignmentToken;
+    uint256 constant TARGET_ID = 1;
 
     function setUp() public {
         loadAddresses();
@@ -38,6 +42,10 @@ contract VaultUniswapIntegrationTest is ForkTestBase {
         UniswapVaultPriceValidator priceValidator = new UniswapVaultPriceValidator(
             WETH, UNISWAP_V2_FACTORY, UNISWAP_V3_FACTORY, UNISWAP_V4_POOL_MANAGER, 1000
         );
+        mockRegistry = new MockAlignmentRegistry();
+        mockRegistry.setTargetActive(TARGET_ID, true);
+        mockRegistry.setTokenInTarget(TARGET_ID, alignmentToken, true);
+
         UniAlignmentVault vaultImpl = new UniAlignmentVault();
         vault = UniAlignmentVault(payable(LibClone.clone(address(vaultImpl))));
         vm.prank(owner);
@@ -48,7 +56,9 @@ contract VaultUniswapIntegrationTest is ForkTestBase {
             address(0), // TODO: replace with deployed zRouter address
             3000,
             60,
-            IVaultPriceValidator(address(priceValidator))
+            IVaultPriceValidator(address(priceValidator)),
+            IAlignmentRegistry(address(mockRegistry)),
+            TARGET_ID
         );
 
         // Set V4 pool key - H-02: Hook requires native ETH (address(0)), not WETH
@@ -125,7 +135,9 @@ contract VaultUniswapIntegrationTest is ForkTestBase {
             60,
             IVaultPriceValidator(address(new UniswapVaultPriceValidator(
                 WETH, UNISWAP_V2_FACTORY, UNISWAP_V3_FACTORY, UNISWAP_V4_POOL_MANAGER, 1000
-            )))
+            ))),
+            IAlignmentRegistry(address(mockRegistry)),
+            TARGET_ID
         );
 
         // Verify initial state
@@ -143,6 +155,7 @@ contract VaultUniswapIntegrationTest is ForkTestBase {
 
     function test_setAlignmentToken_success() public {
         address newToken = makeAddr("newAlignmentToken");
+        mockRegistry.setTokenInTarget(TARGET_ID, newToken, true);
 
         vm.prank(owner);
         vault.setAlignmentToken(newToken);
@@ -387,7 +400,7 @@ contract VaultUniswapIntegrationTest is ForkTestBase {
 
     function test_convertWithZeroPending_reverts() public {
         // Try to convert with no pending contributions
-        vm.expectRevert("No pending ETH to convert");
+        vm.expectRevert(UniAlignmentVault.NoPendingETH.selector);
         vault.convertAndAddLiquidity(0);
 
         emit log_string("[PASS] Cannot convert with zero pending ETH");
@@ -612,7 +625,7 @@ contract VaultUniswapIntegrationTest is ForkTestBase {
     function test_claimFees_zeroSharesReverts() public {
         // Charlie has no shares
         vm.prank(charlie);
-        vm.expectRevert("No shares");
+        vm.expectRevert(UniAlignmentVault.NoShares.selector);
         vault.claimFees();
 
         emit log_string("[PASS] Cannot claim fees with zero shares");
@@ -625,7 +638,7 @@ contract VaultUniswapIntegrationTest is ForkTestBase {
 
         // Try to claim with no accumulated fees
         vm.prank(alice);
-        vm.expectRevert("No fees to claim");
+        vm.expectRevert(UniAlignmentVault.NoFeesToClaim.selector);
         vault.claimFees();
 
         emit log_string("[PASS] Cannot claim when no fees accumulated");

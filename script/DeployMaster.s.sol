@@ -21,10 +21,8 @@ contract DeployMaster is Script {
             "initialize(address)",
             msg.sender
         );
-        MasterRegistry wrapper = new MasterRegistry(address(implementation), initData);
-        address proxy = wrapper.getProxyAddress();
-        console.log("MasterRegistry (ERC1967 proxy):", proxy);
-        console.log("MasterRegistry (wrapper):", address(wrapper));
+        MasterRegistry proxy = new MasterRegistry(address(implementation), initData);
+        console.log("MasterRegistry (ERC1967 proxy):", address(proxy));
 
         vm.stopBroadcast();
     }

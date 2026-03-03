@@ -185,7 +185,7 @@ contract DeployDAOTest is Test {
 
         // Second stipend too early
         vm.warp(block.timestamp + STIPEND_INTERVAL - 1);
-        vm.expectRevert("too early");
+        vm.expectRevert(StipendConductor.TooEarly.selector);
         stipendConductor.execute();
 
         // Second stipend on time
@@ -235,7 +235,7 @@ contract DeployDAOTest is Test {
     }
 
     function test_StipendFailsBeforeRegistration() public {
-        vm.expectRevert("stipend transfer failed");
+        vm.expectRevert(StipendConductor.StipendTransferFailed.selector);
         stipendConductor.execute();
     }
 
@@ -243,12 +243,12 @@ contract DeployDAOTest is Test {
         uint256 proposalId = _submitAndVoteProposal();
 
         // Still in voting
-        vm.expectRevert("!ready");
+        vm.expectRevert(GrandCentral.NotReady.selector);
         _processProposal(proposalId);
 
         // In grace
         vm.warp(block.timestamp + VOTING_PERIOD + 1);
-        vm.expectRevert("!ready");
+        vm.expectRevert(GrandCentral.NotReady.selector);
         _processProposal(proposalId);
     }
 

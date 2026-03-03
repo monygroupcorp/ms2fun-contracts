@@ -228,7 +228,7 @@ contract AlignmentTargetsTest is Test {
         MockAlignedVault vault = new MockAlignedVault(cultToken);
 
         vm.prank(daoOwner);
-        vm.expectRevert("Target not active");
+        vm.expectRevert(MasterRegistryV1.TargetNotActive.selector);
         masterRegistry.registerVault(address(vault), daoOwner, "Bad Vault", "ipfs://test", 999);
     }
 
@@ -241,7 +241,7 @@ contract AlignmentTargetsTest is Test {
         MockAlignedVault vault = new MockAlignedVault(cultToken);
 
         vm.prank(daoOwner);
-        vm.expectRevert("Target not active");
+        vm.expectRevert(MasterRegistryV1.TargetNotActive.selector);
         masterRegistry.registerVault(address(vault), daoOwner, "Bad Vault", "ipfs://test", targetId);
     }
 
@@ -252,7 +252,7 @@ contract AlignmentTargetsTest is Test {
         MockAlignedVault vault = new MockAlignedVault(wrongToken);
 
         vm.prank(daoOwner);
-        vm.expectRevert("Token not in target assets");
+        vm.expectRevert(MasterRegistryV1.TokenNotInTarget.selector);
         masterRegistry.registerVault(address(vault), daoOwner, "Bad Vault", "ipfs://test", targetId);
     }
 }

@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import {UUPSUpgradeable} from "solady/utils/UUPSUpgradeable.sol";
-import {Ownable} from "solady/auth/Ownable.sol";
+import {SafeOwnableUUPS} from "../shared/SafeOwnableUUPS.sol";
 import {IFrontendRegistry} from "./interfaces/IFrontendRegistry.sol";
 import {IENSResolver} from "./interfaces/IENSResolver.sol";
 
@@ -17,7 +16,17 @@ import {IENSResolver} from "./interfaces/IENSResolver.sol";
  *        - Gnosis Safe = registrant (owns name NFT, sets controller)
  *        - FrontendRegistry = controller (calls setContenthash on resolver)
  */
-contract FrontendRegistry is UUPSUpgradeable, Ownable, IFrontendRegistry {
+contract FrontendRegistry is SafeOwnableUUPS, IFrontendRegistry {
+
+    // ┌─────────────────────────┐
+    // │      Custom Errors      │
+    // └─────────────────────────┘
+
+    error InvalidAddress();
+    error AlreadyManaged();
+    error NotManaged();
+    error NodeNotManaged();
+    error InvalidReleaseId();
 
     // ┌─────────────────────────┐
     // │      State Variables    │
@@ -48,29 +57,27 @@ contract FrontendRegistry is UUPSUpgradeable, Ownable, IFrontendRegistry {
     }
 
     function initialize(address _owner, address _ensResolver) public {
-        require(!_initialized, "Already initialized");
-        require(_owner != address(0), "Invalid owner");
-        require(_ensResolver != address(0), "Invalid resolver");
+        if (_initialized) revert AlreadyInitialized();
+        if (_owner == address(0)) revert InvalidAddress();
+        if (_ensResolver == address(0)) revert InvalidAddress();
         _initialized = true;
         _setOwner(_owner);
         ensResolver = IENSResolver(_ensResolver);
     }
-
-    function _authorizeUpgrade(address) internal override onlyOwner {}
 
     // ┌─────────────────────────┐
     // │   ENS Name Management   │
     // └─────────────────────────┘
 
     function addEnsName(bytes32 node) external onlyOwner {
-        require(!isEnsNode[node], "Already managed");
+        if (isEnsNode[node]) revert AlreadyManaged();
         isEnsNode[node] = true;
         _ensNodes.push(node);
         emit EnsNameAdded(node);
     }
 
     function removeEnsName(bytes32 node) external onlyOwner {
-        require(isEnsNode[node], "Not managed");
+        if (!isEnsNode[node]) revert NotManaged();
         isEnsNode[node] = false;
 
         // Swap-and-pop to remove from array
@@ -139,7 +146,7 @@ contract FrontendRegistry is UUPSUpgradeable, Ownable, IFrontendRegistry {
         uint256 len = nodes.length;
         for (uint256 i; i < len; ++i) {
             bytes32 node = nodes[i];
-            require(isEnsNode[node], "Node not managed");
+            if (!isEnsNode[node]) revert NodeNotManaged();
             nodeRelease[node] = releaseId;
             ensResolver.setContenthash(node, contentHash);
             emit NodeUpdated(node, releaseId);
@@ -154,8 +161,8 @@ contract FrontendRegistry is UUPSUpgradeable, Ownable, IFrontendRegistry {
      * @param releaseId Must be a valid published release ID (1-indexed)
      */
     function pointNodeToRelease(bytes32 node, uint32 releaseId) external onlyOwner {
-        require(isEnsNode[node], "Node not managed");
-        require(releaseId > 0 && releaseId <= _releases.length, "Invalid release ID");
+        if (!isEnsNode[node]) revert NodeNotManaged();
+        if (releaseId == 0 || releaseId > _releases.length) revert InvalidReleaseId();
 
         nodeRelease[node] = releaseId;
         bytes memory contentHash = _releases[releaseId - 1].contentHash;
@@ -186,7 +193,7 @@ contract FrontendRegistry is UUPSUpgradeable, Ownable, IFrontendRegistry {
     }
 
     function getReleaseContracts(uint32 id) external view returns (address[] memory) {
-        require(id > 0 && id <= _releases.length, "Invalid release ID");
+        if (id == 0 || id > _releases.length) revert InvalidReleaseId();
         return _releases[id - 1].contracts;
     }
 

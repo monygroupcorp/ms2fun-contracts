@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import {UUPSUpgradeable} from "solady/utils/UUPSUpgradeable.sol";
-import {Ownable} from "solady/auth/Ownable.sol";
+import {SafeOwnableUUPS} from "../shared/SafeOwnableUUPS.sol";
 import {IAlignmentRegistry} from "./interfaces/IAlignmentRegistry.sol";
 
 /**
@@ -10,7 +9,15 @@ import {IAlignmentRegistry} from "./interfaces/IAlignmentRegistry.sol";
  * @notice Manages alignment targets and ambassadors for the ms2.fun protocol
  * @dev UUPS upgradeable. Owner is the DAO (GrandCentral + Safe).
  */
-contract AlignmentRegistryV1 is UUPSUpgradeable, Ownable, IAlignmentRegistry {
+contract AlignmentRegistryV1 is SafeOwnableUUPS, IAlignmentRegistry {
+    // ── Custom Errors ──
+    error InvalidAddress();
+    error InvalidTitle();
+    error NoAssets();
+    error TargetNotFound();
+    error AmbassadorAlreadyAssigned();
+    error NotAmbassador();
+
     // ── State ──
     bool private _initialized;
     uint256 public nextAlignmentTargetId;
@@ -29,8 +36,8 @@ contract AlignmentRegistryV1 is UUPSUpgradeable, Ownable, IAlignmentRegistry {
      * @param _owner Address of the DAO or owner
      */
     function initialize(address _owner) public {
-        require(!_initialized, "Already initialized");
-        require(_owner != address(0), "Invalid owner");
+        if (_initialized) revert AlreadyInitialized();
+        if (_owner == address(0)) revert InvalidAddress();
 
         _initialized = true;
         _setOwner(_owner);
@@ -44,8 +51,8 @@ contract AlignmentRegistryV1 is UUPSUpgradeable, Ownable, IAlignmentRegistry {
         string memory metadataURI,
         AlignmentAsset[] memory assets
     ) external override onlyOwner returns (uint256) {
-        require(bytes(title).length > 0 && bytes(title).length <= 256, "Invalid title");
-        require(assets.length > 0, "Must have at least one asset");
+        if (bytes(title).length == 0 || bytes(title).length > 256) revert InvalidTitle();
+        if (assets.length == 0) revert NoAssets();
 
         uint256 targetId = ++nextAlignmentTargetId;
 
@@ -59,7 +66,7 @@ contract AlignmentRegistryV1 is UUPSUpgradeable, Ownable, IAlignmentRegistry {
         });
 
         for (uint256 i = 0; i < assets.length; i++) {
-            require(assets[i].token != address(0), "Invalid asset token");
+            if (assets[i].token == address(0)) revert InvalidAddress();
             alignmentTargetAssets[targetId].push(assets[i]);
             tokenToTargetIds[assets[i].token].push(targetId);
         }
@@ -69,12 +76,12 @@ contract AlignmentRegistryV1 is UUPSUpgradeable, Ownable, IAlignmentRegistry {
     }
 
     function getAlignmentTarget(uint256 targetId) external view override returns (AlignmentTarget memory) {
-        require(alignmentTargets[targetId].approvedAt > 0, "Target not found");
+        if (alignmentTargets[targetId].approvedAt == 0) revert TargetNotFound();
         return alignmentTargets[targetId];
     }
 
     function getAlignmentTargetAssets(uint256 targetId) external view override returns (AlignmentAsset[] memory) {
-        require(alignmentTargets[targetId].approvedAt > 0, "Target not found");
+        if (alignmentTargets[targetId].approvedAt == 0) revert TargetNotFound();
         return alignmentTargetAssets[targetId];
     }
 
@@ -83,7 +90,7 @@ contract AlignmentRegistryV1 is UUPSUpgradeable, Ownable, IAlignmentRegistry {
     }
 
     function deactivateAlignmentTarget(uint256 targetId) external override onlyOwner {
-        require(alignmentTargets[targetId].approvedAt > 0, "Target not found");
+        if (alignmentTargets[targetId].approvedAt == 0) revert TargetNotFound();
         alignmentTargets[targetId].active = false;
         emit AlignmentTargetDeactivated(targetId);
     }
@@ -93,7 +100,7 @@ contract AlignmentRegistryV1 is UUPSUpgradeable, Ownable, IAlignmentRegistry {
         string memory description,
         string memory metadataURI
     ) external override onlyOwner {
-        require(alignmentTargets[targetId].approvedAt > 0, "Target not found");
+        if (alignmentTargets[targetId].approvedAt == 0) revert TargetNotFound();
 
         alignmentTargets[targetId].description = description;
         alignmentTargets[targetId].metadataURI = metadataURI;
@@ -104,9 +111,9 @@ contract AlignmentRegistryV1 is UUPSUpgradeable, Ownable, IAlignmentRegistry {
     // ============ Ambassador Functions ============
 
     function addAmbassador(uint256 targetId, address ambassador) external override onlyOwner {
-        require(alignmentTargets[targetId].approvedAt > 0, "Target not found");
-        require(ambassador != address(0), "Invalid ambassador");
-        require(!_isAmbassador[targetId][ambassador], "Already ambassador");
+        if (alignmentTargets[targetId].approvedAt == 0) revert TargetNotFound();
+        if (ambassador == address(0)) revert InvalidAddress();
+        if (_isAmbassador[targetId][ambassador]) revert AmbassadorAlreadyAssigned();
 
         _isAmbassador[targetId][ambassador] = true;
         alignmentTargetAmbassadors[targetId].push(ambassador);
@@ -115,7 +122,7 @@ contract AlignmentRegistryV1 is UUPSUpgradeable, Ownable, IAlignmentRegistry {
     }
 
     function removeAmbassador(uint256 targetId, address ambassador) external override onlyOwner {
-        require(_isAmbassador[targetId][ambassador], "Not ambassador");
+        if (!_isAmbassador[targetId][ambassador]) revert NotAmbassador();
 
         _isAmbassador[targetId][ambassador] = false;
 
@@ -149,7 +156,4 @@ contract AlignmentRegistryV1 is UUPSUpgradeable, Ownable, IAlignmentRegistry {
         return false;
     }
 
-    // ============ UUPS ============
-
-    function _authorizeUpgrade(address newImplementation) internal override onlyOwner {}
 }

@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import {UUPSUpgradeable} from "solady/utils/UUPSUpgradeable.sol";
-import {Ownable} from "solady/auth/Ownable.sol";
+import {SafeOwnableUUPS} from "../shared/SafeOwnableUUPS.sol";
 import {ReentrancyGuard} from "solady/utils/ReentrancyGuard.sol";
 import {IMasterRegistry} from "./interfaces/IMasterRegistry.sol";
 import {SafeTransferLib} from "solady/utils/SafeTransferLib.sol";
@@ -29,7 +28,25 @@ import {SafeTransferLib} from "solady/utils/SafeTransferLib.sol";
  * Rank decays linearly at dailyDecayRate per day, computed lazily at read time.
  * getFeaturedInstances returns active slots sorted by effective rank — position 1 first.
  */
-contract FeaturedQueueManager is UUPSUpgradeable, Ownable, ReentrancyGuard {
+contract FeaturedQueueManager is SafeOwnableUUPS, ReentrancyGuard {
+
+    // ── Custom Errors ─────────────────────────────────────────────────────
+    error InvalidAddress();
+    error InstanceNotRegistered();
+    error AlreadyFeatured();
+    error InvalidDuration();
+    error InsufficientPayment();
+    error QueueFull();
+    error MustSendETH();
+    error SlotNotActive();
+    error SlotExpired();
+    error DurationTooShort();
+    error DurationTooLong();
+    error InvalidBounds();
+    error InvalidSize();
+    error DiscountTooHigh();
+    error TreasuryNotSet();
+    error NothingToWithdraw();
 
     // ── Data ───────────────────────────────────────────────────────────────
 
@@ -95,9 +112,9 @@ contract FeaturedQueueManager is UUPSUpgradeable, Ownable, ReentrancyGuard {
     }
 
     function initialize(address _masterRegistry, address _owner) external {
-        require(!_initialized, "Already initialized");
-        require(_masterRegistry != address(0), "Invalid master registry");
-        require(_owner != address(0), "Invalid owner");
+        if (_initialized) revert AlreadyInitialized();
+        if (_masterRegistry == address(0)) revert InvalidAddress();
+        if (_owner == address(0)) revert InvalidAddress();
 
         _initialized = true;
         masterRegistry = IMasterRegistry(_masterRegistry);
@@ -123,13 +140,13 @@ contract FeaturedQueueManager is UUPSUpgradeable, Ownable, ReentrancyGuard {
         uint256 duration,
         uint256 rankBoost
     ) external payable nonReentrant {
-        require(_isInstanceRegistered(instance), "Instance not registered");
-        require(block.timestamp >= slots[instance].expiresAt, "Already featured");
-        require(duration >= minDuration && duration <= maxDuration, "Invalid duration");
+        if (!_isInstanceRegistered(instance)) revert InstanceNotRegistered();
+        if (block.timestamp < slots[instance].expiresAt) revert AlreadyFeatured();
+        if (duration < minDuration || duration > maxDuration) revert InvalidDuration();
 
-        uint256 durationCost = (dailyRate * duration) / 1 days;
-        require(msg.value >= durationCost + rankBoost, "Insufficient payment");
-        require(_activeCount() < maxFeaturedSize, "Featured set full");
+        uint256 durationCost = (dailyRate * duration) / 1 days; // round down: favors renter
+        if (msg.value < durationCost + rankBoost) revert InsufficientPayment();
+        if (_activeCount() >= maxFeaturedSize) revert QueueFull();
 
         _addToList(instance);
 
@@ -156,8 +173,8 @@ contract FeaturedQueueManager is UUPSUpgradeable, Ownable, ReentrancyGuard {
      * @param instance  Active featured instance to boost
      */
     function boostRank(address instance) external payable nonReentrant {
-        require(msg.value > 0, "Must send ETH");
-        require(block.timestamp < slots[instance].expiresAt, "Slot not active");
+        if (msg.value == 0) revert MustSendETH();
+        if (block.timestamp >= slots[instance].expiresAt) revert SlotNotActive();
 
         uint256 newRank = _effectiveRank(slots[instance]) + msg.value;
         slots[instance].rankScore     = newRank;
@@ -176,12 +193,12 @@ contract FeaturedQueueManager is UUPSUpgradeable, Ownable, ReentrancyGuard {
         address instance,
         uint256 additionalDuration
     ) external payable nonReentrant {
-        require(block.timestamp < slots[instance].expiresAt, "Slot expired - use rentFeatured");
-        require(additionalDuration >= minDuration, "Duration too short");
-        require(additionalDuration <= maxDuration, "Duration too long");
+        if (block.timestamp >= slots[instance].expiresAt) revert SlotExpired();
+        if (additionalDuration < minDuration) revert DurationTooShort();
+        if (additionalDuration > maxDuration) revert DurationTooLong();
 
-        uint256 cost = (dailyRate * additionalDuration) / 1 days;
-        require(msg.value >= cost, "Insufficient payment");
+        uint256 cost = (dailyRate * additionalDuration) / 1 days; // round down: favors renter
+        if (msg.value < cost) revert InsufficientPayment();
 
         slots[instance].expiresAt += additionalDuration;
 
@@ -206,15 +223,15 @@ contract FeaturedQueueManager is UUPSUpgradeable, Ownable, ReentrancyGuard {
         uint256 duration,
         uint256 rankBoost
     ) external payable nonReentrant {
-        require(authorizedFactories[msg.sender], "Not authorized");
-        require(_isInstanceRegistered(instance), "Instance not registered");
-        require(block.timestamp >= slots[instance].expiresAt, "Already featured");
-        require(duration >= minDuration && duration <= maxDuration, "Invalid duration");
+        if (!authorizedFactories[msg.sender]) revert Unauthorized();
+        if (!_isInstanceRegistered(instance)) revert InstanceNotRegistered();
+        if (block.timestamp < slots[instance].expiresAt) revert AlreadyFeatured();
+        if (duration < minDuration || duration > maxDuration) revert InvalidDuration();
 
         uint256 discount     = factoryDiscountBps[msg.sender];
-        uint256 durationCost = ((dailyRate * duration) / 1 days) * (10000 - discount) / 10000;
-        require(msg.value >= durationCost + rankBoost, "Insufficient payment");
-        require(_activeCount() < maxFeaturedSize, "Featured set full");
+        uint256 durationCost = ((dailyRate * duration) / 1 days) * (10000 - discount) / 10000; // round down twice: favors renter
+        if (msg.value < durationCost + rankBoost) revert InsufficientPayment();
+        if (_activeCount() >= maxFeaturedSize) revert QueueFull();
 
         _addToList(instance);
 
@@ -331,14 +348,14 @@ contract FeaturedQueueManager is UUPSUpgradeable, Ownable, ReentrancyGuard {
      * @notice Duration cost for a given number of seconds.
      */
     function quoteDurationCost(uint256 duration) external view returns (uint256) {
-        return (dailyRate * duration) / 1 days;
+        return (dailyRate * duration) / 1 days; // round down: favors renter
     }
 
     // ── Internal Helpers ───────────────────────────────────────────────────
 
     function _effectiveRank(FeaturedSlot memory slot) internal view returns (uint256) {
         if (slot.lastBoostTime == 0) return 0;
-        uint256 daysPassed = (block.timestamp - slot.lastBoostTime) / 1 days;
+        uint256 daysPassed = (block.timestamp - slot.lastBoostTime) / 1 days; // round down: partial days don't decay
         uint256 decayed    = dailyDecayRate * daysPassed;
         return slot.rankScore > decayed ? slot.rankScore - decayed : 0;
     }
@@ -369,13 +386,13 @@ contract FeaturedQueueManager is UUPSUpgradeable, Ownable, ReentrancyGuard {
     // ── Admin ──────────────────────────────────────────────────────────────
 
     function setMasterRegistry(address _masterRegistry) external onlyOwner {
-        require(_masterRegistry != address(0), "Invalid address");
+        if (_masterRegistry == address(0)) revert InvalidAddress();
         masterRegistry = IMasterRegistry(_masterRegistry);
         emit MasterRegistrySet(_masterRegistry);
     }
 
     function setProtocolTreasury(address _treasury) external onlyOwner {
-        require(_treasury != address(0), "Invalid address");
+        if (_treasury == address(0)) revert InvalidAddress();
         address old = protocolTreasury;
         protocolTreasury = _treasury;
         emit ProtocolTreasuryUpdated(old, _treasury);
@@ -390,13 +407,13 @@ contract FeaturedQueueManager is UUPSUpgradeable, Ownable, ReentrancyGuard {
     }
 
     function setDurationBounds(uint256 _min, uint256 _max) external onlyOwner {
-        require(_min > 0 && _max > _min, "Invalid bounds");
+        if (_min == 0 || _max <= _min) revert InvalidBounds();
         minDuration = _min;
         maxDuration = _max;
     }
 
     function setMaxFeaturedSize(uint256 _max) external onlyOwner {
-        require(_max > 0, "Invalid size");
+        if (_max == 0) revert InvalidSize();
         maxFeaturedSize = _max;
     }
 
@@ -405,23 +422,20 @@ contract FeaturedQueueManager is UUPSUpgradeable, Ownable, ReentrancyGuard {
      * @param discountBps Basis points off the daily rate, max 5000 (50%)
      */
     function setAuthorizedFactory(address factory, bool authorized, uint256 discountBps) external onlyOwner {
-        require(discountBps <= 5000, "Discount too high");
+        if (discountBps > 5000) revert DiscountTooHigh();
         authorizedFactories[factory]  = authorized;
         factoryDiscountBps[factory]   = authorized ? discountBps : 0;
         emit AuthorizedFactoryUpdated(factory, authorized, discountBps);
     }
 
     function withdrawProtocolFees() external onlyOwner {
-        require(protocolTreasury != address(0), "Treasury not set");
+        if (protocolTreasury == address(0)) revert TreasuryNotSet();
         uint256 balance = address(this).balance;
-        require(balance > 0, "Nothing to withdraw");
+        if (balance == 0) revert NothingToWithdraw();
         SafeTransferLib.safeTransferETH(protocolTreasury, balance);
         emit ProtocolFeesWithdrawn(protocolTreasury, balance);
     }
 
-    // ── UUPS ───────────────────────────────────────────────────────────────
-
-    function _authorizeUpgrade(address) internal override onlyOwner {}
 
     receive() external payable {}
 }

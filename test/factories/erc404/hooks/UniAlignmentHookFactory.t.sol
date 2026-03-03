@@ -13,6 +13,8 @@ import {LibClone} from "solady/utils/LibClone.sol";
 import {Currency} from "v4-core/types/Currency.sol";
 import {PoolKey} from "v4-core/types/PoolKey.sol";
 import {IHooks} from "v4-core/interfaces/IHooks.sol";
+import {MockAlignmentRegistry} from "../../../mocks/MockAlignmentRegistry.sol";
+import {IAlignmentRegistry} from "../../../../src/master/interfaces/IAlignmentRegistry.sol";
 
 /**
  * @title UniAlignmentHookFactoryTest
@@ -24,6 +26,9 @@ contract UniAlignmentHookFactoryTest is Test {
     UniAlignmentVault public vault;
     MockEXECToken public token;
     MockPoolManager public poolManager;
+    MockAlignmentRegistry public mockAlignmentRegistry;
+
+    uint256 public constant TARGET_ID = 1;
 
     address public owner = address(0x1);
     address public factoryCreator = address(0x2);
@@ -54,6 +59,11 @@ contract UniAlignmentHookFactoryTest is Test {
         // Deploy mock token for vault
         token = new MockEXECToken(1000000e18);
 
+        // Deploy mock alignment registry
+        mockAlignmentRegistry = new MockAlignmentRegistry();
+        mockAlignmentRegistry.setTargetActive(TARGET_ID, true);
+        mockAlignmentRegistry.setTokenInTarget(TARGET_ID, address(token), true);
+
         // Deploy vault (WETH, PoolManager, V3Router, V2Router, V2Factory, V3Factory, AlignmentToken)
         {
             UniAlignmentVault _impl = new UniAlignmentVault();
@@ -65,7 +75,9 @@ contract UniAlignmentHookFactoryTest is Test {
                 address(new MockZRouter()),
                 3000,
                 60,
-                IVaultPriceValidator(address(new MockVaultPriceValidator()))
+                IVaultPriceValidator(address(new MockVaultPriceValidator())),
+                IAlignmentRegistry(address(mockAlignmentRegistry)),
+                TARGET_ID
             );
         }
 
@@ -96,7 +108,7 @@ contract UniAlignmentHookFactoryTest is Test {
     function test_createHook_invalidPoolManager() public {
         vm.prank(factoryCreator);
 
-        vm.expectRevert("Invalid pool manager");
+        vm.expectRevert(abi.encodeWithSignature("InvalidPoolManager()"));
         factory.createHook{value: HOOK_FEE}(
             address(0),
             address(vault),
@@ -112,7 +124,7 @@ contract UniAlignmentHookFactoryTest is Test {
     function test_createHook_invalidVault() public {
         vm.prank(factoryCreator);
 
-        vm.expectRevert("Invalid vault");
+        vm.expectRevert(abi.encodeWithSignature("InvalidVault()"));
         factory.createHook{value: HOOK_FEE}(
             address(poolManager),
             address(0),
@@ -128,7 +140,7 @@ contract UniAlignmentHookFactoryTest is Test {
     function test_createHook_invalidWeth() public {
         vm.prank(factoryCreator);
 
-        vm.expectRevert("Invalid WETH");
+        vm.expectRevert(abi.encodeWithSignature("InvalidWETH()"));
         factory.createHook{value: HOOK_FEE}(
             address(poolManager),
             address(vault),
@@ -144,7 +156,7 @@ contract UniAlignmentHookFactoryTest is Test {
     function test_createHook_invalidCreator() public {
         vm.prank(factoryCreator);
 
-        vm.expectRevert("Invalid creator");
+        vm.expectRevert(abi.encodeWithSignature("InvalidCreator()"));
         factory.createHook{value: HOOK_FEE}(
             address(poolManager),
             address(vault),
@@ -163,7 +175,7 @@ contract UniAlignmentHookFactoryTest is Test {
         uint256 insufficientFee = HOOK_FEE - 0.0001 ether;
         vm.prank(factoryCreator);
 
-        vm.expectRevert("Insufficient fee");
+        vm.expectRevert(abi.encodeWithSignature("InsufficientFee()"));
         factory.createHook{value: insufficientFee}(
             address(poolManager),
             address(vault),
@@ -179,7 +191,7 @@ contract UniAlignmentHookFactoryTest is Test {
     function test_feeHandling_zeroFee() public {
         vm.prank(factoryCreator);
 
-        vm.expectRevert("Insufficient fee");
+        vm.expectRevert(abi.encodeWithSignature("InsufficientFee()"));
         factory.createHook{value: 0}(
             address(poolManager),
             address(vault),
@@ -213,7 +225,7 @@ contract UniAlignmentHookFactoryTest is Test {
 
     function test_templateUpdate_invalidAddress() public {
         vm.prank(owner);
-        vm.expectRevert("Invalid template");
+        vm.expectRevert(abi.encodeWithSignature("InvalidTemplate()"));
         factory.setHookTemplate(address(0));
     }
 
@@ -304,7 +316,7 @@ contract UniAlignmentHookFactoryTest is Test {
 
     function test_authorizeFactory_invalidAddress() public {
         vm.prank(owner);
-        vm.expectRevert("Invalid factory");
+        vm.expectRevert(abi.encodeWithSignature("InvalidFactory()"));
         factory.authorizeFactory(address(0));
     }
 

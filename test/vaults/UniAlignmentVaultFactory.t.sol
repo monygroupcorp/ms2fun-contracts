@@ -3,15 +3,18 @@ pragma solidity ^0.8.20;
 
 import "forge-std/Test.sol";
 import "../../src/vaults/uni/UniAlignmentVaultFactory.sol";
-import "../../src/vaults/uni/UniAlignmentVault.sol";
+import {UniAlignmentVault} from "../../src/vaults/uni/UniAlignmentVault.sol";
 import {IVaultPriceValidator} from "../../src/interfaces/IVaultPriceValidator.sol";
+import {IAlignmentRegistry} from "../../src/master/interfaces/IAlignmentRegistry.sol";
 import {MockZRouter} from "../mocks/MockZRouter.sol";
 import {MockVaultPriceValidator} from "../mocks/MockVaultPriceValidator.sol";
+import {MockAlignmentRegistry} from "../mocks/MockAlignmentRegistry.sol";
 import {MockEXECToken} from "../mocks/MockEXECToken.sol";
 
 contract UniAlignmentVaultFactoryTest is Test {
     UniAlignmentVaultFactory public factory;
     MockEXECToken public alignmentToken;
+    MockAlignmentRegistry public mockRegistry;
 
     address public owner;
     address public mockPoolManager;
@@ -19,6 +22,8 @@ contract UniAlignmentVaultFactoryTest is Test {
 
     MockZRouter public mockZRouter;
     MockVaultPriceValidator public mockPriceValidator;
+
+    uint256 constant TARGET_ID = 1;
 
     event VaultDeployed(address indexed vault, address indexed alignmentToken);
 
@@ -31,6 +36,9 @@ contract UniAlignmentVaultFactoryTest is Test {
 
         mockZRouter = new MockZRouter();
         mockPriceValidator = new MockVaultPriceValidator();
+        mockRegistry = new MockAlignmentRegistry();
+        mockRegistry.setTargetActive(TARGET_ID, true);
+        mockRegistry.setTokenInTarget(TARGET_ID, address(alignmentToken), true);
 
         factory = new UniAlignmentVaultFactory(
             mockWeth,
@@ -38,13 +46,15 @@ contract UniAlignmentVaultFactoryTest is Test {
             address(mockZRouter),
             3000,
             60,
-            IVaultPriceValidator(address(mockPriceValidator))
+            IVaultPriceValidator(address(mockPriceValidator)),
+            IAlignmentRegistry(address(mockRegistry))
         );
     }
 
     function test_deployVault_setsAlignmentToken() public {
         address vault = factory.deployVault(
             address(alignmentToken),
+            TARGET_ID,
             IVaultPriceValidator(address(0))
         );
 
@@ -54,6 +64,7 @@ contract UniAlignmentVaultFactoryTest is Test {
     function test_deployVault_usesFactoryZRouterConfig() public {
         address vault = factory.deployVault(
             address(alignmentToken),
+            TARGET_ID,
             IVaultPriceValidator(address(0))
         );
 
@@ -72,6 +83,7 @@ contract UniAlignmentVaultFactoryTest is Test {
 
         address vault = factory.deployVault(
             address(alignmentToken),
+            TARGET_ID,
             IVaultPriceValidator(address(customValidator))
         );
 
@@ -84,14 +96,17 @@ contract UniAlignmentVaultFactoryTest is Test {
 
     function test_deployVault_differentInstancesAreIndependent() public {
         MockEXECToken token2 = new MockEXECToken(1000000e18);
+        mockRegistry.setTokenInTarget(TARGET_ID, address(token2), true);
 
         address vault1 = factory.deployVault(
             address(alignmentToken),
+            TARGET_ID,
             IVaultPriceValidator(address(0))
         );
 
         address vault2 = factory.deployVault(
             address(token2),
+            TARGET_ID,
             IVaultPriceValidator(address(0))
         );
 
@@ -106,6 +121,29 @@ contract UniAlignmentVaultFactoryTest is Test {
 
         factory.deployVault(
             address(alignmentToken),
+            TARGET_ID,
+            IVaultPriceValidator(address(0))
+        );
+    }
+
+    function test_deployVault_revertsWhenTokenNotInTarget() public {
+        address rogueToken = address(0xBAD);
+
+        vm.expectRevert(UniAlignmentVault.TokenNotInTarget.selector);
+        factory.deployVault(
+            rogueToken,
+            TARGET_ID,
+            IVaultPriceValidator(address(0))
+        );
+    }
+
+    function test_deployVault_revertsWhenTargetNotActive() public {
+        mockRegistry.setTargetActive(TARGET_ID, false);
+
+        vm.expectRevert(UniAlignmentVault.TargetNotActive.selector);
+        factory.deployVault(
+            address(alignmentToken),
+            TARGET_ID,
             IVaultPriceValidator(address(0))
         );
     }
@@ -117,6 +155,7 @@ contract UniAlignmentVaultFactoryTest is Test {
         assertEq(factory.zRouterFee(), 3000);
         assertEq(factory.zRouterTickSpacing(), 60);
         assertEq(address(factory.defaultPriceValidator()), address(mockPriceValidator));
+        assertEq(address(factory.alignmentRegistry()), address(mockRegistry));
         assertTrue(factory.vaultImplementation() != address(0));
     }
 }

@@ -20,6 +20,16 @@ import {SafeTransferLib} from "solady/utils/SafeTransferLib.sol";
  * - Advanced statistics
  */
 contract VaultRegistry is Ownable {
+    // Custom Errors
+    error InvalidAddress();
+    error InvalidName();
+    error InsufficientFee();
+    error AlreadyRegistered();
+    error InvalidMetadataURI();
+    error MustBeContract();
+    error NotRegistered();
+    error FeeMustBePositive();
+
     // Structs
     struct VaultInfo {
         address vault;
@@ -80,13 +90,13 @@ contract VaultRegistry is Ownable {
         string memory name,
         string memory metadataURI
     ) external payable {
-        require(vault != address(0), "Invalid vault address");
-        require(bytes(name).length > 0 && bytes(name).length <= 256, "Invalid name");
-        require(msg.value >= vaultRegistrationFee, "Insufficient registration fee");
-        require(!registeredVaults[vault], "Vault already registered");
-        require(bytes(metadataURI).length > 0 && bytes(metadataURI).length <= 2048, "Invalid metadata URI");
+        if (vault == address(0)) revert InvalidAddress();
+        if (bytes(name).length == 0 || bytes(name).length > 256) revert InvalidName();
+        if (msg.value < vaultRegistrationFee) revert InsufficientFee();
+        if (registeredVaults[vault]) revert AlreadyRegistered();
+        if (bytes(metadataURI).length == 0 || bytes(metadataURI).length > 2048) revert InvalidMetadataURI();
         // Basic validation that vault is a contract
-        require(vault.code.length > 0, "Vault must be a contract");
+        if (vault.code.length == 0) revert MustBeContract();
 
         registeredVaults[vault] = true;
 
@@ -100,7 +110,6 @@ contract VaultRegistry is Ownable {
         });
 
         // Refund excess
-        require(msg.value >= vaultRegistrationFee, "Insufficient payment");
         if (msg.value > vaultRegistrationFee) {
             SafeTransferLib.safeTransferETH(msg.sender, msg.value - vaultRegistrationFee);
         }
@@ -121,15 +130,15 @@ contract VaultRegistry is Ownable {
         string memory name,
         string memory metadataURI
     ) external payable {
-        require(hook != address(0), "Invalid hook address");
-        require(vault != address(0), "Invalid vault address");
-        require(registeredVaults[vault], "Vault must be registered");
-        require(bytes(name).length > 0 && bytes(name).length <= 256, "Invalid name");
-        require(msg.value >= hookRegistrationFee, "Insufficient registration fee");
-        require(!registeredHooks[hook], "Hook already registered");
-        require(bytes(metadataURI).length > 0 && bytes(metadataURI).length <= 2048, "Invalid metadata URI");
+        if (hook == address(0)) revert InvalidAddress();
+        if (vault == address(0)) revert InvalidAddress();
+        if (!registeredVaults[vault]) revert NotRegistered();
+        if (bytes(name).length == 0 || bytes(name).length > 256) revert InvalidName();
+        if (msg.value < hookRegistrationFee) revert InsufficientFee();
+        if (registeredHooks[hook]) revert AlreadyRegistered();
+        if (bytes(metadataURI).length == 0 || bytes(metadataURI).length > 2048) revert InvalidMetadataURI();
         // Basic validation that hook is a contract
-        require(hook.code.length > 0, "Hook must be a contract");
+        if (hook.code.length == 0) revert MustBeContract();
 
         registeredHooks[hook] = true;
 
@@ -144,7 +153,6 @@ contract VaultRegistry is Ownable {
         });
 
         // Refund excess
-        require(msg.value >= hookRegistrationFee, "Insufficient payment");
         if (msg.value > hookRegistrationFee) {
             SafeTransferLib.safeTransferETH(msg.sender, msg.value - hookRegistrationFee);
         }
@@ -156,7 +164,7 @@ contract VaultRegistry is Ownable {
      * @notice Get vault information
      */
     function getVaultInfo(address vault) external view returns (VaultInfo memory) {
-        require(registeredVaults[vault], "Vault not registered");
+        if (!registeredVaults[vault]) revert NotRegistered();
         return vaults[vault];
     }
 
@@ -164,7 +172,7 @@ contract VaultRegistry is Ownable {
      * @notice Get hook information
      */
     function getHookInfo(address hook) external view returns (HookInfo memory) {
-        require(registeredHooks[hook], "Hook not registered");
+        if (!registeredHooks[hook]) revert NotRegistered();
         return hooks[hook];
     }
 
@@ -186,7 +194,7 @@ contract VaultRegistry is Ownable {
      * @notice Deactivate a vault (owner only)
      */
     function deactivateVault(address vault) external onlyOwner {
-        require(registeredVaults[vault], "Vault not registered");
+        if (!registeredVaults[vault]) revert NotRegistered();
         vaults[vault].active = false;
         emit VaultDeactivated(vault);
     }
@@ -195,7 +203,7 @@ contract VaultRegistry is Ownable {
      * @notice Deactivate a hook (owner only)
      */
     function deactivateHook(address hook) external onlyOwner {
-        require(registeredHooks[hook], "Hook not registered");
+        if (!registeredHooks[hook]) revert NotRegistered();
         hooks[hook].active = false;
         emit HookDeactivated(hook);
     }
@@ -204,7 +212,7 @@ contract VaultRegistry is Ownable {
      * @notice Set vault registration fee (owner only)
      */
     function setVaultRegistrationFee(uint256 newFee) external onlyOwner {
-        require(newFee > 0, "Fee must be positive");
+        if (newFee == 0) revert FeeMustBePositive();
         vaultRegistrationFee = newFee;
         emit VaultFeeUpdated(newFee);
     }
@@ -213,7 +221,7 @@ contract VaultRegistry is Ownable {
      * @notice Set hook registration fee (owner only)
      */
     function setHookRegistrationFee(uint256 newFee) external onlyOwner {
-        require(newFee > 0, "Fee must be positive");
+        if (newFee == 0) revert FeeMustBePositive();
         hookRegistrationFee = newFee;
         emit HookFeeUpdated(newFee);
     }

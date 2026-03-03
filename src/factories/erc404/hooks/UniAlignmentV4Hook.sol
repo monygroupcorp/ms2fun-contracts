@@ -28,6 +28,12 @@ contract UniAlignmentV4Hook is IHooks, ReentrancyGuard, Ownable {
     using SafeCast for uint256;
     using SafeCast for int128;
 
+    error InvalidAddress();
+    error HookFeeTooHigh();
+    error LpFeeTooHigh();
+    error PoolCurrency0MustBeNativeETH();
+    error RateTooHigh();
+
     IPoolManager public immutable poolManager;
     IAlignmentVault public immutable vault;
     address public immutable weth;
@@ -49,12 +55,12 @@ contract UniAlignmentV4Hook is IHooks, ReentrancyGuard, Ownable {
         uint256 _hookFeeBips,
         uint24 _initialLpFeeRate
     ) {
-        require(address(_poolManager) != address(0), "Invalid pool manager");
-        require(address(_vault) != address(0), "Invalid vault");
-        require(_weth != address(0), "Invalid WETH");
-        require(_owner != address(0), "Invalid owner");
-        require(_hookFeeBips <= 10000, "Hook fee too high");
-        require(_initialLpFeeRate <= LPFeeLibrary.MAX_LP_FEE, "LP fee too high");
+        if (address(_poolManager) == address(0)) revert InvalidAddress();
+        if (address(_vault) == address(0)) revert InvalidAddress();
+        if (_weth == address(0)) revert InvalidAddress();
+        if (_owner == address(0)) revert InvalidAddress();
+        if (_hookFeeBips > 10000) revert HookFeeTooHigh();
+        if (_initialLpFeeRate > LPFeeLibrary.MAX_LP_FEE) revert LpFeeTooHigh();
 
         _initializeOwner(_owner);
         poolManager = _poolManager;
@@ -86,7 +92,7 @@ contract UniAlignmentV4Hook is IHooks, ReentrancyGuard, Ownable {
     }
 
     modifier onlyPoolManager() {
-        require(msg.sender == address(poolManager), "Unauthorized");
+        if (msg.sender != address(poolManager)) revert Unauthorized();
         _;
     }
 
@@ -119,11 +125,11 @@ contract UniAlignmentV4Hook is IHooks, ReentrancyGuard, Ownable {
         bytes calldata
     ) external onlyPoolManager returns (bytes4, int128) {
         // Always tax the ETH movement (currency0 = native ETH)
-        require(Currency.unwrap(key.currency0) == address(0), "Pool currency0 must be native ETH");
+        if (Currency.unwrap(key.currency0) != address(0)) revert PoolCurrency0MustBeNativeETH();
 
         int128 amount0 = delta.amount0();
         uint256 ethMoved = amount0 < 0 ? uint256(uint128(-amount0)) : uint256(uint128(amount0));
-        uint256 feeAmount = (ethMoved * hookFeeBips) / 10000;
+        uint256 feeAmount = (ethMoved * hookFeeBips) / 10000; // round down: favors swapper
 
         if (feeAmount > 0) {
             poolManager.take(key.currency0, address(this), feeAmount);
@@ -140,7 +146,7 @@ contract UniAlignmentV4Hook is IHooks, ReentrancyGuard, Ownable {
      * @param _rate New LP fee rate (max LPFeeLibrary.MAX_LP_FEE = 1000000 = 100%)
      */
     function setLpFeeRate(uint24 _rate) external onlyOwner {
-        require(_rate <= LPFeeLibrary.MAX_LP_FEE, "Rate too high");
+        if (_rate > LPFeeLibrary.MAX_LP_FEE) revert RateTooHigh();
         lpFeeRate = _rate;
         emit LpFeeRateUpdated(_rate);
     }

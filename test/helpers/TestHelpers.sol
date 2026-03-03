@@ -10,19 +10,15 @@ import {MasterRegistryV1} from "../../src/master/MasterRegistryV1.sol";
  */
 library TestHelpers {
     /**
-     * @notice Get the actual proxy address from MasterRegistry wrapper
-     * @dev MasterRegistry stores the proxy address in storage slot 0
-     * @dev This is needed because MasterRegistry is a wrapper that forwards calls
-     *      Using the proxy directly preserves msg.sender correctly
+     * @notice Get the proxy address from MasterRegistry
+     * @dev MasterRegistry IS the ERC1967 proxy, so just return its address
      */
-    function getProxyAddress(MasterRegistry wrapper) internal view returns (address) {
-        return wrapper.getProxyAddress();
+    function getProxyAddress(MasterRegistry wrapper) internal pure returns (address) {
+        return address(wrapper);
     }
 
     /**
-     * @notice Cast MasterRegistry wrapper to MasterRegistryV1 for direct calls
-     * @dev Note: This goes through the wrapper, so msg.sender will be the wrapper
-     *      Use getProxyAddress() + cast to MasterRegistryV1 for proper msg.sender
+     * @notice Cast MasterRegistry to MasterRegistryV1 for direct calls
      */
     function asV1(MasterRegistry wrapper) internal pure returns (MasterRegistryV1) {
         return MasterRegistryV1(address(wrapper));
@@ -30,10 +26,8 @@ library TestHelpers {
 
     /**
      * @notice Get MasterRegistryV1 interface from proxy address
-     * @dev Use this when you need proper msg.sender preservation
      */
     function getV1FromProxy(address proxy) internal pure returns (MasterRegistryV1) {
         return MasterRegistryV1(proxy);
     }
 }
-

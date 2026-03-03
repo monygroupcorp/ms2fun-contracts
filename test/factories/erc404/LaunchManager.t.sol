@@ -61,7 +61,7 @@ contract LaunchManagerTest is Test {
     }
 
     function test_getPreset_revertsIfNotActive() public {
-        vm.expectRevert("Preset not active");
+        vm.expectRevert(abi.encodeWithSignature("PresetNotActive()"));
         launchMgr.getPreset(99);
     }
 }

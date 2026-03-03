@@ -20,6 +20,16 @@ import {GatingScope} from "../../gating/IGatingModule.sol";
  * @notice Factory contract for deploying ERC1155 token instances for open edition artists
  */
 contract ERC1155Factory is Ownable, ReentrancyGuard, IFactory {
+    error InvalidAddress();
+    error UnapprovedComponent();
+    error InsufficientPayment();
+    error InvalidName();
+    error VaultMustBeContract();
+    error NameAlreadyTaken();
+    error TreasuryNotSet();
+    error NoProtocolFees();
+    error NotAuthorizedAgent();
+
     IMasterRegistry public masterRegistry;
     address public immutable globalMessageRegistry;
     IComponentRegistry public immutable componentRegistry;
@@ -31,9 +41,6 @@ contract ERC1155Factory is Ownable, ReentrancyGuard, IFactory {
 
     // Pluggable component tags
     bytes32[] internal _features;
-
-    // Trusted agents that can add editions on behalf of users
-    mapping(address => bool) public isAgent;
 
     // Tiered creation
     enum CreationTier { STANDARD, PREMIUM, LAUNCH }
@@ -70,8 +77,6 @@ contract ERC1155Factory is Ownable, ReentrancyGuard, IFactory {
     event ProtocolFeesWithdrawn(address indexed treasury, uint256 amount);
     event TierConfigUpdated(CreationTier tier);
     event InstanceCreatedWithTier(address indexed instance, CreationTier tier);
-    event AgentUpdated(address indexed agent, bool authorized);
-
     constructor(
         address _masterRegistry,
         address _instanceTemplate,
@@ -79,7 +84,7 @@ contract ERC1155Factory is Ownable, ReentrancyGuard, IFactory {
         address _componentRegistry
     ) {
         _initializeOwner(msg.sender);
-        require(_globalMessageRegistry != address(0), "Invalid global message registry");
+        if (_globalMessageRegistry == address(0)) revert InvalidAddress();
         masterRegistry = IMasterRegistry(_masterRegistry);
         globalMessageRegistry = _globalMessageRegistry;
         componentRegistry = IComponentRegistry(_componentRegistry);
@@ -129,7 +134,7 @@ contract ERC1155Factory is Ownable, ReentrancyGuard, IFactory {
         address gatingModule
     ) external payable nonReentrant returns (address instance) {
         if (gatingModule != address(0)) {
-            require(componentRegistry.isApprovedComponent(gatingModule), "Unapproved component");
+            if (!componentRegistry.isApprovedComponent(gatingModule)) revert UnapprovedComponent();
         }
         return _createInstanceInternal(name, metadataURI, creator, vault, styleUri, CreationTier.STANDARD, gatingModule,
             FreeMintParams({ allocation: 0, scope: GatingScope.BOTH }));
@@ -146,7 +151,7 @@ contract ERC1155Factory is Ownable, ReentrancyGuard, IFactory {
         FreeMintParams calldata freeMint
     ) external payable nonReentrant returns (address instance) {
         if (gatingModule != address(0)) {
-            require(componentRegistry.isApprovedComponent(gatingModule), "Unapproved component");
+            if (!componentRegistry.isApprovedComponent(gatingModule)) revert UnapprovedComponent();
         }
         return _createInstanceInternal(name, metadataURI, creator, vault, styleUri, CreationTier.STANDARD, gatingModule, freeMint);
     }
@@ -169,15 +174,22 @@ contract ERC1155Factory is Ownable, ReentrancyGuard, IFactory {
             featuredCost = featuredQueueManager.quoteDurationCost(config.featuredDuration) + config.featuredRankBoost;
         }
 
-        require(msg.value >= featuredCost, "Insufficient featured fee");
+        if (msg.value < featuredCost) revert InsufficientPayment();
 
         // All non-featured payment goes to protocol
         accumulatedProtocolFees += msg.value - featuredCost;
 
-        require(bytes(name).length > 0, "Invalid name");
-        require(creator != address(0), "Invalid creator");
-        require(vault != address(0), "Invalid vault");
-        require(vault.code.length > 0, "Vault must be a contract");
+        if (bytes(name).length == 0) revert InvalidName();
+        if (creator == address(0)) revert InvalidAddress();
+        if (vault == address(0)) revert InvalidAddress();
+        if (vault.code.length == 0) revert VaultMustBeContract();
+
+        // Agent-on-behalf-of check
+        bool agentCreated = false;
+        if (msg.sender != creator) {
+            if (!masterRegistry.isAgent(msg.sender)) revert NotAuthorizedAgent();
+            agentCreated = true;
+        }
 
         // Soft capability checks — emit warnings, never revert
         try IAlignmentVault(payable(vault)).supportsCapability(keccak256("YIELD_GENERATION")) returns (bool supported) {
@@ -189,9 +201,9 @@ contract ERC1155Factory is Ownable, ReentrancyGuard, IFactory {
         }
 
         // Check namespace availability before deploying (saves gas on collision)
-        require(!masterRegistry.isNameTaken(name), "Name already taken");
+        if (masterRegistry.isNameTaken(name)) revert NameAlreadyTaken();
 
-        instance = _deployAndRegister(name, metadataURI, creator, vault, styleUri, gatingModule);
+        instance = _deployAndRegister(name, metadataURI, creator, vault, styleUri, gatingModule, agentCreated);
         // Wire free mint tranche (no-op when allocation == 0)
         ERC1155Instance(instance).initializeFreeMint(freeMint.allocation, freeMint.scope);
 
@@ -219,7 +231,8 @@ contract ERC1155Factory is Ownable, ReentrancyGuard, IFactory {
         address creator,
         address vault,
         string memory styleUri,
-        address gatingModule
+        address gatingModule,
+        bool agentCreated
     ) private returns (address instance) {
         instance = address(new ERC1155Instance(
             name,
@@ -231,7 +244,8 @@ contract ERC1155Factory is Ownable, ReentrancyGuard, IFactory {
             globalMessageRegistry,
             protocolTreasury,
             address(masterRegistry),
-            gatingModule
+            gatingModule,
+            agentCreated
         ));
         masterRegistry.registerInstance(
             instance,
@@ -256,7 +270,7 @@ contract ERC1155Factory is Ownable, ReentrancyGuard, IFactory {
         uint256 priceIncreaseRate,
         uint256 openTime
     ) external returns (uint256 editionId) {
-        require(isAgent[msg.sender], "Not authorized agent");
+        if (!masterRegistry.isAgent(msg.sender)) revert NotAuthorizedAgent();
         ERC1155Instance instanceContract = ERC1155Instance(instance);
 
         instanceContract.addEdition(
@@ -296,25 +310,17 @@ contract ERC1155Factory is Ownable, ReentrancyGuard, IFactory {
         featuredQueueManager = FeaturedQueueManager(payable(_featuredQueueManager));
     }
 
-    /**
-     * @notice Set agent authorization (owner only)
-     */
-    function setAgent(address agent, bool authorized) external onlyOwner {
-        isAgent[agent] = authorized;
-        emit AgentUpdated(agent, authorized);
-    }
-
     function setProtocolTreasury(address _treasury) external onlyOwner {
-        require(_treasury != address(0), "Invalid treasury");
+        if (_treasury == address(0)) revert InvalidAddress();
         address old = protocolTreasury;
         protocolTreasury = _treasury;
         emit ProtocolTreasuryUpdated(old, _treasury);
     }
 
     function withdrawProtocolFees() external onlyOwner {
-        require(protocolTreasury != address(0), "Treasury not set");
+        if (protocolTreasury == address(0)) revert TreasuryNotSet();
         uint256 amount = accumulatedProtocolFees;
-        require(amount > 0, "No protocol fees");
+        if (amount == 0) revert NoProtocolFees();
         accumulatedProtocolFees = 0;
         SafeTransferLib.safeTransferETH(protocolTreasury, amount);
         emit ProtocolFeesWithdrawn(protocolTreasury, amount);

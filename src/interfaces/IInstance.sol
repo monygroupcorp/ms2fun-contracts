@@ -7,7 +7,7 @@ pragma solidity ^0.8.20;
 interface IInstance {
     /// @notice Returns data needed for project card display
     /// @dev The meaning of each field may vary by factory type:
-    ///      - ERC404: price = bonding curve price, supply = bonding supply, maxSupply = MAX_SUPPLY
+    ///      - ERC404: price = bonding curve price, supply = bonding supply, maxSupply = maxSupply
     ///      - ERC1155: price = floor price across editions, supply = total minted, maxSupply = sum of limited supplies (0 if any unlimited)
     /// @return price Current price (bonding price or floor price)
     /// @return supply Current supply (bonding supply or total minted)

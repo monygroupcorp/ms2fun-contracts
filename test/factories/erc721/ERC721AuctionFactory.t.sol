@@ -3,7 +3,7 @@ pragma solidity ^0.8.24;
 
 import {Test, console} from "forge-std/Test.sol";
 import {ERC721AuctionFactory} from "../../../src/factories/erc721/ERC721AuctionFactory.sol";
-import {ERC721AuctionInstance} from "../../../src/factories/erc721/ERC721AuctionInstance.sol";
+import {ERC721AuctionInstance, DepositRequired, URIRequired, BidBelowMinimum, BidTooLow, AuctionExpired, AuctionNotEnded, NoBids, HasBids} from "../../../src/factories/erc721/ERC721AuctionInstance.sol";
 import {UniAlignmentVault} from "../../../src/vaults/uni/UniAlignmentVault.sol";
 import {MockEXECToken} from "../../mocks/MockEXECToken.sol";
 import {MockMasterRegistry} from "../../mocks/MockMasterRegistry.sol";
@@ -15,12 +15,17 @@ import {LibClone} from "solady/utils/LibClone.sol";
 import {Currency} from "v4-core/types/Currency.sol";
 import {PoolKey} from "v4-core/types/PoolKey.sol";
 import {IHooks} from "v4-core/interfaces/IHooks.sol";
+import {MockAlignmentRegistry} from "../../mocks/MockAlignmentRegistry.sol";
+import {IAlignmentRegistry} from "../../../src/master/interfaces/IAlignmentRegistry.sol";
 
 contract ERC721AuctionFactoryTest is Test {
     ERC721AuctionFactory public factory;
     UniAlignmentVault public vault;
     MockEXECToken public token;
     MockMasterRegistry public mockRegistry;
+    MockAlignmentRegistry public mockAlignmentRegistry;
+
+    uint256 constant TARGET_ID = 1;
 
     address public owner = address(0x1);
     address public artist = address(0x2);
@@ -37,6 +42,11 @@ contract ERC721AuctionFactoryTest is Test {
 
         token = new MockEXECToken(1000000e18);
 
+        // Deploy mock alignment registry
+        mockAlignmentRegistry = new MockAlignmentRegistry();
+        mockAlignmentRegistry.setTargetActive(TARGET_ID, true);
+        mockAlignmentRegistry.setTokenInTarget(TARGET_ID, address(token), true);
+
         {
             UniAlignmentVault _impl = new UniAlignmentVault();
             vault = UniAlignmentVault(payable(LibClone.clone(address(_impl))));
@@ -47,7 +57,9 @@ contract ERC721AuctionFactoryTest is Test {
                 address(new MockZRouter()),
                 3000,
                 60,
-                IVaultPriceValidator(address(new MockVaultPriceValidator()))
+                IVaultPriceValidator(address(new MockVaultPriceValidator())),
+                IAlignmentRegistry(address(mockAlignmentRegistry)),
+                TARGET_ID
             );
         }
 
@@ -168,7 +180,7 @@ contract ERC721AuctionFactoryTest is Test {
         ERC721AuctionInstance inst = _createDefaultInstance();
 
         vm.prank(artist);
-        vm.expectRevert("Deposit required");
+        vm.expectRevert(DepositRequired.selector);
         inst.queuePiece{value: 0}("ipfs://piece1");
     }
 
@@ -176,7 +188,7 @@ contract ERC721AuctionFactoryTest is Test {
         ERC721AuctionInstance inst = _createDefaultInstance();
 
         vm.prank(artist);
-        vm.expectRevert("URI required");
+        vm.expectRevert(URIRequired.selector);
         inst.queuePiece{value: 0.1 ether}("");
     }
 
@@ -212,7 +224,7 @@ contract ERC721AuctionFactoryTest is Test {
 
         vm.deal(bidder1, 1 ether);
         vm.prank(bidder1);
-        vm.expectRevert("Bid below minimum");
+        vm.expectRevert(BidBelowMinimum.selector);
         inst.createBid{value: 0.05 ether}(1, bytes(""));
     }
 
@@ -253,7 +265,7 @@ contract ERC721AuctionFactoryTest is Test {
 
         vm.deal(bidder2, 1 ether);
         vm.prank(bidder2);
-        vm.expectRevert("Bid too low");
+        vm.expectRevert(BidTooLow.selector);
         inst.createBid{value: 0.105 ether}(1, bytes("")); // Less than 0.1 + 0.01 increment
     }
 
@@ -291,7 +303,7 @@ contract ERC721AuctionFactoryTest is Test {
 
         vm.deal(bidder1, 1 ether);
         vm.prank(bidder1);
-        vm.expectRevert("Auction expired");
+        vm.expectRevert(AuctionExpired.selector);
         inst.createBid{value: 0.1 ether}(1, bytes(""));
     }
 
@@ -352,7 +364,7 @@ contract ERC721AuctionFactoryTest is Test {
         vm.prank(bidder1);
         inst.createBid{value: 0.1 ether}(1, bytes(""));
 
-        vm.expectRevert("Auction not ended");
+        vm.expectRevert(AuctionNotEnded.selector);
         inst.settleAuction(1);
     }
 
@@ -365,7 +377,7 @@ contract ERC721AuctionFactoryTest is Test {
         ERC721AuctionInstance.Auction memory auction = inst.getAuction(1);
         vm.warp(auction.endTime);
 
-        vm.expectRevert("No bids");
+        vm.expectRevert(NoBids.selector);
         inst.settleAuction(1);
     }
 
@@ -411,7 +423,7 @@ contract ERC721AuctionFactoryTest is Test {
         vm.warp(auction.endTime);
 
         vm.prank(artist);
-        vm.expectRevert("Has bids - use settleAuction");
+        vm.expectRevert(HasBids.selector);
         inst.reclaimUnsold(1);
     }
 

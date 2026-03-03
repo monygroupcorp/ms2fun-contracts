@@ -169,7 +169,7 @@ contract FullWorkflowIntegrationTest is Test {
         // Verify instances registered (by checking name uniqueness)
         address duplicateInstance = _newInstance();
         vm.prank(address(erc404Factory));
-        vm.expectRevert("Name already taken");
+        vm.expectRevert(MasterRegistryV1.NameAlreadyTaken.selector);
         IMasterRegistry(proxy).registerInstance(
             duplicateInstance,
             address(erc404Factory),

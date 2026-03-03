@@ -125,6 +125,9 @@ interface IMasterRegistry {
     function getInstanceVaults(address instance) external view returns (address[] memory);
     function getActiveVault(address instance) external view returns (address);
 
+    // Agent Management
+    function isAgent(address agent) external view returns (bool);
+
     // ComponentRegistry
     function componentRegistry() external view returns (IComponentRegistry);
     function setComponentRegistry(address _componentRegistry) external;

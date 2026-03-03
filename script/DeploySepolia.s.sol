@@ -100,7 +100,7 @@ contract DeploySepolia is Script {
         // 2. MasterRegistry proxy
         bytes memory initData = abi.encodeWithSignature("initialize(address)", deployer);
         masterRegistryProxy = new MasterRegistry(address(masterRegistryImpl), initData);
-        masterRegistry = masterRegistryProxy.getProxyAddress();
+        masterRegistry = address(masterRegistryProxy);
 
         // 3. ProtocolTreasuryV1
         treasuryImpl = new ProtocolTreasuryV1();
@@ -191,7 +191,9 @@ contract DeploySepolia is Script {
             SEPOLIA_ZROUTER,
             ZROUTER_FEE,
             ZROUTER_TICK_SPACING,
-            IVaultPriceValidator(address(priceValidator))
+            IVaultPriceValidator(address(priceValidator)),
+            IAlignmentRegistry(address(alignmentRegistry)),
+            alignmentTargetId
         );
 
         // 13. Register vault

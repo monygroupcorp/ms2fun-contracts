@@ -112,7 +112,7 @@ contract MasterRegistryReworkTest is Test {
     function test_RegisterVault_RevertIfNotAuthorized() public {
         MockVaultSimple vault = new MockVaultSimple(dummyToken);
         vm.prank(alice);
-        vm.expectRevert("Not authorized");
+        vm.expectRevert(Ownable.Unauthorized.selector);
         registry.registerVault(address(vault), alice, "Test Vault", "ipfs://test", 0);
     }
 
@@ -149,13 +149,13 @@ contract MasterRegistryReworkTest is Test {
         registry.deactivateFactory(address(factory));
 
         vm.prank(daoOwner);
-        vm.expectRevert("Factory already inactive");
+        vm.expectRevert(MasterRegistryV1.FactoryNotActive.selector);
         registry.deactivateFactory(address(factory));
     }
 
     function test_DeactivateFactory_RevertIfNotRegistered() public {
         vm.prank(daoOwner);
-        vm.expectRevert("Factory not registered");
+        vm.expectRevert(MasterRegistryV1.NotRegistered.selector);
         registry.deactivateFactory(address(0x999));
     }
 
@@ -230,7 +230,7 @@ contract MasterRegistryReworkTest is Test {
         address vault2 = address(new MockVaultSimple(dummyToken));
 
         vm.prank(alice);
-        vm.expectRevert("Only instance can migrate");
+        vm.expectRevert(Ownable.Unauthorized.selector);
         registry.migrateVault(instance, vault2);
     }
 
@@ -249,7 +249,7 @@ contract MasterRegistryReworkTest is Test {
         registry.registerVault(vault2, alice, "Other Vault", "ipfs://v2", otherId);
 
         vm.prank(instance);
-        vm.expectRevert("Vault target mismatch");
+        vm.expectRevert(MasterRegistryV1.VaultMismatch.selector);
         registry.migrateVault(instance, vault2);
     }
 
@@ -259,7 +259,7 @@ contract MasterRegistryReworkTest is Test {
         address instance = _registerInstance(factory, vault1);
 
         vm.prank(instance);
-        vm.expectRevert("Vault already in array");
+        vm.expectRevert(MasterRegistryV1.VaultAlreadyInArray.selector);
         registry.migrateVault(instance, vault1);
     }
 
@@ -272,7 +272,7 @@ contract MasterRegistryReworkTest is Test {
         // vault2 is NOT registered
 
         vm.prank(instance);
-        vm.expectRevert("New vault not active");
+        vm.expectRevert(MasterRegistryV1.FactoryNotActive.selector);
         registry.migrateVault(instance, vault2);
     }
 
@@ -288,7 +288,7 @@ contract MasterRegistryReworkTest is Test {
 
     function test_setComponentRegistry_revertsOnZeroAddress() public {
         vm.prank(daoOwner);
-        vm.expectRevert("Invalid registry");
+        vm.expectRevert(MasterRegistryV1.InvalidAddress.selector);
         registry.setComponentRegistry(address(0));
     }
 

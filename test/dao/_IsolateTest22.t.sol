@@ -82,7 +82,7 @@ contract GrandCentralTest is Test {
         dao.submitVote(uint32(id), true);
 
         vm.prank(founder);
-        vm.expectRevert("voted");
+        vm.expectRevert(GrandCentral.AlreadyVoted.selector);
         dao.submitVote(uint32(id), true);
     }
 

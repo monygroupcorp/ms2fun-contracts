@@ -15,6 +15,9 @@ import {ICurveComputer} from "../../interfaces/ICurveComputer.sol";
 contract CurveParamsComputer is Ownable, ICurveComputer {
     using FixedPointMathLib for uint256;
 
+    error InvalidAddress();
+    error ReferenceAreaZero();
+
     // Reference curve shape weights (protocol-configurable)
     uint256 public quarticWeight = 3 gwei;
     uint256 public cubicWeight = 1333333333;
@@ -24,7 +27,7 @@ contract CurveParamsComputer is Ownable, ICurveComputer {
     event CurveWeightsUpdated();
 
     constructor(address _protocol) {
-        require(_protocol != address(0), "Invalid protocol");
+        if (_protocol == address(0)) revert InvalidAddress();
         _initializeOwner(_protocol);
     }
 
@@ -83,11 +86,11 @@ contract CurveParamsComputer is Ownable, ICurveComputer {
         uint256 liquidityReserveBps
     ) public view returns (BondingCurveMath.Params memory params) {
         uint256 totalSupply = nftCount * unitPerNFT * 1e18;
-        uint256 liquidityReserve = (totalSupply * liquidityReserveBps) / 10000;
+        uint256 liquidityReserve = (totalSupply * liquidityReserveBps) / 10000; // round down: slightly more for bonding
         uint256 maxBondingSupply = totalSupply - liquidityReserve;
 
         // Compute normalization factor: scale supply down to ~1-1000 range for safe math
-        uint256 normFactor = maxBondingSupply / 1e18;
+        uint256 normFactor = maxBondingSupply / 1e18; // round down: normalization for safe math, guarded by !=0 below
         if (normFactor == 0) normFactor = 1;
 
         // Compute reference integral with unit weights
@@ -100,7 +103,7 @@ contract CurveParamsComputer is Ownable, ICurveComputer {
         });
 
         uint256 referenceArea = BondingCurveMath.calculateCost(refParams, 0, maxBondingSupply);
-        require(referenceArea > 0, "Reference area is zero");
+        if (referenceArea == 0) revert ReferenceAreaZero();
 
         // Scale factor: targetETH / referenceArea (in wad)
         uint256 scaleFactor = targetETH.divWad(referenceArea);

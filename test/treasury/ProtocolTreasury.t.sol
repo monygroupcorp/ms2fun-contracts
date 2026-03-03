@@ -7,6 +7,7 @@ import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.s
 import {PoolKey} from "v4-core/types/PoolKey.sol";
 import {Currency} from "v4-core/types/Currency.sol";
 import {IHooks} from "v4-core/interfaces/IHooks.sol";
+import {Ownable} from "solady/auth/Ownable.sol";
 
 /// @notice Minimal ERC721 mock for testing treasury NFT handling
 contract MockERC721 {
@@ -34,6 +35,15 @@ contract MockERC721 {
     }
 }
 
+/// @notice Minimal MasterRegistry mock for access control testing
+contract MockMasterRegistry {
+    mapping(address => bool) public isRegisteredInstance;
+
+    function setRegistered(address instance, bool status) external {
+        isRegisteredInstance[instance] = status;
+    }
+}
+
 /// @notice Minimal ERC20 mock
 contract MockERC20 {
     mapping(address => uint256) public balanceOf;
@@ -54,6 +64,7 @@ contract ProtocolTreasuryTest is Test {
     ProtocolTreasuryV1 public treasury;
     MockERC721 public nft;
     MockERC20 public token;
+    MockMasterRegistry public mockRegistry;
 
     address public owner = address(0x1);
     address public alice = address(0x2);
@@ -67,6 +78,7 @@ contract ProtocolTreasuryTest is Test {
 
         nft = new MockERC721();
         token = new MockERC20();
+        mockRegistry = new MockMasterRegistry();
 
         vm.deal(alice, 10 ether);
         vm.deal(bob, 10 ether);
@@ -79,7 +91,7 @@ contract ProtocolTreasuryTest is Test {
     }
 
     function test_initialize_revertDouble() public {
-        vm.expectRevert("Already initialized");
+        vm.expectRevert(Ownable.AlreadyInitialized.selector);
         treasury.initialize(address(0x999));
     }
 
@@ -114,7 +126,7 @@ contract ProtocolTreasuryTest is Test {
 
     function test_deposit_revertZeroValue() public {
         vm.prank(alice);
-        vm.expectRevert("No value");
+        vm.expectRevert(ProtocolTreasuryV1.NoValue.selector);
         treasury.deposit{value: 0}(ProtocolTreasuryV1.Source.BONDING_FEE);
     }
 
@@ -151,7 +163,7 @@ contract ProtocolTreasuryTest is Test {
 
     function test_withdrawETH_revertInsufficientBalance() public {
         vm.prank(owner);
-        vm.expectRevert("Insufficient balance");
+        vm.expectRevert(ProtocolTreasuryV1.InsufficientBalance.selector);
         treasury.withdrawETH(bob, 1 ether);
     }
 
@@ -160,7 +172,7 @@ contract ProtocolTreasuryTest is Test {
         treasury.deposit{value: 1 ether}(ProtocolTreasuryV1.Source.BONDING_FEE);
 
         vm.prank(owner);
-        vm.expectRevert("Invalid recipient");
+        vm.expectRevert(ProtocolTreasuryV1.InvalidRecipient.selector);
         treasury.withdrawETH(address(0), 1 ether);
     }
 
@@ -228,7 +240,7 @@ contract ProtocolTreasuryTest is Test {
 
     function test_setV4PoolManager_RevertZeroAddress() public {
         vm.prank(owner);
-        vm.expectRevert("Invalid pool manager");
+        vm.expectRevert(ProtocolTreasuryV1.InvalidAddress.selector);
         treasury.setV4PoolManager(address(0));
     }
 
@@ -246,37 +258,64 @@ contract ProtocolTreasuryTest is Test {
 
     function test_setWETH_RevertZeroAddress() public {
         vm.prank(owner);
-        vm.expectRevert("Invalid WETH");
+        vm.expectRevert(ProtocolTreasuryV1.InvalidAddress.selector);
         treasury.setWETH(address(0));
     }
 
     // ========== POL Revert Tests ==========
 
+    function test_receivePOL_RevertRegistryNotConfigured() public {
+        // No registry set — should revert before V4/WETH checks
+        PoolKey memory key = _dummyPoolKey();
+        vm.prank(alice);
+        vm.expectRevert(ProtocolTreasuryV1.RegistryNotConfigured.selector);
+        treasury.receivePOL(key, -887220, 887220, 1 ether, 1 ether);
+    }
+
+    function test_receivePOL_RevertNotRegisteredInstance() public {
+        // Registry set but caller not registered
+        vm.prank(owner);
+        treasury.setMasterRegistry(address(mockRegistry));
+
+        PoolKey memory key = _dummyPoolKey();
+        vm.prank(alice);
+        vm.expectRevert(ProtocolTreasuryV1.NotRegisteredInstance.selector);
+        treasury.receivePOL(key, -887220, 887220, 1 ether, 1 ether);
+    }
+
     function test_receivePOL_RevertV4NotConfigured() public {
-        // WETH set but V4 not configured
+        // Registry + registered caller, but V4 not configured
+        vm.prank(owner);
+        treasury.setMasterRegistry(address(mockRegistry));
+        mockRegistry.setRegistered(alice, true);
+
         vm.prank(owner);
         treasury.setWETH(address(0x888));
 
         PoolKey memory key = _dummyPoolKey();
         vm.prank(alice);
-        vm.expectRevert("V4 not configured");
+        vm.expectRevert(ProtocolTreasuryV1.V4NotConfigured.selector);
         treasury.receivePOL(key, -887220, 887220, 1 ether, 1 ether);
     }
 
     function test_receivePOL_RevertWETHNotConfigured() public {
-        // V4 set but WETH not configured
+        // Registry + registered caller, V4 set but WETH not configured
+        vm.prank(owner);
+        treasury.setMasterRegistry(address(mockRegistry));
+        mockRegistry.setRegistered(alice, true);
+
         vm.prank(owner);
         treasury.setV4PoolManager(address(0x999));
 
         PoolKey memory key = _dummyPoolKey();
         vm.prank(alice);
-        vm.expectRevert("WETH not configured");
+        vm.expectRevert(ProtocolTreasuryV1.WETHNotConfigured.selector);
         treasury.receivePOL(key, -887220, 887220, 1 ether, 1 ether);
     }
 
     function test_claimPOLFees_RevertNoPosition() public {
         vm.prank(alice);
-        vm.expectRevert("No POL position");
+        vm.expectRevert(ProtocolTreasuryV1.NoPOLPosition.selector);
         treasury.claimPOLFees(address(0xDEAD));
     }
 

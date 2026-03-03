@@ -179,7 +179,7 @@ contract V4HookTaxationTest is ForkTestBase, IUnlockCallback {
         assertEq(newRate, 5000, "LP fee rate should be updated");
 
         // Verify max rate is enforced
-        vm.expectRevert("Rate too high");
+        vm.expectRevert(UniAlignmentV4Hook.RateTooHigh.selector);
         MockFeeHook(payable(address(hook))).setLpFeeRate(uint24(LPFeeLibrary.MAX_LP_FEE + 1));
 
         emit log_string("");
@@ -592,6 +592,11 @@ contract MockFeeHook is BaseTestHooks {
     using SafeCast for uint256;
     using SafeCast for int128;
 
+    error Unauthorized();
+    error PoolCurrency0MustBeNativeETH();
+    error RateTooHigh();
+    error OnlyOwner();
+
     IPoolManager public immutable poolManager;
     address public immutable vault;
     address public immutable weth;
@@ -642,10 +647,10 @@ contract MockFeeHook is BaseTestHooks {
         BalanceDelta delta,
         bytes calldata
     ) external override returns (bytes4, int128) {
-        require(msg.sender == address(poolManager), "Unauthorized");
+        if (msg.sender != address(poolManager)) revert Unauthorized();
 
         // Always tax the ETH movement (currency0 = native ETH)
-        require(Currency.unwrap(key.currency0) == address(0), "Pool currency0 must be native ETH");
+        if (Currency.unwrap(key.currency0) != address(0)) revert PoolCurrency0MustBeNativeETH();
 
         int128 amount0 = delta.amount0();
         uint256 ethMoved = amount0 < 0 ? uint256(uint128(-amount0)) : uint256(uint128(amount0));
@@ -662,8 +667,8 @@ contract MockFeeHook is BaseTestHooks {
     }
 
     function setLpFeeRate(uint24 _rate) external {
-        require(msg.sender == owner || msg.sender == address(this), "Only owner");
-        require(_rate <= LPFeeLibrary.MAX_LP_FEE, "Rate too high");
+        if (msg.sender != owner && msg.sender != address(this)) revert OnlyOwner();
+        if (_rate > LPFeeLibrary.MAX_LP_FEE) revert RateTooHigh();
         lpFeeRate = _rate;
         emit LpFeeRateUpdated(_rate);
     }

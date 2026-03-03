@@ -14,7 +14,35 @@ import {IGatingModule, GatingScope} from "../../gating/IGatingModule.sol";
 error FreeMintDisabled();
 error FreeMintAlreadyClaimed();
 error FreeMintExhausted();
+
+// ── ERC1155Instance errors ───────────────────────────────────────────────────
+error InvalidName();
+error InvalidAddress();
+error Unauthorized();
+error AmountMustBePositive();
+error EditionNotFound();
+error EditionNotOpen();
+error EditionSoldOut();
+error ExceedsSupply();
+error ExceedsMaxCost();
+error InsufficientPayment();
+error InsufficientBalance();
+error InvalidTitle();
+error InvalidPrice();
+error UnlimitedMustHaveZeroSupply();
+error LimitedMustHavePositiveSupply();
+error DynamicPricingRequiresIncreaseRate();
+error EditionLimitReached();
+error NoFeesToClaim();
+error LengthMismatch();
+error InvalidEditionRange();
+error GatingCheckFailed();
+error ERC1155RejectedTokens();
+error ERC1155TransferToNonReceiver();
+error OnlyFactory();
+error AlreadyInitialized();
 import { Currency } from "v4-core/types/Currency.sol";
+import { RevenueSplitLib } from "../../shared/libraries/RevenueSplitLib.sol";
 import { IInstanceLifecycle, TYPE_ERC1155, STATE_MINTING } from "../../interfaces/IInstanceLifecycle.sol";
 
 /**
@@ -75,6 +103,7 @@ contract ERC1155Instance is Ownable, ReentrancyGuard, IInstanceLifecycle {
     mapping(address => bool) public freeMintClaimed;
     GatingScope public gatingScope;
     bool private _freeMintInitialized;
+    bool public agentDelegationEnabled;
 
     uint256 public nextEditionId;
     uint256 public totalProceeds; // Total ETH collected from mints
@@ -126,6 +155,7 @@ contract ERC1155Instance is Ownable, ReentrancyGuard, IInstanceLifecycle {
 
     event EditionMetadataUpdated(uint256 indexed editionId, string metadataURI);
     event FreeMintClaimed(address indexed user, uint256 indexed editionId);
+    event AgentDelegationChanged(bool enabled);
 
     // ┌─────────────────────────┐
     // │      Constructor        │
@@ -141,13 +171,14 @@ contract ERC1155Instance is Ownable, ReentrancyGuard, IInstanceLifecycle {
         address _globalMessageRegistry,
         address _protocolTreasury,
         address _masterRegistry,
-        address _gatingModule        // NEW
+        address _gatingModule,
+        bool _agentCreated
     ) {
-        require(bytes(_name).length > 0, "Invalid name");
-        require(_creator != address(0), "Invalid creator");
-        require(_factory != address(0), "Invalid factory");
-        require(_vault != address(0), "Invalid vault");
-        require(_globalMessageRegistry != address(0), "Invalid global message registry");
+        if (bytes(_name).length == 0) revert InvalidName();
+        if (_creator == address(0)) revert InvalidAddress();
+        if (_factory == address(0)) revert InvalidAddress();
+        if (_vault == address(0)) revert InvalidAddress();
+        if (_globalMessageRegistry == address(0)) revert InvalidAddress();
 
         _initializeOwner(_creator);
         name = _name;
@@ -163,6 +194,7 @@ contract ERC1155Instance is Ownable, ReentrancyGuard, IInstanceLifecycle {
             gatingModule = IGatingModule(_gatingModule);
         }
         emit StateChanged(STATE_MINTING);
+        agentDelegationEnabled = _agentCreated;
     }
 
     // ── IInstanceLifecycle ─────────────────────────────────────────────────────
@@ -175,11 +207,18 @@ contract ERC1155Instance is Ownable, ReentrancyGuard, IInstanceLifecycle {
 
     /// @notice Set free mint params. Called by factory once after construction.
     function initializeFreeMint(uint256 allocation, GatingScope scope) external {
-        require(msg.sender == factory, "Only factory");
-        require(!_freeMintInitialized, "Already set");
+        if (msg.sender != factory) revert OnlyFactory();
+        if (_freeMintInitialized) revert AlreadyInitialized();
         _freeMintInitialized = true;
         freeMintAllocation = allocation;
         gatingScope = scope;
+    }
+
+    /// @notice Toggle agent delegation for this instance
+    function setAgentDelegation(bool enabled) external {
+        if (msg.sender != owner()) revert Unauthorized();
+        agentDelegationEnabled = enabled;
+        emit AgentDelegationChanged(enabled);
     }
 
     /// @notice Claim one free token of a specified edition at zero ETH cost.
@@ -191,14 +230,14 @@ contract ERC1155Instance is Ownable, ReentrancyGuard, IInstanceLifecycle {
         if (freeMintsClaimed >= freeMintAllocation) revert FreeMintExhausted();
 
         Edition storage edition = editions[editionId];
-        require(bytes(edition.pieceTitle).length > 0, "Edition does not exist");
+        if (bytes(edition.pieceTitle).length == 0) revert EditionNotFound();
         if (edition.supply > 0) {
-            require(edition.minted < edition.supply, "Edition supply exhausted");
+            if (edition.minted >= edition.supply) revert EditionSoldOut();
         }
 
         if (address(gatingModule) != address(0) && gatingScope != GatingScope.PAID_ONLY) {
             (bool allowed,) = gatingModule.canMint(msg.sender, 1, gatingData);
-            require(allowed, "Gating: not allowed");
+            if (!allowed) revert GatingCheckFailed();
             gatingModule.onMint(msg.sender, 1);
         }
 
@@ -233,21 +272,27 @@ contract ERC1155Instance is Ownable, ReentrancyGuard, IInstanceLifecycle {
         uint256 priceIncreaseRate,
         uint256 openTime           // NEW: Unix timestamp; 0 = open immediately
     ) external {
-        require(msg.sender == factory || msg.sender == owner(), "Not authorized");
-        require(bytes(pieceTitle).length > 0, "Invalid title");
-        require(basePrice > 0, "Invalid price");
-        
-        if (pricingModel == PricingModel.UNLIMITED) {
-            require(supply == 0, "Unlimited must have supply 0");
+        if (msg.sender == owner()) {
+            // Owner always allowed
+        } else if (msg.sender == factory && agentDelegationEnabled) {
+            // Factory forwarding agent call, delegation is on
         } else {
-            require(supply > 0, "Limited must have supply > 0");
+            revert Unauthorized();
+        }
+        if (bytes(pieceTitle).length == 0) revert InvalidTitle();
+        if (basePrice == 0) revert InvalidPrice();
+
+        if (pricingModel == PricingModel.UNLIMITED) {
+            if (supply != 0) revert UnlimitedMustHaveZeroSupply();
+        } else {
+            if (supply == 0) revert LimitedMustHavePositiveSupply();
         }
 
         if (pricingModel == PricingModel.LIMITED_DYNAMIC) {
-            require(priceIncreaseRate > 0, "Dynamic pricing requires increase rate");
+            if (priceIncreaseRate == 0) revert DynamicPricingRequiresIncreaseRate();
         }
 
-        require(nextEditionId <= type(uint32).max, "Edition limit reached (max 4.29 billion)");
+        if (nextEditionId > type(uint32).max) revert EditionLimitReached();
 
         uint256 editionId = nextEditionId++;
         editions[editionId] = Edition({
@@ -271,8 +316,8 @@ contract ERC1155Instance is Ownable, ReentrancyGuard, IInstanceLifecycle {
      * @param metadataURI New metadata URI
      */
     function updateEditionMetadata(uint256 editionId, string memory metadataURI) external {
-        require(msg.sender == owner(), "Not owner");
-        require(editions[editionId].id != 0, "Edition not found");
+        if (msg.sender != owner()) revert Unauthorized();
+        if (editions[editionId].id == 0) revert EditionNotFound();
 
         editions[editionId].metadataURI = metadataURI;
         emit EditionMetadataUpdated(editionId, metadataURI);
@@ -297,7 +342,7 @@ contract ERC1155Instance is Ownable, ReentrancyGuard, IInstanceLifecycle {
      */
     function getCurrentPrice(uint256 editionId) public view returns (uint256 price) {
         Edition storage edition = editions[editionId];
-        require(edition.id != 0, "Edition not found");
+        if (edition.id == 0) revert EditionNotFound();
 
         if (edition.pricingModel == PricingModel.UNLIMITED || edition.pricingModel == PricingModel.LIMITED_FIXED) {
             return edition.basePrice;
@@ -319,8 +364,8 @@ contract ERC1155Instance is Ownable, ReentrancyGuard, IInstanceLifecycle {
      */
     function calculateMintCost(uint256 editionId, uint256 amount) public view returns (uint256 totalCost) {
         Edition storage edition = editions[editionId];
-        require(edition.id != 0, "Edition not found");
-        require(amount > 0, "Invalid amount");
+        if (edition.id == 0) revert EditionNotFound();
+        if (amount == 0) revert AmountMustBePositive();
 
         if (edition.pricingModel == PricingModel.UNLIMITED || edition.pricingModel == PricingModel.LIMITED_FIXED) {
             return edition.basePrice * amount;
@@ -354,31 +399,31 @@ contract ERC1155Instance is Ownable, ReentrancyGuard, IInstanceLifecycle {
         uint256 maxCost
     ) external payable nonReentrant {
         Edition storage edition = editions[editionId];
-        require(edition.id != 0, "Edition not found");
-        require(amount > 0, "Invalid amount");
+        if (edition.id == 0) revert EditionNotFound();
+        if (amount == 0) revert AmountMustBePositive();
 
         // Time gate check
         if (edition.openTime != 0) {
-            require(block.timestamp >= edition.openTime, "Edition not open yet");
+            if (block.timestamp < edition.openTime) revert EditionNotOpen();
         }
 
         // Gating check — forwards edition's openTime as the time reference
         if (address(gatingModule) != address(0)) {
             bytes memory encoded = abi.encode(gatingData, edition.openTime);
             (bool allowed,) = gatingModule.canMint(msg.sender, amount, encoded);
-            require(allowed, "Gating check failed");
+            if (!allowed) revert GatingCheckFailed();
             gatingModule.onMint(msg.sender, amount);
         }
 
         // Check supply limits
         if (edition.pricingModel != PricingModel.UNLIMITED) {
-            require(edition.minted + amount <= edition.supply, "Exceeds supply");
+            if (edition.minted + amount > edition.supply) revert ExceedsSupply();
         }
 
         // Calculate cost
         uint256 totalCost = calculateMintCost(editionId, amount);
-        require(maxCost == 0 || totalCost <= maxCost, "Exceeds maxCost");
-        require(msg.value >= totalCost, "Insufficient payment");
+        if (maxCost != 0 && totalCost > maxCost) revert ExceedsMaxCost();
+        if (msg.value < totalCost) revert InsufficientPayment();
 
         // Update edition state
         edition.minted += amount;
@@ -409,27 +454,25 @@ contract ERC1155Instance is Ownable, ReentrancyGuard, IInstanceLifecycle {
      * @param amount Amount to withdraw
      */
     function withdraw(uint256 amount) external nonReentrant {
-        require(msg.sender == owner(), "Not owner");
-        require(amount > 0, "Invalid amount");
-        require(amount <= address(this).balance, "Insufficient balance");
+        if (msg.sender != owner()) revert Unauthorized();
+        if (amount == 0) revert AmountMustBePositive();
+        if (amount > address(this).balance) revert InsufficientBalance();
 
         // 1/19/80 split
-        uint256 protocolCut = amount / 100;                    // 1%
-        uint256 vaultCut    = (amount * 19) / 100;             // 19%
-        uint256 ownerAmount = amount - protocolCut - vaultCut; // ~80%
+        RevenueSplitLib.Split memory s = RevenueSplitLib.split(amount);
 
         // Protocol cut to treasury
-        if (protocolCut > 0 && protocolTreasury != address(0)) {
-            SafeTransferLib.safeTransferETH(protocolTreasury, protocolCut);
+        if (s.protocolCut > 0 && protocolTreasury != address(0)) {
+            SafeTransferLib.safeTransferETH(protocolTreasury, s.protocolCut);
         }
 
         // Vault cut — tracks this instance as benefactor
-        vault.receiveContribution{value: vaultCut}(Currency.wrap(address(0)), vaultCut, address(this));
+        vault.receiveContribution{value: s.vaultCut}(Currency.wrap(address(0)), s.vaultCut, address(this));
 
         // Transfer remainder to artist
-        SafeTransferLib.safeTransferETH(owner(), ownerAmount);
+        SafeTransferLib.safeTransferETH(owner(), s.remainder);
 
-        emit Withdrawn(owner(), ownerAmount, vaultCut, protocolCut);
+        emit Withdrawn(owner(), s.remainder, s.vaultCut, s.protocolCut);
     }
 
     /**
@@ -457,7 +500,7 @@ contract ERC1155Instance is Ownable, ReentrancyGuard, IInstanceLifecycle {
         totalClaimed = vault.claimFees();
 
         // Route all claimed fees to the owner
-        require(totalClaimed > 0, "No fees to claim");
+        if (totalClaimed == 0) revert NoFeesToClaim();
         SafeTransferLib.safeTransferETH(owner(), totalClaimed);
     }
 
@@ -490,11 +533,8 @@ contract ERC1155Instance is Ownable, ReentrancyGuard, IInstanceLifecycle {
         uint256 amount,
         bytes memory data
     ) external {
-        require(
-            from == msg.sender || isApprovedForAll[from][msg.sender],
-            "Not authorized"
-        );
-        require(balanceOf[from][id] >= amount, "Insufficient balance");
+        if (from != msg.sender && !isApprovedForAll[from][msg.sender]) revert Unauthorized();
+        if (balanceOf[from][id] < amount) revert InsufficientBalance();
 
         balanceOf[from][id] -= amount;
         balanceOf[to][id] += amount;
@@ -515,14 +555,11 @@ contract ERC1155Instance is Ownable, ReentrancyGuard, IInstanceLifecycle {
         uint256[] memory amounts,
         bytes memory data
     ) external {
-        require(
-            from == msg.sender || isApprovedForAll[from][msg.sender],
-            "Not authorized"
-        );
-        require(ids.length == amounts.length, "Length mismatch");
+        if (from != msg.sender && !isApprovedForAll[from][msg.sender]) revert Unauthorized();
+        if (ids.length != amounts.length) revert LengthMismatch();
 
         for (uint256 i = 0; i < ids.length; i++) {
-            require(balanceOf[from][ids[i]] >= amounts[i], "Insufficient balance");
+            if (balanceOf[from][ids[i]] < amounts[i]) revert InsufficientBalance();
             balanceOf[from][ids[i]] -= amounts[i];
             balanceOf[to][ids[i]] += amounts[i];
         }
@@ -644,7 +681,7 @@ contract ERC1155Instance is Ownable, ReentrancyGuard, IInstanceLifecycle {
         uint256 priceIncreaseRate
     ) {
         Edition storage edition = editions[editionId];
-        require(edition.id != 0, "Edition not found");
+        if (edition.id == 0) revert EditionNotFound();
         
         return (
             edition.id,
@@ -707,8 +744,8 @@ contract ERC1155Instance is Ownable, ReentrancyGuard, IInstanceLifecycle {
         PricingModel[] memory pricingModels,
         uint256[] memory priceIncreaseRates
     ) {
-        require(startId > 0 && startId <= nextEditionId - 1, "Invalid start ID");
-        require(endId >= startId && endId <= nextEditionId - 1, "Invalid end ID");
+        if (startId == 0 || startId > nextEditionId - 1) revert InvalidEditionRange();
+        if (endId < startId || endId > nextEditionId - 1) revert InvalidEditionRange();
         
         uint256 size = endId - startId + 1;
         ids = new uint256[](size);
@@ -791,7 +828,7 @@ contract ERC1155Instance is Ownable, ReentrancyGuard, IInstanceLifecycle {
         uint256 available
     ) {
         Edition storage edition = editions[editionId];
-        require(edition.id != 0, "Edition not found");
+        if (edition.id == 0) revert EditionNotFound();
         
         basePrice = edition.basePrice;
         currentPrice = getCurrentPrice(editionId);
@@ -817,7 +854,7 @@ contract ERC1155Instance is Ownable, ReentrancyGuard, IInstanceLifecycle {
         bool isSoldOut
     ) {
         Edition storage edition = editions[editionId];
-        require(edition.id != 0, "Edition not found");
+        if (edition.id == 0) revert EditionNotFound();
         
         minted = edition.minted;
         supply = edition.supply;
@@ -857,7 +894,7 @@ contract ERC1155Instance is Ownable, ReentrancyGuard, IInstanceLifecycle {
      */
     function getPieceTitle(uint256 editionId) external view returns (string memory pieceTitle) {
         Edition storage edition = editions[editionId];
-        require(edition.id != 0, "Edition not found");
+        if (edition.id == 0) revert EditionNotFound();
         return edition.pieceTitle;
     }
 
@@ -868,7 +905,7 @@ contract ERC1155Instance is Ownable, ReentrancyGuard, IInstanceLifecycle {
      */
     function getEdition(uint256 editionId) external view returns (Edition memory) {
         Edition storage edition = editions[editionId];
-        require(edition.id != 0, "Edition not found");
+        if (edition.id == 0) revert EditionNotFound();
         return edition;
     }
 
@@ -881,7 +918,7 @@ contract ERC1155Instance is Ownable, ReentrancyGuard, IInstanceLifecycle {
      * @param uri Style URI (ipfs://, ar://, https://, or inline:css:... / inline:js:...)
      */
     function setStyle(string memory uri) external {
-        require(msg.sender == owner(), "Not owner");
+        if (msg.sender != owner()) revert Unauthorized();
         styleUri = uri;
     }
 
@@ -891,8 +928,8 @@ contract ERC1155Instance is Ownable, ReentrancyGuard, IInstanceLifecycle {
      * @param uri Style URI (overrides project-level)
      */
     function setEditionStyle(uint256 editionId, string memory uri) external {
-        require(msg.sender == owner(), "Not owner");
-        require(editions[editionId].id != 0, "Edition not found");
+        if (msg.sender != owner()) revert Unauthorized();
+        if (editions[editionId].id == 0) revert EditionNotFound();
         editionStyleUri[editionId] = uri;
     }
 
@@ -930,12 +967,12 @@ contract ERC1155Instance is Ownable, ReentrancyGuard, IInstanceLifecycle {
         if (to.code.length > 0) {
             try IERC1155Receiver(to).onERC1155Received(operator, from, id, amount, data) returns (bytes4 response) {
                 if (response != IERC1155Receiver.onERC1155Received.selector) {
-                    revert("ERC1155: rejected tokens");
+                    revert ERC1155RejectedTokens();
                 }
-            } catch Error(string memory reason) {
-                revert(reason);
+            } catch Error(string memory) {
+                revert ERC1155RejectedTokens();
             } catch {
-                revert("ERC1155: transfer to non-receiver");
+                revert ERC1155TransferToNonReceiver();
             }
         }
     }
@@ -960,12 +997,12 @@ contract ERC1155Instance is Ownable, ReentrancyGuard, IInstanceLifecycle {
         if (to.code.length > 0) {
             try IERC1155Receiver(to).onERC1155BatchReceived(operator, from, ids, amounts, data) returns (bytes4 response) {
                 if (response != IERC1155Receiver.onERC1155BatchReceived.selector) {
-                    revert("ERC1155: rejected tokens");
+                    revert ERC1155RejectedTokens();
                 }
-            } catch Error(string memory reason) {
-                revert(reason);
+            } catch Error(string memory) {
+                revert ERC1155RejectedTokens();
             } catch {
-                revert("ERC1155: transfer to non-receiver");
+                revert ERC1155TransferToNonReceiver();
             }
         }
     }

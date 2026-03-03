@@ -40,7 +40,7 @@ contract StipendConductorTest is Test {
 
     function test_ExecuteStipend_RevertIfTooEarly() public {
         stipend.execute();
-        vm.expectRevert("too early");
+        vm.expectRevert(StipendConductor.TooEarly.selector);
         stipend.execute();
     }
 
@@ -54,13 +54,13 @@ contract StipendConductorTest is Test {
     function test_ExecuteStipend_RevertIfRevoked() public {
         vm.prank(address(dao));
         stipend.revoke();
-        vm.expectRevert("revoked");
+        vm.expectRevert(StipendConductor.Revoked.selector);
         stipend.execute();
     }
 
     function test_Revoke_OnlyDAO() public {
         vm.prank(alice);
-        vm.expectRevert(bytes("!dao"));
+        vm.expectRevert(StipendConductor.Unauthorized.selector);
         stipend.revoke();
     }
 

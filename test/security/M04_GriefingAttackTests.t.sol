@@ -8,6 +8,8 @@ import "../../src/master/MasterRegistryV1.sol";
 import {MockZRouter} from "../mocks/MockZRouter.sol";
 import {MockVaultPriceValidator} from "../mocks/MockVaultPriceValidator.sol";
 import {IVaultPriceValidator} from "../../src/interfaces/IVaultPriceValidator.sol";
+import {MockAlignmentRegistry} from "../mocks/MockAlignmentRegistry.sol";
+import {IAlignmentRegistry} from "../../src/master/interfaces/IAlignmentRegistry.sol";
 import {LibClone} from "solady/utils/LibClone.sol";
 import {PoolKey} from "v4-core/types/PoolKey.sol";
 import {Currency} from "v4-core/types/Currency.sol";
@@ -119,6 +121,9 @@ contract M04_GriefingAttackTests is Test {
     TestableUniAlignmentVault public vaultImpl;
     MockZRouter public mockZRouter;
     MockVaultPriceValidator public mockValidator;
+    MockAlignmentRegistry public mockAlignmentRegistry;
+
+    uint256 constant TARGET_ID = 1;
 
     address public owner;
     address public alice;
@@ -141,6 +146,11 @@ contract M04_GriefingAttackTests is Test {
         // Deploy real ERC20 token for alignment token
         alignmentToken = new MockEXECToken(1000000e18);
 
+        // Deploy mock alignment registry
+        mockAlignmentRegistry = new MockAlignmentRegistry();
+        mockAlignmentRegistry.setTargetActive(TARGET_ID, true);
+        mockAlignmentRegistry.setTokenInTarget(TARGET_ID, address(alignmentToken), true);
+
         // Deploy vault (using testable version with mock swap/LP overrides)
         mockZRouter = new MockZRouter();
         mockValidator = new MockVaultPriceValidator();
@@ -156,7 +166,9 @@ contract M04_GriefingAttackTests is Test {
             address(mockZRouter),
             3000,
             60,
-            IVaultPriceValidator(address(mockValidator))
+            IVaultPriceValidator(address(mockValidator)),
+            IAlignmentRegistry(address(mockAlignmentRegistry)),
+            TARGET_ID
         );
 
         // Set V4 pool key for conversion tests
@@ -307,7 +319,9 @@ contract M04_GriefingAttackTests is Test {
             address(poorZRouter),
             3000,
             60,
-            IVaultPriceValidator(address(poorValidator))
+            IVaultPriceValidator(address(poorValidator)),
+            IAlignmentRegistry(address(mockAlignmentRegistry)),
+            TARGET_ID
         );
 
         // Set V4 pool key
@@ -407,7 +421,7 @@ contract M04_GriefingAttackTests is Test {
     }
 
     function test_AdminCannotSetExcessiveReward() public {
-        vm.expectRevert("Reward too high (max 0.1 ETH)");
+        vm.expectRevert(UniAlignmentVault.RewardTooHigh.selector);
         vault.setStandardConversionReward(0.2 ether);
     }
 

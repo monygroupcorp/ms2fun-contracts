@@ -22,6 +22,15 @@ interface IMasterRegistryMin {
  *      interaction, so late joiners cannot claim retroactive fees.
  */
 contract ERC404StakingModule {
+    error NotRegisteredInstance();
+    error InvalidAddress();
+    error AlreadyEnabled();
+    error StakingNotEnabled();
+    error AmountMustBePositive();
+    error InsufficientStakedBalance();
+    error NoStakedBalance();
+    error NoPendingRewards();
+
     IMasterRegistryMin public immutable masterRegistry;
 
     // Per-instance state (all mappings keyed by instance address)
@@ -41,12 +50,12 @@ contract ERC404StakingModule {
     event RewardsClaimed(address indexed instance, address indexed user, uint256 amount);
 
     modifier onlyRegisteredInstance() {
-        require(masterRegistry.isRegisteredInstance(msg.sender), "Not registered instance");
+        if (!masterRegistry.isRegisteredInstance(msg.sender)) revert NotRegisteredInstance();
         _;
     }
 
     constructor(address _masterRegistry) {
-        require(_masterRegistry != address(0), "Invalid registry");
+        if (_masterRegistry == address(0)) revert InvalidAddress();
         masterRegistry = IMasterRegistryMin(_masterRegistry);
     }
 
@@ -56,22 +65,22 @@ contract ERC404StakingModule {
         uint256 staked = stakedBalance[instance][user];
         uint256 rpt = rewardPerTokenStored[instance];
         uint256 paid = rewardPerTokenPaid[instance][user];
-        return rewardsAccrued[instance][user] + (staked * (rpt - paid)) / 1e18;
+        return rewardsAccrued[instance][user] + (staked * (rpt - paid)) / 1e18; // round down: favors pool
     }
 
     // ── Write functions (instance-only) ──────────────────────────────────────
 
     /// @notice Enable staking for the calling instance. Irreversible.
     function enableStaking() external onlyRegisteredInstance {
-        require(!stakingEnabled[msg.sender], "Already enabled");
+        if (stakingEnabled[msg.sender]) revert AlreadyEnabled();
         stakingEnabled[msg.sender] = true;
         emit StakingEnabled(msg.sender);
     }
 
     /// @notice Record that `user` has staked `amount` tokens (tokens already in instance)
     function recordStake(address user, uint256 amount) external onlyRegisteredInstance {
-        require(stakingEnabled[msg.sender], "Staking not enabled");
-        require(amount > 0, "Amount must be positive");
+        if (!stakingEnabled[msg.sender]) revert StakingNotEnabled();
+        if (amount == 0) revert AmountMustBePositive();
 
         address instance = msg.sender;
 
@@ -93,9 +102,9 @@ contract ERC404StakingModule {
         onlyRegisteredInstance
         returns (uint256 rewardAmount)
     {
-        require(stakingEnabled[msg.sender], "Staking not enabled");
-        require(amount > 0, "Amount must be positive");
-        require(stakedBalance[msg.sender][user] >= amount, "Insufficient staked balance");
+        if (!stakingEnabled[msg.sender]) revert StakingNotEnabled();
+        if (amount == 0) revert AmountMustBePositive();
+        if (stakedBalance[msg.sender][user] < amount) revert InsufficientStakedBalance();
 
         address instance = msg.sender;
 
@@ -120,10 +129,10 @@ contract ERC404StakingModule {
     /// @dev Instance calls this after vault.claimFees() transfers ETH to instance.
     ///      If totalStaked == 0, delta is silently unclaimable (held in instance, owner can withdrawDust).
     function recordFeesReceived(uint256 delta) external onlyRegisteredInstance {
-        require(stakingEnabled[msg.sender], "Staking not enabled");
+        if (!stakingEnabled[msg.sender]) revert StakingNotEnabled();
         address instance = msg.sender;
         if (totalStaked[instance] > 0) {
-            rewardPerTokenStored[instance] += (delta * 1e18) / totalStaked[instance];
+            rewardPerTokenStored[instance] += (delta * 1e18) / totalStaked[instance]; // round down: dust stays in instance
         }
         emit FeesReceived(instance, delta, rewardPerTokenStored[instance]);
     }
@@ -136,11 +145,11 @@ contract ERC404StakingModule {
         returns (uint256 rewardAmount)
     {
         address instance = msg.sender;
-        require(stakingEnabled[instance], "Staking not enabled");
-        require(stakedBalance[instance][user] > 0, "No staked balance");
+        if (!stakingEnabled[instance]) revert StakingNotEnabled();
+        if (stakedBalance[instance][user] == 0) revert NoStakedBalance();
 
         rewardAmount = _earned(instance, user);
-        require(rewardAmount > 0, "No pending rewards");
+        if (rewardAmount == 0) revert NoPendingRewards();
 
         rewardsAccrued[instance][user] = 0;
         rewardPerTokenPaid[instance][user] = rewardPerTokenStored[instance];
@@ -177,7 +186,7 @@ contract ERC404StakingModule {
         userStaked = stakedBalance[instance][user];
         globalTotalStaked = totalStaked[instance];
         userProportion = globalTotalStaked > 0
-            ? (userStaked * 10000) / globalTotalStaked
+            ? (userStaked * 10000) / globalTotalStaked // round down: view-only, no value transfer
             : 0;
         pendingRewards = _earned(instance, user);
     }

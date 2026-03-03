@@ -3,6 +3,7 @@ pragma solidity ^0.8.20;
 
 import {Test} from "forge-std/Test.sol";
 import {FeaturedQueueManager} from "../../src/master/FeaturedQueueManager.sol";
+import {Ownable} from "solady/auth/Ownable.sol";
 import {IMasterRegistry} from "../../src/master/interfaces/IMasterRegistry.sol";
 
 // ── Minimal mock registry ──────────────────────────────────────────────────────
@@ -110,7 +111,7 @@ contract MasterRegistryQueueTest is Test {
         vm.deal(bob, bob.balance + cost);
 
         vm.prank(bob);
-        vm.expectRevert("Already featured");
+        vm.expectRevert(FeaturedQueueManager.AlreadyFeatured.selector);
         queue.rentFeatured{value: cost}(inst1, duration, 0);
     }
 
@@ -119,7 +120,7 @@ contract MasterRegistryQueueTest is Test {
         uint256 cost     = queue.quoteDurationCost(duration);
 
         vm.prank(alice);
-        vm.expectRevert("Insufficient payment");
+        vm.expectRevert(FeaturedQueueManager.InsufficientPayment.selector);
         queue.rentFeatured{value: cost - 1}(inst1, duration, 0);
     }
 
@@ -128,7 +129,7 @@ contract MasterRegistryQueueTest is Test {
         uint256 cost   = queue.quoteDurationCost(minDur - 1);
 
         vm.prank(alice);
-        vm.expectRevert("Invalid duration");
+        vm.expectRevert(FeaturedQueueManager.InvalidDuration.selector);
         queue.rentFeatured{value: cost}(inst1, minDur - 1, 0);
     }
 
@@ -137,7 +138,7 @@ contract MasterRegistryQueueTest is Test {
         uint256 cost   = queue.quoteDurationCost(maxDur + 1 days);
 
         vm.prank(alice);
-        vm.expectRevert("Invalid duration");
+        vm.expectRevert(FeaturedQueueManager.InvalidDuration.selector);
         queue.rentFeatured{value: cost}(inst1, maxDur + 1 days, 0);
     }
 
@@ -147,7 +148,7 @@ contract MasterRegistryQueueTest is Test {
         uint256 cost     = queue.quoteDurationCost(duration);
 
         vm.prank(alice);
-        vm.expectRevert("Instance not registered");
+        vm.expectRevert(FeaturedQueueManager.InstanceNotRegistered.selector);
         queue.rentFeatured{value: cost}(unknown, duration, 0);
     }
 
@@ -193,7 +194,7 @@ contract MasterRegistryQueueTest is Test {
 
     function test_boostRank_revert_slotInactive() public {
         vm.prank(alice);
-        vm.expectRevert("Slot not active");
+        vm.expectRevert(FeaturedQueueManager.SlotNotActive.selector);
         queue.boostRank{value: 0.01 ether}(inst1);
     }
 
@@ -201,7 +202,7 @@ contract MasterRegistryQueueTest is Test {
         _rentBasic(inst1, alice, 0);
 
         vm.prank(alice);
-        vm.expectRevert("Must send ETH");
+        vm.expectRevert(FeaturedQueueManager.MustSendETH.selector);
         queue.boostRank{value: 0}(inst1);
     }
 
@@ -259,7 +260,7 @@ contract MasterRegistryQueueTest is Test {
         vm.deal(bob, bob.balance + cost);
 
         vm.prank(bob);
-        vm.expectRevert("Slot expired - use rentFeatured");
+        vm.expectRevert(FeaturedQueueManager.SlotExpired.selector);
         queue.renewDuration{value: cost}(inst1, extra);
     }
 
@@ -489,7 +490,7 @@ contract MasterRegistryQueueTest is Test {
         vm.deal(charlie, charlie.balance + cost);
 
         vm.prank(charlie);
-        vm.expectRevert("Featured set full");
+        vm.expectRevert(FeaturedQueueManager.QueueFull.selector);
         queue.rentFeatured{value: cost}(inst4, duration, 0);
     }
 
@@ -519,7 +520,7 @@ contract MasterRegistryQueueTest is Test {
         uint256 cost     = queue.quoteDurationCost(duration);
 
         vm.prank(factory_);
-        vm.expectRevert("Not authorized");
+        vm.expectRevert(Ownable.Unauthorized.selector);
         queue.rentFeaturedFor{value: cost}(inst1, alice, duration, 0);
     }
 
@@ -572,7 +573,7 @@ contract MasterRegistryQueueTest is Test {
 
     function test_setAuthorizedFactory_maxDiscount() public {
         vm.prank(owner);
-        vm.expectRevert("Discount too high");
+        vm.expectRevert(FeaturedQueueManager.DiscountTooHigh.selector);
         queue.setAuthorizedFactory(factory_, true, 5001);
     }
 

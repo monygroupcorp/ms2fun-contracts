@@ -11,6 +11,8 @@ import { FixedPointMathLib } from "solady/utils/FixedPointMathLib.sol";
 library EditionPricing {
     using FixedPointMathLib for uint256;
 
+    error PriceCalculationError();
+
     /**
      * @notice Calculate current price for dynamic pricing model
      * @dev Uses exponential formula: currentPrice = basePrice * (1 + increaseRate/10000) ^ minted
@@ -24,35 +26,18 @@ library EditionPricing {
         uint256 priceIncreaseRate,
         uint256 minted
     ) internal pure returns (uint256 currentPrice) {
-        if (minted == 0) {
+        if (minted == 0 || priceIncreaseRate == 0) {
             return basePrice;
         }
 
-        if (priceIncreaseRate == 0) {
-            return basePrice;
-        }
+        // Calculate: basePrice * ((10000 + rate) / 10000) ^ minted
+        // Using rpow with base 1e18 for O(log n) exponentiation instead of O(n) loop
+        uint256 multiplierWad = 1e18 + (priceIncreaseRate * 1e14); // e.g., 1.01e18 for 1%
+        uint256 result = FixedPointMathLib.rpow(multiplierWad, minted, 1e18);
 
-        // Calculate: (1 + increaseRate/10000) ^ minted
-        // Convert multiplier to WAD: (10000 + rate) / 10000 = 1 + rate/10000
-        // In WAD: (1e18 * (10000 + rate)) / 10000 = 1e18 + (rate * 1e14)
-        uint256 multiplierWad = 1e18 + (priceIncreaseRate * 1e14); // e.g., 1.01e18 for 1% increase
-        
-        // Start with 1.0 in WAD format
-        uint256 result = 1e18;
-        
-        // Calculate multiplier ^ minted using repeated multiplication
-        // This is gas-intensive for large minted values, but practical for most use cases
-        // For very large minted values, consider using logarithms or lookup tables
-        for (uint256 i = 0; i < minted; i++) {
-            result = result.mulWad(multiplierWad);
-        }
-        
-        // Multiply base price by the result
-        // Result is already in WAD format, so mulWad handles it correctly
         currentPrice = basePrice.mulWad(result);
-        
-        // Ensure price doesn't underflow
-        require(currentPrice >= basePrice, "Price calculation error");
+
+        if (currentPrice < basePrice) revert PriceCalculationError();
     }
 
     /**
@@ -71,14 +56,18 @@ library EditionPricing {
         uint256 amount
     ) internal pure returns (uint256 totalCost) {
         if (priceIncreaseRate == 0) {
-            // Fixed price: simple multiplication
             return basePrice * amount;
         }
 
-        // Calculate cost for each token in the batch
-        for (uint256 i = 0; i < amount; i++) {
-            totalCost += calculateDynamicPrice(basePrice, priceIncreaseRate, startMinted + i);
-        }
+        // Geometric series: sum = basePrice * r^start * (r^amount - 1) / (r - 1)
+        // where r = (10000 + rate) / 10000 in WAD
+        uint256 r = 1e18 + (priceIncreaseRate * 1e14);
+        uint256 rStart = FixedPointMathLib.rpow(r, startMinted, 1e18); // r^start
+        uint256 rAmount = FixedPointMathLib.rpow(r, amount, 1e18); // r^amount
+
+        // sum = basePrice * rStart * (rAmount - 1) / (r - 1)
+        uint256 numerator = basePrice.mulWad(rStart).mulWad(rAmount - 1e18);
+        totalCost = numerator.divWad(r - 1e18);
     }
 
     /**

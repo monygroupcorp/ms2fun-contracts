@@ -10,7 +10,32 @@ import {IMasterRegistry} from "../../master/interfaces/IMasterRegistry.sol";
 import {IFactoryInstance} from "../../interfaces/IFactoryInstance.sol";
 import {IGlobalMessageRegistry} from "../../registry/interfaces/IGlobalMessageRegistry.sol";
 import {Currency} from "v4-core/types/Currency.sol";
+import {RevenueSplitLib} from "../../shared/libraries/RevenueSplitLib.sol";
 import {IInstanceLifecycle, TYPE_ERC721, STATE_ACTIVE} from "../../interfaces/IInstanceLifecycle.sol";
+
+// ── ERC721AuctionInstance errors ──────────────────────────────────────────────
+error InvalidAddress();
+error InvalidName();
+error InvalidSymbol();
+error InvalidLines();
+error InvalidDuration();
+error InvalidTimeBuffer();
+error InvalidBidIncrement();
+error DepositRequired();
+error URIRequired();
+error AuctionDoesNotExist();
+error AuctionNotStarted();
+error AuctionAlreadySettled();
+error AuctionNotEnded();
+error AuctionExpired();
+error BidBelowMinimum();
+error BidTooLow();
+error NoBids();
+error HasBids();
+error NoFeesToClaim();
+error TokenDoesNotExist();
+error InvalidLine();
+error Unauthorized();
 
 /**
  * @title ERC721AuctionInstance
@@ -39,9 +64,9 @@ contract ERC721AuctionInstance is ERC721, Ownable, ReentrancyGuard, IFactoryInst
     // │   Immutable Config      │
     // └─────────────────────────┘
 
-    IAlignmentVault public _vault;
+    IAlignmentVault internal _vault;
     IMasterRegistry public masterRegistry;
-    address public immutable _protocolTreasury;
+    address internal immutable _protocolTreasury;
     IGlobalMessageRegistry public immutable globalMessageRegistry;
     uint8 public immutable lines;
     uint40 public immutable baseDuration;
@@ -66,7 +91,8 @@ contract ERC721AuctionInstance is ERC721, Ownable, ReentrancyGuard, IFactoryInst
     // Token data
     mapping(uint24 => Auction) public auctions;
     mapping(uint24 => string) private _tokenURIs;
-
+    address public factory;
+    bool public agentDelegationEnabled;
 
     // ┌─────────────────────────┐
     // │         Events          │
@@ -77,6 +103,7 @@ contract ERC721AuctionInstance is ERC721, Ownable, ReentrancyGuard, IFactoryInst
     event BidPlaced(uint24 indexed tokenId, address indexed bidder, uint256 amount);
     event AuctionSettled(uint24 indexed tokenId, address indexed winner, uint256 amount);
     event UnsoldReclaimed(uint24 indexed tokenId, uint256 forfeitedDeposit);
+    event AgentDelegationChanged(bool enabled);
 
     // ┌─────────────────────────┐
     // │      Constructor        │
@@ -95,16 +122,16 @@ contract ERC721AuctionInstance is ERC721, Ownable, ReentrancyGuard, IFactoryInst
         address globalMessageRegistry_,
         address masterRegistry_
     ) {
-        require(vault_ != address(0), "Invalid vault");
-        require(protocolTreasury_ != address(0), "Invalid treasury");
-        require(owner_ != address(0), "Invalid owner");
-        require(globalMessageRegistry_ != address(0), "Invalid global message registry");
-        require(bytes(name_).length > 0, "Invalid name");
-        require(bytes(symbol_).length > 0, "Invalid symbol");
-        require(lines_ >= 1 && lines_ <= 3, "Lines must be 1-3");
-        require(baseDuration_ > 0, "Invalid duration");
-        require(timeBuffer_ > 0, "Invalid time buffer");
-        require(bidIncrement_ > 0, "Invalid bid increment");
+        if (vault_ == address(0)) revert InvalidAddress();
+        if (protocolTreasury_ == address(0)) revert InvalidAddress();
+        if (owner_ == address(0)) revert InvalidAddress();
+        if (globalMessageRegistry_ == address(0)) revert InvalidAddress();
+        if (bytes(name_).length == 0) revert InvalidName();
+        if (bytes(symbol_).length == 0) revert InvalidSymbol();
+        if (lines_ < 1 || lines_ > 3) revert InvalidLines();
+        if (baseDuration_ == 0) revert InvalidDuration();
+        if (timeBuffer_ == 0) revert InvalidTimeBuffer();
+        if (bidIncrement_ == 0) revert InvalidBidIncrement();
 
         _initializeOwner(owner_);
         _vault = IAlignmentVault(payable(vault_));
@@ -117,7 +144,20 @@ contract ERC721AuctionInstance is ERC721, Ownable, ReentrancyGuard, IFactoryInst
         timeBuffer = timeBuffer_;
         bidIncrement = bidIncrement_;
         globalMessageRegistry = IGlobalMessageRegistry(globalMessageRegistry_);
+        factory = msg.sender;
         nextTokenId = 1;
+    }
+
+    /// @notice Called by factory to enable delegation for agent-created instances
+    function setAgentDelegationFromFactory() external {
+        if (msg.sender != factory) revert Unauthorized();
+        agentDelegationEnabled = true;
+    }
+
+    /// @notice Toggle agent delegation for this instance
+    function setAgentDelegation(bool enabled) external onlyOwner {
+        agentDelegationEnabled = enabled;
+        emit AgentDelegationChanged(enabled);
     }
 
     // ┌─────────────────────────┐
@@ -155,7 +195,7 @@ contract ERC721AuctionInstance is ERC721, Ownable, ReentrancyGuard, IFactoryInst
     }
 
     function tokenURI(uint256 tokenId) public view override returns (string memory) {
-        require(_exists(tokenId), "Token does not exist");
+        if (!_exists(tokenId)) revert TokenDoesNotExist();
         return _tokenURIs[uint24(tokenId)];
     }
 
@@ -169,9 +209,16 @@ contract ERC721AuctionInstance is ERC721, Ownable, ReentrancyGuard, IFactoryInst
      *      Piece is assigned to a line via round-robin and starts immediately if line is idle.
      * @param _tokenURI Metadata URI for the piece (required)
      */
-    function queuePiece(string calldata _tokenURI) external payable onlyOwner nonReentrant {
-        require(msg.value > 0, "Deposit required");
-        require(bytes(_tokenURI).length > 0, "URI required");
+    function queuePiece(string calldata _tokenURI) external payable nonReentrant {
+        if (msg.sender == owner()) {
+            // Owner always allowed
+        } else if (msg.sender == factory && agentDelegationEnabled) {
+            // Factory forwarding agent call
+        } else {
+            revert Unauthorized();
+        }
+        if (msg.value == 0) revert DepositRequired();
+        if (bytes(_tokenURI).length == 0) revert URIRequired();
 
         uint24 tokenId = nextTokenId++;
         if (tokenId == 1) emit StateChanged(STATE_ACTIVE);
@@ -212,17 +259,17 @@ contract ERC721AuctionInstance is ERC721, Ownable, ReentrancyGuard, IFactoryInst
      */
     function createBid(uint24 tokenId, bytes calldata messageData) external payable nonReentrant {
         Auction storage auction = auctions[tokenId];
-        require(auction.tokenId != 0, "Auction does not exist");
-        require(auction.startTime != 0, "Auction not started");
-        require(!auction.settled, "Auction already settled");
-        require(block.timestamp < auction.endTime, "Auction expired");
+        if (auction.tokenId == 0) revert AuctionDoesNotExist();
+        if (auction.startTime == 0) revert AuctionNotStarted();
+        if (auction.settled) revert AuctionAlreadySettled();
+        if (block.timestamp >= auction.endTime) revert AuctionExpired();
 
         if (auction.highBidder == address(0)) {
             // First bid must meet minimum
-            require(msg.value >= auction.minBid, "Bid below minimum");
+            if (msg.value < auction.minBid) revert BidBelowMinimum();
         } else {
             // Subsequent bids must exceed current by increment
-            require(msg.value >= auction.highBid + bidIncrement, "Bid too low");
+            if (msg.value < auction.highBid + bidIncrement) revert BidTooLow();
         }
 
         // Refund previous bidder
@@ -260,11 +307,11 @@ contract ERC721AuctionInstance is ERC721, Ownable, ReentrancyGuard, IFactoryInst
      */
     function settleAuction(uint24 tokenId) external nonReentrant {
         Auction storage auction = auctions[tokenId];
-        require(auction.tokenId != 0, "Auction does not exist");
-        require(auction.startTime != 0, "Auction not started");
-        require(!auction.settled, "Already settled");
-        require(block.timestamp >= auction.endTime, "Auction not ended");
-        require(auction.highBidder != address(0), "No bids");
+        if (auction.tokenId == 0) revert AuctionDoesNotExist();
+        if (auction.startTime == 0) revert AuctionNotStarted();
+        if (auction.settled) revert AuctionAlreadySettled();
+        if (block.timestamp < auction.endTime) revert AuctionNotEnded();
+        if (auction.highBidder == address(0)) revert NoBids();
 
         auction.settled = true;
 
@@ -275,20 +322,18 @@ contract ERC721AuctionInstance is ERC721, Ownable, ReentrancyGuard, IFactoryInst
         SafeTransferLib.safeTransferETH(owner(), auction.minBid);
 
         // Split winning bid: 1/19/80
-        uint256 protocolCut = auction.highBid / 100;                         // 1%
-        uint256 vaultCut    = (auction.highBid * 19) / 100;                  // 19%
-        uint256 creatorCut  = auction.highBid - protocolCut - vaultCut;      // ~80%
+        RevenueSplitLib.Split memory s = RevenueSplitLib.split(auction.highBid);
 
-        if (protocolCut > 0 && _protocolTreasury != address(0)) {
-            SafeTransferLib.safeTransferETH(_protocolTreasury, protocolCut);
+        if (s.protocolCut > 0 && _protocolTreasury != address(0)) {
+            SafeTransferLib.safeTransferETH(_protocolTreasury, s.protocolCut);
         }
 
-        _vault.receiveContribution{value: vaultCut}(
+        _vault.receiveContribution{value: s.vaultCut}(
             Currency.wrap(address(0)),
-            vaultCut,
+            s.vaultCut,
             address(this)
         );
-        SafeTransferLib.safeTransferETH(owner(), creatorCut);
+        SafeTransferLib.safeTransferETH(owner(), s.remainder);
 
         emit AuctionSettled(tokenId, auction.highBidder, auction.highBid);
 
@@ -308,11 +353,11 @@ contract ERC721AuctionInstance is ERC721, Ownable, ReentrancyGuard, IFactoryInst
      */
     function reclaimUnsold(uint24 tokenId) external onlyOwner nonReentrant {
         Auction storage auction = auctions[tokenId];
-        require(auction.tokenId != 0, "Auction does not exist");
-        require(auction.startTime != 0, "Auction not started");
-        require(!auction.settled, "Already settled");
-        require(block.timestamp >= auction.endTime, "Auction not ended");
-        require(auction.highBidder == address(0), "Has bids - use settleAuction");
+        if (auction.tokenId == 0) revert AuctionDoesNotExist();
+        if (auction.startTime == 0) revert AuctionNotStarted();
+        if (auction.settled) revert AuctionAlreadySettled();
+        if (block.timestamp < auction.endTime) revert AuctionNotEnded();
+        if (auction.highBidder != address(0)) revert HasBids();
 
         auction.settled = true;
 
@@ -336,7 +381,7 @@ contract ERC721AuctionInstance is ERC721, Ownable, ReentrancyGuard, IFactoryInst
      */
     function claimVaultFees() external onlyOwner nonReentrant returns (uint256 totalClaimed) {
         totalClaimed = _vault.claimFees();
-        require(totalClaimed > 0, "No fees to claim");
+        if (totalClaimed == 0) revert NoFeesToClaim();
         SafeTransferLib.safeTransferETH(owner(), totalClaimed);
     }
 
@@ -388,7 +433,7 @@ contract ERC721AuctionInstance is ERC721, Ownable, ReentrancyGuard, IFactoryInst
      * @return tokenId Active token ID (0 if no active auction)
      */
     function getActiveAuction(uint8 line) external view returns (uint24 tokenId) {
-        require(line < lines, "Invalid line");
+        if (line >= lines) revert InvalidLine();
         uint256 head = lineQueueHead[line];
         if (head >= lineQueues[line].length) return 0;
         uint24 id = lineQueues[line][head];
@@ -402,7 +447,7 @@ contract ERC721AuctionInstance is ERC721, Ownable, ReentrancyGuard, IFactoryInst
      * @return remaining Number of unprocessed pieces in queue
      */
     function getQueueLength(uint8 line) external view returns (uint256 remaining) {
-        require(line < lines, "Invalid line");
+        if (line >= lines) revert InvalidLine();
         return lineQueues[line].length - lineQueueHead[line];
     }
 
@@ -411,7 +456,7 @@ contract ERC721AuctionInstance is ERC721, Ownable, ReentrancyGuard, IFactoryInst
      * @param tokenId Token ID
      */
     function getAuction(uint24 tokenId) external view returns (Auction memory) {
-        require(auctions[tokenId].tokenId != 0, "Auction does not exist");
+        if (auctions[tokenId].tokenId == 0) revert AuctionDoesNotExist();
         return auctions[tokenId];
     }
 

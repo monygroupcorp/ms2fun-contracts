@@ -52,6 +52,12 @@ interface IUniswapV3Pool {
 contract UniswapVaultPriceValidator is IVaultPriceValidator {
     using StateLibrary for IPoolManager;
 
+    error PriceDeviationTooHigh();
+    error InsufficientWETHLiquidity();
+    error SwapAmountTooLarge();
+    error InvalidDenominator();
+    error InsufficientPurchasePower();
+
     address public immutable weth;
     address public immutable v2Factory;
     address public immutable v3Factory;
@@ -92,7 +98,7 @@ contract UniswapVaultPriceValidator is IVaultPriceValidator {
         // Cross-check prices across all available pools for arbitrage/manipulation detection
         if (hasV2Pool && hasV3Pool) {
             (bool isAcceptable, ) = _checkPriceDeviation(priceV2, priceV3);
-            require(isAcceptable, "Price deviation too high between V2/V3");
+            if (!isAcceptable) revert PriceDeviationTooHigh();
         }
 
         // V4 pools are not cross-checked against V2/V3 because V4 liquidity is
@@ -101,17 +107,17 @@ contract UniswapVaultPriceValidator is IVaultPriceValidator {
         // Verify sufficient liquidity for the pending swap
         // Only enforce V2 capacity when V2 is the sole swap route (V3/V4 unavailable)
         if (hasV2Pool && !hasV3Pool && !hasV4Pool) {
-            require(reserveWETH >= 10 ether, "Insufficient WETH liquidity in V2");
+            if (reserveWETH < 10 ether) revert InsufficientWETHLiquidity();
 
             if (pendingETH > 0) {
                 uint256 maxSwapAmount = uint256(reserveWETH) / 10; // 10% of WETH reserve
-                require(pendingETH <= maxSwapAmount, "Swap amount too large for V2 pool");
+                if (pendingETH > maxSwapAmount) revert SwapAmountTooLarge();
 
                 uint256 amountInWithFee = pendingETH * 997;
                 uint256 denominator = (uint256(reserveWETH) * 1000) + amountInWithFee;
-                require(denominator > 0, "Invalid denominator in slippage calculation");
+                if (denominator == 0) revert InvalidDenominator();
                 uint256 expectedOut = (amountInWithFee * uint256(reserveToken)) / denominator;
-                require(expectedOut > 0, "Insufficient purchase power");
+                if (expectedOut == 0) revert InsufficientPurchasePower();
             }
         }
     }

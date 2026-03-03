@@ -118,8 +118,8 @@ contract ERC404BondingInstanceTest is Test {
     }
 
     function test_Deployment() public {
-        assertEq(instance.MAX_SUPPLY(), MAX_SUPPLY);
-        assertEq(instance.LIQUIDITY_RESERVE(), MAX_SUPPLY * LIQUIDITY_RESERVE_PERCENT / 100);
+        assertEq(instance.maxSupply(), MAX_SUPPLY);
+        assertEq(instance.liquidityReserve(), MAX_SUPPLY * LIQUIDITY_RESERVE_PERCENT / 100);
         assertFalse(instance.graduated());
         assertFalse(instance.gatingActive()); // no gating module set in setUp
     }

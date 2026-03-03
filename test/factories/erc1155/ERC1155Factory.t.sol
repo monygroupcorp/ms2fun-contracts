@@ -3,7 +3,7 @@ pragma solidity ^0.8.24;
 
 import {Test, console, console2} from "forge-std/Test.sol";
 import {ERC1155Factory} from "../../../src/factories/erc1155/ERC1155Factory.sol";
-import {ERC1155Instance} from "../../../src/factories/erc1155/ERC1155Instance.sol";
+import {ERC1155Instance, ExceedsSupply, EditionNotOpen, GatingCheckFailed} from "../../../src/factories/erc1155/ERC1155Instance.sol";
 import {UniAlignmentVault} from "../../../src/vaults/uni/UniAlignmentVault.sol";
 import {MockEXECToken} from "../../mocks/MockEXECToken.sol";
 import {MockMasterRegistry} from "../../mocks/MockMasterRegistry.sol";
@@ -18,6 +18,8 @@ import {IHooks} from "v4-core/interfaces/IHooks.sol";
 import {GlobalMessagingTestBase} from "../../base/GlobalMessagingTestBase.sol";
 import {GlobalMessageRegistry} from "../../../src/registry/GlobalMessageRegistry.sol";
 import {PromotionBadges} from "../../../src/promotion/PromotionBadges.sol";
+import {MockAlignmentRegistry} from "../../mocks/MockAlignmentRegistry.sol";
+import {IAlignmentRegistry} from "../../../src/master/interfaces/IAlignmentRegistry.sol";
 
 contract MockRejectGatingModule {
     function canMint(address, uint256, bytes calldata) external pure returns (bool allowed, bool permanent) {
@@ -44,6 +46,10 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
     UniAlignmentVault public vault;
     MockEXECToken public token;
     ComponentRegistry public componentRegistry;
+    MockAlignmentRegistry public mockAlignmentRegistry;
+    MockMasterRegistry public mockRegistry;
+
+    uint256 constant TARGET_ID = 1;
 
     address public owner = address(0x1);
     address public creator = address(0x2);
@@ -60,6 +66,11 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
         // Deploy mock token for vault
         token = new MockEXECToken(1000000e18);
 
+        // Deploy mock alignment registry
+        mockAlignmentRegistry = new MockAlignmentRegistry();
+        mockAlignmentRegistry.setTargetActive(TARGET_ID, true);
+        mockAlignmentRegistry.setTokenInTarget(TARGET_ID, address(token), true);
+
         // Deploy vault (WETH, PoolManager, V3Router, V2Router, V2Factory, V3Factory, AlignmentToken)
         {
             UniAlignmentVault _impl = new UniAlignmentVault();
@@ -71,7 +82,9 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
                 address(new MockZRouter()),
                 3000,
                 60,
-                IVaultPriceValidator(address(new MockVaultPriceValidator()))
+                IVaultPriceValidator(address(new MockVaultPriceValidator())),
+                IAlignmentRegistry(address(mockAlignmentRegistry)),
+                TARGET_ID
             );
         }
 
@@ -88,10 +101,10 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
 
         // Create a mock registry that doesn't revert on registerInstance/registerFactory
         // This simulates a real registry being there
-        address mockRegistry = address(new MockMasterRegistry());
+        mockRegistry = new MockMasterRegistry();
 
         // Set up global messaging
-        _setUpGlobalMessaging(mockRegistry);
+        _setUpGlobalMessaging(address(mockRegistry));
 
         // Deploy ComponentRegistry
         ComponentRegistry compRegImpl = new ComponentRegistry();
@@ -100,16 +113,28 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
         componentRegistry.initialize(registryOwner);
 
         // Deploy factory
-        factory = new ERC1155Factory(mockRegistry, mockInstanceTemplate, address(globalRegistry), address(componentRegistry));
+        factory = new ERC1155Factory(address(mockRegistry), mockInstanceTemplate, address(globalRegistry), address(componentRegistry));
 
         // Authorize creator and artist as agents for addEdition calls
-        factory.setAgent(creator, true);
-        factory.setAgent(artist, true);
+        mockRegistry.setAgent(creator, true);
+        mockRegistry.setAgent(artist, true);
 
         // NOTE: authorizeInstanceFactory removed - vault now accepts all ETH contributions
         // vault.authorizeInstanceFactory(address(factory));
 
         vm.stopPrank();
+    }
+
+    /// @dev Helper: creates instance and enables agent delegation for factory.addEdition tests
+    function _createInstanceWithDelegation(
+        string memory _name,
+        address _creator,
+        address _vault
+    ) internal returns (address instance) {
+        instance = factory.createInstance{value: 0.01 ether}(
+            _name, "ipfs://test", _creator, _vault, ""
+        );
+        ERC1155Instance(instance).setAgentDelegation(true);
     }
 
     function test_FactoryCreation() public {
@@ -167,7 +192,8 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
             address(vault),
             "" // styleUri
         );
-        
+        ERC1155Instance(instance).setAgentDelegation(true);
+
         uint256 editionId = factory.addEdition(
             instance,
             "Piece 1",
@@ -178,9 +204,9 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
             0,
             0           // openTime
         );
-        
+
         assertEq(editionId, 1);
-        
+
         ERC1155Instance instanceContract = ERC1155Instance(instance);
         ERC1155Instance.Edition memory edition = instanceContract.getEdition(editionId);
         assertEq(edition.id, editionId);
@@ -188,14 +214,14 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
         assertEq(edition.basePrice, 0.1 ether);
         assertEq(edition.supply, 0);
         assertEq(uint256(edition.pricingModel), uint256(ERC1155Instance.PricingModel.UNLIMITED));
-        
+
         vm.stopPrank();
     }
 
     function test_AddEdition_LimitedFixed() public {
         vm.deal(creator, 1 ether);
         vm.startPrank(creator);
-        
+
         address instance = factory.createInstance{value: 0.01 ether}(
             "Test Collection",
             "ipfs://test",
@@ -203,7 +229,8 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
             address(vault),
             "" // styleUri
         );
-        
+        ERC1155Instance(instance).setAgentDelegation(true);
+
         uint256 editionId = factory.addEdition(
             instance,
             "Piece 2",
@@ -214,21 +241,21 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
             0,
             0           // openTime
         );
-        
+
         assertEq(editionId, 1);
-        
+
         ERC1155Instance instanceContract = ERC1155Instance(instance);
         ERC1155Instance.Edition memory edition = instanceContract.getEdition(editionId);
         assertEq(uint256(edition.pricingModel), uint256(ERC1155Instance.PricingModel.LIMITED_FIXED));
         assertEq(edition.supply, 100);
-        
+
         vm.stopPrank();
     }
 
     function test_AddEdition_LimitedDynamic() public {
         vm.deal(creator, 1 ether);
         vm.startPrank(creator);
-        
+
         address instance = factory.createInstance{value: 0.01 ether}(
             "Test Collection",
             "ipfs://test",
@@ -236,7 +263,8 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
             address(vault),
             "" // styleUri
         );
-        
+        ERC1155Instance(instance).setAgentDelegation(true);
+
         uint256 editionId = factory.addEdition(
             instance,
             "Piece 3",
@@ -261,7 +289,7 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
     function test_Mint_Unlimited() public {
         vm.deal(creator, 1 ether);
         vm.deal(minter1, 10 ether);
-        
+
         vm.startPrank(creator);
         address instance = factory.createInstance{value: 0.01 ether}(
             "Test Collection",
@@ -270,7 +298,8 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
             address(vault),
             "" // styleUri
         );
-        
+        ERC1155Instance(instance).setAgentDelegation(true);
+
         factory.addEdition(
             instance,
             "Piece 1",
@@ -299,7 +328,7 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
     function test_Mint_LimitedFixed() public {
         vm.deal(creator, 1 ether);
         vm.deal(minter1, 10 ether);
-        
+
         vm.startPrank(creator);
         address instance = factory.createInstance{value: 0.01 ether}(
             "Test Collection",
@@ -308,7 +337,8 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
             address(vault),
             "" // styleUri
         );
-        
+        ERC1155Instance(instance).setAgentDelegation(true);
+
         factory.addEdition(
             instance,
             "Piece 2",
@@ -331,7 +361,7 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
         assertEq(edition1.minted, 5);
 
         // Try to mint 6 more (would exceed supply)
-        vm.expectRevert("Exceeds supply");
+        vm.expectRevert(ExceedsSupply.selector);
         instanceContract.mint{value: 1.2 ether}(1, 6, bytes32(0), bytes(""), 0);
 
         // Mint remaining 5
@@ -345,7 +375,7 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
     function test_Mint_LimitedDynamic() public {
         vm.deal(creator, 1 ether);
         vm.deal(minter1, 10 ether);
-        
+
         vm.startPrank(creator);
         address instance = factory.createInstance{value: 0.01 ether}(
             "Test Collection",
@@ -354,7 +384,8 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
             address(vault),
             "" // styleUri
         );
-        
+        ERC1155Instance(instance).setAgentDelegation(true);
+
         factory.addEdition(
             instance,
             "Piece 3",
@@ -387,7 +418,7 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
     function test_MintWithMessage() public {
         vm.deal(creator, 1 ether);
         vm.deal(minter1, 10 ether);
-        
+
         vm.startPrank(creator);
         address instance = factory.createInstance{value: 0.01 ether}(
             "Test Collection",
@@ -396,7 +427,8 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
             address(vault),
             "" // styleUri
         );
-        
+        ERC1155Instance(instance).setAgentDelegation(true);
+
         factory.addEdition(
             instance,
             "Piece 1",
@@ -428,7 +460,7 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
     function test_Withdraw_Tax() public {
         vm.deal(creator, 1 ether);
         vm.deal(minter1, 10 ether);
-        
+
         vm.startPrank(creator);
         address instance = factory.createInstance{value: 0.01 ether}(
             "Test Collection",
@@ -437,7 +469,8 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
             address(vault),
             "" // styleUri
         );
-        
+        ERC1155Instance(instance).setAgentDelegation(true);
+
         factory.addEdition(
             instance,
             "Piece 1",
@@ -477,7 +510,7 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
         vm.deal(creator, 1 ether);
         vm.deal(minter1, 10 ether);
         vm.deal(minter2, 10 ether);
-        
+
         vm.startPrank(creator);
         address instance = factory.createInstance{value: 0.01 ether}(
             "Test Collection",
@@ -486,7 +519,8 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
             address(vault),
             "" // styleUri
         );
-        
+        ERC1155Instance(instance).setAgentDelegation(true);
+
         factory.addEdition(
             instance,
             "Piece 1",
@@ -514,7 +548,7 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
 
     function test_UpdateEditionMetadata() public {
         vm.deal(creator, 1 ether);
-        
+
         vm.startPrank(creator);
         address instance = factory.createInstance{value: 0.01 ether}(
             "Test Collection",
@@ -523,7 +557,8 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
             address(vault),
             "" // styleUri
         );
-        
+        ERC1155Instance(instance).setAgentDelegation(true);
+
         factory.addEdition(
             instance,
             "Piece 1",
@@ -546,7 +581,7 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
 
     function test_CalculateMintCost_Dynamic() public {
         vm.deal(creator, 1 ether);
-        
+
         vm.startPrank(creator);
         address instance = factory.createInstance{value: 0.01 ether}(
             "Test Collection",
@@ -555,7 +590,8 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
             address(vault),
             "" // styleUri
         );
-        
+        ERC1155Instance(instance).setAgentDelegation(true);
+
         factory.addEdition(
             instance,
             "Piece 3",
@@ -578,7 +614,7 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
 
     function test_GetEditionMetadata() public {
         vm.deal(creator, 1 ether);
-        
+
         vm.startPrank(creator);
         address instance = factory.createInstance{value: 0.01 ether}(
             "Test Collection",
@@ -587,7 +623,8 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
             address(vault),
             "" // styleUri
         );
-        
+        ERC1155Instance(instance).setAgentDelegation(true);
+
         factory.addEdition(
             instance,
             "Test Piece",
@@ -628,7 +665,7 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
 
     function test_GetAllEditionIds() public {
         vm.deal(creator, 1 ether);
-        
+
         vm.startPrank(creator);
         address instance = factory.createInstance{value: 0.01 ether}(
             "Test Collection",
@@ -637,7 +674,8 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
             address(vault),
             "" // styleUri
         );
-        
+        ERC1155Instance(instance).setAgentDelegation(true);
+
         factory.addEdition(instance, "Piece 1", 0.1 ether, 0, "ipfs://1", ERC1155Instance.PricingModel.UNLIMITED, 0, 0
         );
         factory.addEdition(instance, "Piece 2", 0.2 ether, 100, "ipfs://2", ERC1155Instance.PricingModel.LIMITED_FIXED, 0, 0
@@ -660,7 +698,7 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
 
     function test_GetEditionsBatch() public {
         vm.deal(creator, 1 ether);
-        
+
         vm.startPrank(creator);
         address instance = factory.createInstance{value: 0.01 ether}(
             "Test Collection",
@@ -669,7 +707,8 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
             address(vault),
             "" // styleUri
         );
-        
+        ERC1155Instance(instance).setAgentDelegation(true);
+
         factory.addEdition(instance, "Piece 1", 0.1 ether, 0, "ipfs://1", ERC1155Instance.PricingModel.UNLIMITED, 0, 0
         );
         factory.addEdition(instance, "Piece 2", 0.2 ether, 100, "ipfs://2", ERC1155Instance.PricingModel.LIMITED_FIXED, 0, 0
@@ -735,7 +774,7 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
 
     function test_GetPricingInfo() public {
         vm.deal(creator, 1 ether);
-        
+
         vm.startPrank(creator);
         address instance = factory.createInstance{value: 0.01 ether}(
             "Test Collection",
@@ -744,7 +783,8 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
             address(vault),
             "" // styleUri
         );
-        
+        ERC1155Instance(instance).setAgentDelegation(true);
+
         factory.addEdition(
             instance,
             "Piece 1",
@@ -781,7 +821,7 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
     function test_GetMintStats() public {
         vm.deal(creator, 1 ether);
         vm.deal(minter1, 10 ether);
-        
+
         vm.startPrank(creator);
         address instance = factory.createInstance{value: 0.01 ether}(
             "Test Collection",
@@ -790,7 +830,8 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
             address(vault),
             "" // styleUri
         );
-        
+        ERC1155Instance(instance).setAgentDelegation(true);
+
         factory.addEdition(
             instance,
             "Piece 1",
@@ -841,7 +882,7 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
 
     function test_SetProtocolTreasury_RevertZeroAddress() public {
         vm.startPrank(owner);
-        vm.expectRevert("Invalid treasury");
+        vm.expectRevert(ERC1155Factory.InvalidAddress.selector);
         factory.setProtocolTreasury(address(0));
         vm.stopPrank();
     }
@@ -876,7 +917,7 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
 
     function test_WithdrawProtocolFees_RevertNoTreasury() public {
         vm.startPrank(owner);
-        vm.expectRevert("Treasury not set");
+        vm.expectRevert(ERC1155Factory.TreasuryNotSet.selector);
         factory.withdrawProtocolFees();
         vm.stopPrank();
     }
@@ -884,7 +925,7 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
     function test_WithdrawProtocolFees_RevertNoBalance() public {
         vm.startPrank(owner);
         factory.setProtocolTreasury(address(0xBEEF));
-        vm.expectRevert("No protocol fees");
+        vm.expectRevert(ERC1155Factory.NoProtocolFees.selector);
         factory.withdrawProtocolFees();
         vm.stopPrank();
     }
@@ -922,6 +963,7 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
             address(vault),
             "" // styleUri
         );
+        ERC1155Instance(instance).setAgentDelegation(true);
 
         factory.addEdition(
             instance,
@@ -1183,7 +1225,7 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
         uint256 editionId = inst.nextEditionId() - 1;
 
         // Attempt to mint before openTime
-        vm.expectRevert("Edition not open yet");
+        vm.expectRevert(EditionNotOpen.selector);
         inst.mint{value: 0.01 ether}(editionId, 1, bytes32(0), "", 0);
     }
 
@@ -1227,7 +1269,7 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
         inst.addEdition("Art 1", 0.01 ether, 0, "ipfs://art1", ERC1155Instance.PricingModel.UNLIMITED, 0, 0);
         uint256 editionId = inst.nextEditionId() - 1;
 
-        vm.expectRevert("Gating check failed");
+        vm.expectRevert(GatingCheckFailed.selector);
         inst.mint{value: 0.01 ether}(editionId, 1, bytes32(0), "", 0);
     }
 
@@ -1252,7 +1294,7 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
 
         vm.deal(artist, 1 ether);
         vm.prank(artist);
-        vm.expectRevert("Unapproved component");
+        vm.expectRevert(ERC1155Factory.UnapprovedComponent.selector);
         factory.createInstance{value: 0}(
             "TestProject",
             "ipfs://Qm",
@@ -1308,6 +1350,9 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
             address(vault),
             ""
         );
+
+        vm.prank(artist);
+        ERC1155Instance(instance).setAgentDelegation(true);
 
         uint256 futureOpen = block.timestamp + 1 days;
         vm.prank(artist);

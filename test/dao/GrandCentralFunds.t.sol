@@ -42,14 +42,14 @@ contract GrandCentralFundsTest is Test {
 
     function test_Ragequit_RevertIfInsufficientShares() public {
         vm.prank(alice);
-        vm.expectRevert("insufficient shares");
+        vm.expectRevert(GrandCentral.InsufficientShares.selector);
         dao.ragequit(1, 0);
     }
 
 
     function test_Ragequit_RevertIfInsufficientLoot() public {
         vm.prank(alice);
-        vm.expectRevert("insufficient loot");
+        vm.expectRevert(GrandCentral.InsufficientLoot.selector);
         dao.ragequit(0, 1);
     }
 
@@ -168,7 +168,7 @@ contract GrandCentralFundsTest is Test {
 
     function test_Claim_NoPendingReverts() public {
         vm.prank(alice);
-        vm.expectRevert("nothing to claim");
+        vm.expectRevert(GrandCentral.NothingToClaim.selector);
         dao.claim();
     }
 
@@ -246,7 +246,7 @@ contract GrandCentralFundsTest is Test {
         perms[0] = 7;
 
         vm.prank(founder);
-        vm.expectRevert(bytes("!dao"));
+        vm.expectRevert(GrandCentral.Unauthorized.selector);
         dao.setConductors(addrs, perms);
     }
 

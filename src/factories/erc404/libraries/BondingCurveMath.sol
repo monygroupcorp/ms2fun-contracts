@@ -11,6 +11,10 @@ import { FixedPointMathLib } from "solady/utils/FixedPointMathLib.sol";
 library BondingCurveMath {
     using FixedPointMathLib for uint256;
 
+    error InvalidBounds();
+    error NormalizationFactorZero();
+    error AmountExceedsSupply();
+
     /**
      * @notice Bonding curve parameters
      * @param initialPrice Base price (e.g., 0.025 ether)
@@ -40,7 +44,7 @@ library BondingCurveMath {
         uint256 lowerBound,
         uint256 upperBound
     ) internal pure returns (uint256) {
-        require(upperBound >= lowerBound, "Invalid bounds");
+        if (upperBound < lowerBound) revert InvalidBounds();
         return _calculateIntegralFromZero(params, upperBound) - _calculateIntegralFromZero(params, lowerBound);
     }
 
@@ -55,7 +59,7 @@ library BondingCurveMath {
         Params memory params,
         uint256 supply
     ) private pure returns (uint256) {
-        require(params.normalizationFactor != 0, "normalizationFactor cannot be zero");
+        if (params.normalizationFactor == 0) revert NormalizationFactorZero();
         // Scale down by normalization factor (same as CULTEXEC404)
         uint256 scaledSupplyWad = supply / params.normalizationFactor;
         
@@ -117,7 +121,7 @@ library BondingCurveMath {
         uint256 currentSupply,
         uint256 amount
     ) internal pure returns (uint256) {
-        require(amount <= currentSupply, "Amount exceeds supply");
+        if (amount > currentSupply) revert AmountExceedsSupply();
         return calculateIntegral(params, currentSupply - amount, currentSupply);
     }
 }

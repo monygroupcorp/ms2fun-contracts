@@ -14,6 +14,8 @@ contract MigrateOwnership is Script {
         address protocolTreasury = vm.envAddress("PROTOCOL_TREASURY");
         address featuredQueueManager = vm.envAddress("FEATURED_QUEUE_MANAGER");
         address queryAggregator = vm.envAddress("QUERY_AGGREGATOR");
+        address globalMessageRegistry = vm.envAddress("GLOBAL_MESSAGE_REGISTRY");
+        address componentRegistry = vm.envAddress("COMPONENT_REGISTRY");
 
         vm.startBroadcast(deployerPrivateKey);
 
@@ -28,6 +30,12 @@ contract MigrateOwnership is Script {
 
         Ownable(queryAggregator).transferOwnership(timelock);
         console.log("QueryAggregator ownership transferred to timelock");
+
+        Ownable(globalMessageRegistry).transferOwnership(timelock);
+        console.log("GlobalMessageRegistry ownership transferred to timelock");
+
+        Ownable(componentRegistry).transferOwnership(timelock);
+        console.log("ComponentRegistry ownership transferred to timelock");
 
         vm.stopBroadcast();
 
