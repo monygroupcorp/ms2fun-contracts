@@ -118,4 +118,65 @@ contract FactoryFeaturesTest is Test {
         bytes32[] memory feats = IFactory(address(factory)).features();
         assertEq(feats.length, 0, "ERC721AuctionFactory: features() must return empty array");
     }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // requiredFeatures()
+    // ─────────────────────────────────────────────────────────────────────────
+
+    function test_ERC404Factory_requiredFeatures_returnsLiquidityDeployer() public {
+        vm.startPrank(protocol);
+
+        LaunchManager launchMgr = new LaunchManager(protocol);
+        CurveParamsComputer curveComp = new CurveParamsComputer(protocol);
+        ComponentRegistry compReg = _deployComponentRegistry();
+        ERC404BondingInstance impl = new ERC404BondingInstance();
+
+        ERC404Factory factory = new ERC404Factory(
+            ERC404Factory.CoreConfig({
+                implementation: address(impl),
+                masterRegistry: makeAddr("mr"),
+                protocol: protocol
+            }),
+            ERC404Factory.ModuleConfig({
+                globalMessageRegistry: makeAddr("gmr"),
+                launchManager: address(launchMgr),
+                tierGatingModule: address(0),
+                componentRegistry: address(compReg)
+            })
+        );
+
+        vm.stopPrank();
+
+        bytes32[] memory req = IFactory(address(factory)).requiredFeatures();
+        assertEq(req.length, 1, "ERC404Factory: requiredFeatures() must have 1 element");
+        assertEq(req[0], FeatureUtils.LIQUIDITY_DEPLOYER, "ERC404Factory: requiredFeatures()[0] must be LIQUIDITY_DEPLOYER");
+
+        // requiredFeatures must be a subset of features
+        bytes32[] memory feats = IFactory(address(factory)).features();
+        assertTrue(FeatureUtils.hasFeature(feats, req[0]), "requiredFeatures must be subset of features");
+    }
+
+    function test_ERC1155Factory_requiredFeatures_returnsEmpty() public {
+        ComponentRegistry compReg = _deployComponentRegistry();
+
+        ERC1155Factory factory = new ERC1155Factory(
+            makeAddr("mr"),
+            makeAddr("tmpl"),
+            makeAddr("gmr"),
+            address(compReg)
+        );
+
+        bytes32[] memory req = IFactory(address(factory)).requiredFeatures();
+        assertEq(req.length, 0, "ERC1155Factory: requiredFeatures() must be empty");
+    }
+
+    function test_ERC721AuctionFactory_requiredFeatures_returnsEmpty() public {
+        ERC721AuctionFactory factory = new ERC721AuctionFactory(
+            makeAddr("mr"),
+            makeAddr("gmr")
+        );
+
+        bytes32[] memory req = IFactory(address(factory)).requiredFeatures();
+        assertEq(req.length, 0, "ERC721AuctionFactory: requiredFeatures() must be empty");
+    }
 }

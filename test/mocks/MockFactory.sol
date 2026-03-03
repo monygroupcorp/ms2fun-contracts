@@ -28,6 +28,10 @@ contract MockFactory is IFactory {
         return new bytes32[](0);
     }
 
+    function requiredFeatures() external pure returns (bytes32[] memory) {
+        return new bytes32[](0);
+    }
+
     function registerInstance(
         address instance,
         address _creator,

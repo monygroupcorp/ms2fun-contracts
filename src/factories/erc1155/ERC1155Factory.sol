@@ -327,4 +327,8 @@ contract ERC1155Factory is Ownable, ReentrancyGuard, IFactory {
     function features() external view returns (bytes32[] memory) {
         return _features;
     }
+
+    function requiredFeatures() external pure returns (bytes32[] memory) {
+        return new bytes32[](0);
+    }
 }

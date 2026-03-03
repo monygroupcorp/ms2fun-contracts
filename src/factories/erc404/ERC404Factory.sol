@@ -229,6 +229,12 @@ contract ERC404Factory is OwnableRoles, ReentrancyGuard, IFactory {
         return _features;
     }
 
+    function requiredFeatures() external pure returns (bytes32[] memory) {
+        bytes32[] memory req = new bytes32[](1);
+        req[0] = FeatureUtils.LIQUIDITY_DEPLOYER;
+        return req;
+    }
+
     function protocol() external view returns (address) {
         return owner();
     }

@@ -16,4 +16,9 @@ interface IFactory {
     ///         The frontend intersects this list with ComponentRegistry to build wizard steps.
     /// @return Array of supported component tag hashes (may be empty)
     function features() external view returns (bytes32[] memory);
+
+    /// @notice Returns which features are mandatory (no address(0) allowed).
+    ///         Subset of features(). Frontend hides "None" option for these tags.
+    /// @return Array of required component tag hashes (may be empty)
+    function requiredFeatures() external view returns (bytes32[] memory);
 }
