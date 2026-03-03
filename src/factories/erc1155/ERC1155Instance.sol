@@ -8,7 +8,12 @@ import { EditionPricing } from "./libraries/EditionPricing.sol";
 import { IAlignmentVault } from "../../interfaces/IAlignmentVault.sol";
 import {IMasterRegistry} from "../../master/interfaces/IMasterRegistry.sol";
 import { IGlobalMessageRegistry } from "../../registry/interfaces/IGlobalMessageRegistry.sol";
-import {IGatingModule} from "../../gating/IGatingModule.sol";
+import {IGatingModule, GatingScope} from "../../gating/IGatingModule.sol";
+
+// ── Free mint errors ─────────────────────────────────────────────────────────
+error FreeMintDisabled();
+error FreeMintAlreadyClaimed();
+error FreeMintExhausted();
 import { Currency } from "v4-core/types/Currency.sol";
 import { IInstanceLifecycle, TYPE_ERC1155, STATE_MINTING } from "../../interfaces/IInstanceLifecycle.sol";
 
@@ -64,6 +69,13 @@ contract ERC1155Instance is Ownable, ReentrancyGuard, IInstanceLifecycle {
 
     IGatingModule public gatingModule;
 
+    // Free mint
+    uint256 public freeMintAllocation;
+    uint256 public freeMintsClaimed;
+    mapping(address => bool) public freeMintClaimed;
+    GatingScope public gatingScope;
+    bool private _freeMintInitialized;
+
     uint256 public nextEditionId;
     uint256 public totalProceeds; // Total ETH collected from mints
 
@@ -113,6 +125,7 @@ contract ERC1155Instance is Ownable, ReentrancyGuard, IInstanceLifecycle {
     );
 
     event EditionMetadataUpdated(uint256 indexed editionId, string metadataURI);
+    event FreeMintClaimed(address indexed user, uint256 indexed editionId);
 
     // ┌─────────────────────────┐
     // │      Constructor        │
@@ -156,6 +169,46 @@ contract ERC1155Instance is Ownable, ReentrancyGuard, IInstanceLifecycle {
 
     function instanceType() external pure override returns (bytes32) {
         return TYPE_ERC1155;
+    }
+
+    // ── Free mint ─────────────────────────────────────────────────────────────
+
+    /// @notice Set free mint params. Called by factory once after construction.
+    function initializeFreeMint(uint256 allocation, GatingScope scope) external {
+        require(msg.sender == factory, "Only factory");
+        require(!_freeMintInitialized, "Already set");
+        _freeMintInitialized = true;
+        freeMintAllocation = allocation;
+        gatingScope = scope;
+    }
+
+    /// @notice Claim one free token of a specified edition at zero ETH cost.
+    /// @param editionId  The edition to claim from. Must exist.
+    /// @param gatingData Passed to gatingModule.canMint if scope requires it.
+    function claimFreeMint(uint256 editionId, bytes calldata gatingData) external nonReentrant {
+        if (freeMintAllocation == 0) revert FreeMintDisabled();
+        if (freeMintClaimed[msg.sender]) revert FreeMintAlreadyClaimed();
+        if (freeMintsClaimed >= freeMintAllocation) revert FreeMintExhausted();
+
+        Edition storage edition = editions[editionId];
+        require(bytes(edition.pieceTitle).length > 0, "Edition does not exist");
+        if (edition.supply > 0) {
+            require(edition.minted < edition.supply, "Edition supply exhausted");
+        }
+
+        if (address(gatingModule) != address(0) && gatingScope != GatingScope.PAID_ONLY) {
+            (bool allowed,) = gatingModule.canMint(msg.sender, 1, gatingData);
+            require(allowed, "Gating: not allowed");
+            gatingModule.onMint(msg.sender, 1);
+        }
+
+        freeMintClaimed[msg.sender] = true;
+        freeMintsClaimed++;
+        edition.minted++;
+        balanceOf[msg.sender][editionId]++;
+
+        emit FreeMintClaimed(msg.sender, editionId);
+        emit TransferSingle(msg.sender, address(0), msg.sender, editionId, 1);
     }
 
     // ┌─────────────────────────┐
