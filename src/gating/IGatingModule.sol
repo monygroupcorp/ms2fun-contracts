@@ -1,6 +1,14 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
+/// @notice Controls which entry points the gating module is consulted for.
+/// Set once at instance creation. Irreversible.
+enum GatingScope {
+    BOTH,            // gates free mint claims AND paid buys (default)
+    FREE_MINT_ONLY,  // gates free mint claims only; paid buys are open
+    PAID_ONLY        // gates paid buys only; free mint claims are open FCFS
+}
+
 /// @notice Pluggable gating interface for ms2.fun instances (ERC404 and ERC1155).
 /// address(0) means open gating — no module deployed.
 /// Implementations are registered in ComponentRegistry under tag keccak256("gating").
