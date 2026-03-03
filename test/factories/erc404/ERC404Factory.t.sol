@@ -9,7 +9,8 @@ import {CurveParamsComputer} from "../../../src/factories/erc404/CurveParamsComp
 import {MockMasterRegistry} from "../../mocks/MockMasterRegistry.sol";
 import {PromotionBadges} from "../../../src/promotion/PromotionBadges.sol";
 import {BondingCurveMath} from "../../../src/factories/erc404/libraries/BondingCurveMath.sol";
-import {IdentityParams} from "../../../src/interfaces/IFactoryTypes.sol";
+import {IdentityParams, FreeMintParams} from "../../../src/interfaces/IFactoryTypes.sol";
+import {GatingScope} from "../../../src/gating/IGatingModule.sol";
 import {ComponentRegistry} from "../../../src/registry/ComponentRegistry.sol";
 import {PasswordTierGatingModule} from "../../../src/gating/PasswordTierGatingModule.sol";
 import {ILiquidityDeployerModule} from "../../../src/interfaces/ILiquidityDeployerModule.sol";
@@ -141,7 +142,8 @@ contract ERC404FactoryTest is Test {
             _identity("TestToken", "TEST", creator1),
             "ipfs://metadata",
             address(mockDeployer),
-            address(0)
+            address(0),
+            FreeMintParams({allocation: 0, scope: GatingScope.BOTH})
         );
         assertTrue(instance != address(0), "Instance should be created");
         vm.stopPrank();
@@ -154,7 +156,8 @@ contract ERC404FactoryTest is Test {
             _identity("TestToken", "TEST", creator1),
             "ipfs://metadata",
             address(mockDeployer),
-            address(0)
+            address(0),
+            FreeMintParams({allocation: 0, scope: GatingScope.BOTH})
         );
         assertTrue(instance != address(0));
         vm.stopPrank();
@@ -177,7 +180,8 @@ contract ERC404FactoryTest is Test {
             }),
             "ipfs://metadata",
             address(mockDeployer),
-            address(0)
+            address(0),
+            FreeMintParams({allocation: 0, scope: GatingScope.BOTH})
         );
         vm.stopPrank();
     }
@@ -190,7 +194,8 @@ contract ERC404FactoryTest is Test {
             _identity("", "TEST", creator1),
             "ipfs://metadata",
             address(mockDeployer),
-            address(0)
+            address(0),
+            FreeMintParams({allocation: 0, scope: GatingScope.BOTH})
         );
         vm.stopPrank();
     }
@@ -203,7 +208,8 @@ contract ERC404FactoryTest is Test {
             _identity("TestToken", "", creator1),
             "ipfs://metadata",
             address(mockDeployer),
-            address(0)
+            address(0),
+            FreeMintParams({allocation: 0, scope: GatingScope.BOTH})
         );
         vm.stopPrank();
     }
@@ -225,7 +231,8 @@ contract ERC404FactoryTest is Test {
             }),
             "ipfs://metadata",
             address(mockDeployer),
-            address(0)
+            address(0),
+            FreeMintParams({allocation: 0, scope: GatingScope.BOTH})
         );
         vm.stopPrank();
     }
@@ -247,7 +254,8 @@ contract ERC404FactoryTest is Test {
             }),
             "ipfs://metadata",
             address(mockDeployer),
-            address(0)
+            address(0),
+            FreeMintParams({allocation: 0, scope: GatingScope.BOTH})
         );
         vm.stopPrank();
     }
@@ -278,7 +286,8 @@ contract ERC404FactoryTest is Test {
             _identity("Token1", "TK1", creator1),
             "ipfs://metadata1",
             address(mockDeployer),
-            address(0)
+            address(0),
+            FreeMintParams({allocation: 0, scope: GatingScope.BOTH})
         );
         vm.stopPrank();
 
@@ -287,7 +296,8 @@ contract ERC404FactoryTest is Test {
             _identity("Token2", "TK2", creator2),
             "ipfs://metadata2",
             address(mockDeployer),
-            address(0)
+            address(0),
+            FreeMintParams({allocation: 0, scope: GatingScope.BOTH})
         );
         vm.stopPrank();
 
@@ -305,7 +315,8 @@ contract ERC404FactoryTest is Test {
             _identity("EventToken", "EVT", creator1),
             "ipfs://metadata",
             address(mockDeployer),
-            address(0)
+            address(0),
+            FreeMintParams({allocation: 0, scope: GatingScope.BOTH})
         );
         vm.stopPrank();
     }
@@ -322,7 +333,8 @@ contract ERC404FactoryTest is Test {
             _identity("Token1", "TK1", creator1),
             "ipfs://metadata1",
             address(mockDeployer),
-            address(0)
+            address(0),
+            FreeMintParams({allocation: 0, scope: GatingScope.BOTH})
         );
         assertTrue(instance1 != address(0));
 
@@ -330,7 +342,8 @@ contract ERC404FactoryTest is Test {
             _identity("Token2", "TK2", creator1),
             "ipfs://metadata2",
             address(mockDeployer),
-            address(0)
+            address(0),
+            FreeMintParams({allocation: 0, scope: GatingScope.BOTH})
         );
         assertTrue(instance2 != address(0));
         vm.stopPrank();
@@ -343,7 +356,8 @@ contract ERC404FactoryTest is Test {
             _identity("TestToken", "TEST", creator2),
             "ipfs://metadata",
             address(mockDeployer),
-            address(0)
+            address(0),
+            FreeMintParams({allocation: 0, scope: GatingScope.BOTH})
         );
         assertTrue(instance != address(0));
         vm.stopPrank();
@@ -381,7 +395,8 @@ contract ERC404FactoryTest is Test {
             _identity("FeeToken", "FEE", creator1),
             "ipfs://metadata",
             address(mockDeployer),
-            address(0)
+            address(0),
+            FreeMintParams({allocation: 0, scope: GatingScope.BOTH})
         );
         vm.stopPrank();
 
@@ -491,7 +506,8 @@ contract ERC404FactoryTest is Test {
             _identity("StandardToken", "STD", creator1),
             "ipfs://metadata",
             address(mockDeployer),
-            address(0)
+            address(0),
+            FreeMintParams({allocation: 0, scope: GatingScope.BOTH})
         );
         assertTrue(instance != address(0));
         vm.stopPrank();
@@ -520,7 +536,8 @@ contract ERC404FactoryTest is Test {
             }),
             "ipfs://metadata",
             address(mockDeployer),
-            address(0)
+            address(0),
+            FreeMintParams({allocation: 0, scope: GatingScope.BOTH})
         );
         assertTrue(instance != address(0));
         assertEq(address(factory).balance, 0.05 ether);
@@ -550,7 +567,8 @@ contract ERC404FactoryTest is Test {
             }),
             "ipfs://metadata",
             address(mockDeployer),
-            address(0)
+            address(0),
+            FreeMintParams({allocation: 0, scope: GatingScope.BOTH})
         );
         assertTrue(instance != address(0));
         vm.stopPrank();
@@ -582,7 +600,8 @@ contract ERC404FactoryTest is Test {
             }),
             "ipfs://metadata",
             address(mockDeployer),
-            address(0)
+            address(0),
+            FreeMintParams({allocation: 0, scope: GatingScope.BOTH})
         );
         vm.stopPrank();
 
@@ -653,7 +672,8 @@ contract ERC404FactoryTest is Test {
             }),
             "ipfs://metadata",
             address(mockDeployer),
-            address(0)
+            address(0),
+            FreeMintParams({allocation: 0, scope: GatingScope.BOTH})
         );
         assertTrue(instance != address(0));
         ERC404BondingInstance inst = ERC404BondingInstance(payable(instance));
@@ -679,7 +699,8 @@ contract ERC404FactoryTest is Test {
             }),
             "ipfs://metadata",
             address(mockDeployer),
-            address(0)
+            address(0),
+            FreeMintParams({allocation: 0, scope: GatingScope.BOTH})
         );
         vm.stopPrank();
     }
@@ -701,7 +722,8 @@ contract ERC404FactoryTest is Test {
             }),
             "ipfs://metadata",
             address(mockDeployer),
-            address(0)
+            address(0),
+            FreeMintParams({allocation: 0, scope: GatingScope.BOTH})
         );
         vm.stopPrank();
     }
@@ -716,7 +738,8 @@ contract ERC404FactoryTest is Test {
             _identity("Token", "TKN", creator1),
             "ipfs://",
             address(0xDEAD),  // unapproved deployer
-            address(0)
+            address(0),
+            FreeMintParams({allocation: 0, scope: GatingScope.BOTH})
         );
     }
 
@@ -727,7 +750,8 @@ contract ERC404FactoryTest is Test {
             _identity("Token", "TKN", creator1),
             "ipfs://",
             address(mockDeployer),
-            address(0)
+            address(0),
+            FreeMintParams({allocation: 0, scope: GatingScope.BOTH})
         );
         assertTrue(instance != address(0));
         assertEq(
@@ -746,7 +770,8 @@ contract ERC404FactoryTest is Test {
             _identity("TestToken", "TEST", creator1),
             "ipfs://Qmtest",
             address(mockDeployer),
-            unapprovedModule
+            unapprovedModule,
+            FreeMintParams({allocation: 0, scope: GatingScope.BOTH})
         );
     }
 
@@ -761,7 +786,8 @@ contract ERC404FactoryTest is Test {
             _identity("GatedToken", "GATE", creator1),
             "ipfs://Qmtest",
             address(mockDeployer),
-            gatingModule
+            gatingModule,
+            FreeMintParams({allocation: 0, scope: GatingScope.BOTH})
         );
 
         assertTrue(instance != address(0));
@@ -774,7 +800,8 @@ contract ERC404FactoryTest is Test {
             _identity("OpenToken", "OPEN", creator1),
             "ipfs://Qmtest",
             address(mockDeployer),
-            address(0)
+            address(0),
+            FreeMintParams({allocation: 0, scope: GatingScope.BOTH})
         );
 
         assertTrue(instance != address(0));
@@ -791,7 +818,8 @@ contract ERC404FactoryTest is Test {
             _identity("GatedToken2", "GATE2", creator1),
             "ipfs://Qmtest",
             address(mockDeployer),
-            gatingModule
+            gatingModule,
+            FreeMintParams({allocation: 0, scope: GatingScope.BOTH})
         );
 
         assertEq(
@@ -808,7 +836,8 @@ contract ERC404FactoryTest is Test {
             _identity("OpenToken2", "OPEN2", creator1),
             "ipfs://Qmtest",
             address(mockDeployer),
-            address(0)
+            address(0),
+            FreeMintParams({allocation: 0, scope: GatingScope.BOTH})
         );
         assertFalse(ERC404BondingInstance(payable(instance)).gatingActive());
     }
@@ -832,7 +861,8 @@ contract ERC404FactoryTest is Test {
             }),
             "ipfs://metadata",
             address(mockDeployer),
-            address(0)
+            address(0),
+            FreeMintParams({allocation: 0, scope: GatingScope.BOTH})
         );
         assertTrue(instance != address(0));
     }

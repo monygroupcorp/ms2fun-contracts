@@ -14,7 +14,8 @@ import {ERC404BondingInstance} from "./ERC404BondingInstance.sol";
 import {LaunchManager} from "./LaunchManager.sol";
 import {PasswordTierGatingModule} from "../../gating/PasswordTierGatingModule.sol";
 import {IComponentRegistry} from "../../registry/interfaces/IComponentRegistry.sol";
-import {IdentityParams} from "../../interfaces/IFactoryTypes.sol";
+import {IdentityParams, FreeMintParams} from "../../interfaces/IFactoryTypes.sol";
+import {GatingScope} from "../../gating/IGatingModule.sol";
 
 /**
  * @title ERC404Factory
@@ -89,16 +90,18 @@ contract ERC404Factory is OwnableRoles, ReentrancyGuard, IFactory {
     /// @notice Create an instance with a caller-supplied liquidity deployer and optional gating module.
     /// @param liquidityDeployer Must be approved in ComponentRegistry.
     /// @param gatingModule address(0) = open gating; otherwise must be approved in ComponentRegistry.
+    /// @param freeMint Free mint configuration (allocation=0 disables free mints).
     function createInstance(
         IdentityParams calldata identity,
         string calldata metadataURI,
         address liquidityDeployer,
-        address gatingModule
+        address gatingModule,
+        FreeMintParams calldata freeMint
     ) external payable nonReentrant returns (address instance) {
         if (gatingModule != address(0)) {
             require(componentRegistry.isApprovedComponent(gatingModule), "Unapproved gating module");
         }
-        return _createInstanceCore(identity, metadataURI, liquidityDeployer, gatingModule);
+        return _createInstanceCore(identity, metadataURI, liquidityDeployer, gatingModule, freeMint);
     }
 
     /// @notice Convenience wrapper: creates an instance with password-tier gating.
@@ -106,21 +109,23 @@ contract ERC404Factory is OwnableRoles, ReentrancyGuard, IFactory {
         IdentityParams calldata identity,
         string calldata metadataURI,
         address liquidityDeployer,
-        PasswordTierGatingModule.TierConfig calldata tiers
+        PasswordTierGatingModule.TierConfig calldata tiers,
+        FreeMintParams calldata freeMint
     ) external payable nonReentrant returns (address instance) {
         address gatingModuleAddr;
         if (tiers.passwordHashes.length > 0) {
             tierGatingModule.configureFor(address(0), tiers);
             gatingModuleAddr = address(tierGatingModule);
         }
-        return _createInstanceCore(identity, metadataURI, liquidityDeployer, gatingModuleAddr);
+        return _createInstanceCore(identity, metadataURI, liquidityDeployer, gatingModuleAddr, freeMint);
     }
 
     function _createInstanceCore(
         IdentityParams calldata identity,
         string calldata metadataURI,
         address liquidityDeployer,
-        address gatingModule
+        address gatingModule,
+        FreeMintParams calldata freeMint
     ) internal returns (address instance) {
         accumulatedProtocolFees += msg.value;
 
@@ -132,6 +137,7 @@ contract ERC404Factory is OwnableRoles, ReentrancyGuard, IFactory {
         require(identity.vault != address(0), "Vault required");
         require(identity.vault.code.length > 0, "Vault must be a contract");
         require(!masterRegistry.isNameTaken(identity.name), "Name already taken");
+        require(freeMint.allocation < identity.nftCount, "Free mint allocation exceeds NFT count");
 
         // Validate liquidity deployer
         require(componentRegistry.isApprovedComponent(liquidityDeployer), "Unapproved liquidity deployer");
@@ -146,7 +152,7 @@ contract ERC404Factory is OwnableRoles, ReentrancyGuard, IFactory {
 
         // Deploy clone and initialize via helpers (avoids stack-too-deep)
         instance = LibClone.clone(implementation);
-        _initializeInstance(instance, identity, liquidityDeployer, gatingModule);
+        _initializeInstance(instance, identity, liquidityDeployer, gatingModule, freeMint);
         _finalizeInstance(instance, identity, metadataURI);
     }
 
@@ -154,19 +160,22 @@ contract ERC404Factory is OwnableRoles, ReentrancyGuard, IFactory {
         address instance,
         IdentityParams calldata identity,
         address liquidityDeployer,
-        address gatingModule
+        address gatingModule,
+        FreeMintParams calldata freeMint
     ) private {
         // Fetch preset and validate its curve computer
         LaunchManager.Preset memory preset = launchManager.getPreset(identity.presetId);
         require(componentRegistry.isApprovedComponent(preset.curveComputer), "Unapproved curve computer");
 
         uint256 unit = preset.unitPerNFT * 1e18;
+        // Curve is computed over the paid-bonding portion only (excludes free mint tranche)
+        uint256 curveNftCount = identity.nftCount - freeMint.allocation;
         ERC404BondingInstance.BondingParams memory bonding = ERC404BondingInstance.BondingParams({
-            maxSupply: identity.nftCount * unit,
+            maxSupply: identity.nftCount * unit,          // full supply (includes free mint tranche)
             unit: unit,
             liquidityReservePercent: preset.liquidityReserveBps / 100,
             curve: ICurveComputer(preset.curveComputer).computeCurveParams(
-                identity.nftCount,
+                curveNftCount,                             // paid bonding portion
                 preset.targetETH,
                 preset.unitPerNFT,
                 preset.liquidityReserveBps
@@ -186,6 +195,10 @@ contract ERC404Factory is OwnableRoles, ReentrancyGuard, IFactory {
         );
         ERC404BondingInstance(payable(instance)).initializeMetadata(
             identity.name, identity.symbol, identity.styleUri
+        );
+        // Wire free mint tranche (no-op when allocation == 0)
+        ERC404BondingInstance(payable(instance)).initializeFreeMint(
+            freeMint.allocation, freeMint.scope
         );
     }
 

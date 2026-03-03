@@ -14,7 +14,8 @@ import {ERC404BondingInstance} from "../../src/factories/erc404/ERC404BondingIns
 import {ComponentRegistry} from "../../src/registry/ComponentRegistry.sol";
 import {ILiquidityDeployerModule} from "../../src/interfaces/ILiquidityDeployerModule.sol";
 import {LibClone} from "solady/utils/LibClone.sol";
-import {IdentityParams} from "../../src/interfaces/IFactoryTypes.sol";
+import {IdentityParams, FreeMintParams} from "../../src/interfaces/IFactoryTypes.sol";
+import {GatingScope} from "../../src/gating/IGatingModule.sol";
 
 /// @dev Mock vault that satisfies factory checks
 contract MockVaultForNamespace {
@@ -174,7 +175,8 @@ contract NamespaceCollisionTest is Test {
             _erc404Identity("poggers", "POG", address(mockVault)),
             "ipfs://metadata",
             address(mockDeployer),
-            address(0)
+            address(0),
+            FreeMintParams({allocation: 0, scope: GatingScope.BOTH})
         );
 
         vm.stopPrank();
@@ -226,7 +228,8 @@ contract NamespaceCollisionTest is Test {
             _erc404Identity("poggers", "POG", address(mockVault)),
             "ipfs://metadata",
             address(mockDeployer),
-            address(0)
+            address(0),
+            FreeMintParams({allocation: 0, scope: GatingScope.BOTH})
         );
         vm.stopPrank();
     }
@@ -243,7 +246,8 @@ contract NamespaceCollisionTest is Test {
             _erc404Identity("poggers", "POG", address(mockVault)),
             "ipfs://metadata",
             address(mockDeployer),
-            address(0)
+            address(0),
+            FreeMintParams({allocation: 0, scope: GatingScope.BOTH})
         );
         vm.stopPrank();
 
@@ -282,7 +286,8 @@ contract NamespaceCollisionTest is Test {
             _erc404Identity("poggers", "POG", address(mockVault)),
             "ipfs://metadata",
             address(mockDeployer),
-            address(0)
+            address(0),
+            FreeMintParams({allocation: 0, scope: GatingScope.BOTH})
         );
         vm.stopPrank();
     }
@@ -299,7 +304,8 @@ contract NamespaceCollisionTest is Test {
             _erc404Identity("poggers", "POG", address(mockVault)),
             "ipfs://metadata",
             address(mockDeployer),
-            address(0)
+            address(0),
+            FreeMintParams({allocation: 0, scope: GatingScope.BOTH})
         );
         vm.stopPrank();
 
@@ -309,7 +315,8 @@ contract NamespaceCollisionTest is Test {
             _erc404Identity("poggers", "POG2", address(mockVault)),
             "ipfs://metadata2",
             address(mockDeployer),
-            address(0)
+            address(0),
+            FreeMintParams({allocation: 0, scope: GatingScope.BOTH})
         );
         vm.stopPrank();
     }
@@ -336,7 +343,8 @@ contract NamespaceCollisionTest is Test {
             _erc404Identity("different_name", "DIFF", address(mockVault)),
             "ipfs://metadata",
             address(mockDeployer),
-            address(0)
+            address(0),
+            FreeMintParams({allocation: 0, scope: GatingScope.BOTH})
         );
         vm.stopPrank();
 
