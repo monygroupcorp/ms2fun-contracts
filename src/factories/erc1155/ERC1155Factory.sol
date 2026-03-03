@@ -12,6 +12,8 @@ import {PromotionBadges} from "../../promotion/PromotionBadges.sol";
 import {FeaturedQueueManager} from "../../master/FeaturedQueueManager.sol";
 import {IComponentRegistry} from "../../registry/interfaces/IComponentRegistry.sol";
 import {FeatureUtils} from "../../master/libraries/FeatureUtils.sol";
+import {FreeMintParams} from "../../interfaces/IFactoryTypes.sol";
+import {GatingScope} from "../../gating/IGatingModule.sol";
 
 /**
  * @title ERC1155Factory
@@ -95,7 +97,8 @@ contract ERC1155Factory is Ownable, ReentrancyGuard, IFactory {
         address vault,
         string memory styleUri
     ) external payable nonReentrant returns (address instance) {
-        return _createInstanceInternal(name, metadataURI, creator, vault, styleUri, CreationTier.STANDARD, address(0));
+        return _createInstanceInternal(name, metadataURI, creator, vault, styleUri, CreationTier.STANDARD, address(0),
+            FreeMintParams({ allocation: 0, scope: GatingScope.BOTH }));
     }
 
     /**
@@ -109,7 +112,8 @@ contract ERC1155Factory is Ownable, ReentrancyGuard, IFactory {
         string memory styleUri,
         CreationTier creationTier
     ) external payable nonReentrant returns (address instance) {
-        return _createInstanceInternal(name, metadataURI, creator, vault, styleUri, creationTier, address(0));
+        return _createInstanceInternal(name, metadataURI, creator, vault, styleUri, creationTier, address(0),
+            FreeMintParams({ allocation: 0, scope: GatingScope.BOTH }));
     }
 
     /**
@@ -127,7 +131,24 @@ contract ERC1155Factory is Ownable, ReentrancyGuard, IFactory {
         if (gatingModule != address(0)) {
             require(componentRegistry.isApprovedComponent(gatingModule), "Unapproved component");
         }
-        return _createInstanceInternal(name, metadataURI, creator, vault, styleUri, CreationTier.STANDARD, gatingModule);
+        return _createInstanceInternal(name, metadataURI, creator, vault, styleUri, CreationTier.STANDARD, gatingModule,
+            FreeMintParams({ allocation: 0, scope: GatingScope.BOTH }));
+    }
+
+    /// @notice Create an instance with gating module and free mint configuration.
+    function createInstance(
+        string memory name,
+        string memory metadataURI,
+        address creator,
+        address vault,
+        string memory styleUri,
+        address gatingModule,
+        FreeMintParams calldata freeMint
+    ) external payable nonReentrant returns (address instance) {
+        if (gatingModule != address(0)) {
+            require(componentRegistry.isApprovedComponent(gatingModule), "Unapproved component");
+        }
+        return _createInstanceInternal(name, metadataURI, creator, vault, styleUri, CreationTier.STANDARD, gatingModule, freeMint);
     }
 
     function _createInstanceInternal(
@@ -137,7 +158,8 @@ contract ERC1155Factory is Ownable, ReentrancyGuard, IFactory {
         address vault,
         string memory styleUri,
         CreationTier creationTier,
-        address gatingModule
+        address gatingModule,
+        FreeMintParams memory freeMint
     ) internal returns (address instance) {
         TierConfig memory config = tierConfigs[creationTier];
 
@@ -170,6 +192,8 @@ contract ERC1155Factory is Ownable, ReentrancyGuard, IFactory {
         require(!masterRegistry.isNameTaken(name), "Name already taken");
 
         instance = _deployAndRegister(name, metadataURI, creator, vault, styleUri, gatingModule);
+        // Wire free mint tranche (no-op when allocation == 0)
+        ERC1155Instance(instance).initializeFreeMint(freeMint.allocation, freeMint.scope);
 
         // Apply tier perks AFTER successful deployment and registration
         if (config.featuredDuration > 0 && address(featuredQueueManager) != address(0) && featuredCost > 0) {
