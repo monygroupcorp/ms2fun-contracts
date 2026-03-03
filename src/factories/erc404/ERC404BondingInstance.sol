@@ -12,7 +12,7 @@ import { IAlignmentVault } from "../../interfaces/IAlignmentVault.sol";
 import { IMasterRegistry } from "../../master/interfaces/IMasterRegistry.sol";
 import { IGlobalMessageRegistry } from "../../registry/interfaces/IGlobalMessageRegistry.sol";
 import { IInstanceLifecycle, TYPE_ERC404, STATE_BONDING, STATE_PAUSED, STATE_GRADUATED } from "../../interfaces/IInstanceLifecycle.sol";
-import { IGatingModule } from "../../gating/IGatingModule.sol";
+import { IGatingModule, GatingScope } from "../../gating/IGatingModule.sol";
 
 // ── Errors ────────────────────────────────────────────────────────────────────
 error AlreadyInitialized();
@@ -45,6 +45,10 @@ error TooEarly();
 error TransactionExpired();
 error BalanceMismatchAfterReroll();
 error AmountMustBePositive();
+error FreeMintDisabled();
+error FreeMintAlreadyClaimed();
+error FreeMintExhausted();
+error FreeMintNotInitialized();
 
 /**
  * @title ERC404BondingInstance
@@ -112,6 +116,13 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IInstanceLife
     // Graduation flag
     bool public graduated;
 
+    // Free mint tranche
+    uint256 public freeMintAllocation;   // NFT count reserved (0 = disabled)
+    uint256 public freeMintsClaimed;     // running counter (in NFTs, not tokens)
+    mapping(address => bool) public freeMintClaimed;
+    GatingScope public gatingScope;
+    bool private _freeMintInitialized;
+
     // ── Events ────────────────────────────────────────────────────────────────
     event BondingSale(address indexed user, uint256 amount, uint256 cost, bool isBuy);
     event BondingOpenTimeSet(uint256 openTime);
@@ -121,6 +132,7 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IInstanceLife
     event RerollInitiated(address indexed user, uint256 tokenAmount, uint256[] exemptedNFTIds);
     event RerollCompleted(address indexed user, uint256 tokensReturned);
     event BondingFeePaid(address indexed buyer, uint256 feeAmount);
+    event FreeMintClaimed(address indexed user);
 
     // ┌─────────────────────────┐
     // │      Constructor        │
@@ -200,6 +212,38 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IInstanceLife
         styleUri = styleUri_;
     }
 
+    /// @notice Set free mint params. Called by factory once after initialize().
+    /// @param allocation NFT count reserved for free claims (0 = disabled).
+    /// @param scope      Controls which entry points the gating module guards.
+    function initializeFreeMint(uint256 allocation, GatingScope scope) external {
+        require(msg.sender == factory, "Only factory");
+        require(!_freeMintInitialized, "Already set");
+        _freeMintInitialized = true;
+        freeMintAllocation = allocation;
+        gatingScope = scope;
+    }
+
+    /// @notice Claim one free mint (= 1 NFT worth of tokens) at zero ETH cost.
+    /// @param gatingData Passed to gatingModule.canMint if scope requires it.
+    function claimFreeMint(bytes calldata gatingData) external nonReentrant {
+        if (freeMintAllocation == 0) revert FreeMintDisabled();
+        if (freeMintClaimed[msg.sender]) revert FreeMintAlreadyClaimed();
+        if (freeMintsClaimed >= freeMintAllocation) revert FreeMintExhausted();
+
+        if (address(gatingModule) != address(0) && gatingActive
+            && gatingScope != GatingScope.PAID_ONLY) {
+            (bool allowed, bool permanent) = gatingModule.canMint(msg.sender, UNIT, gatingData);
+            if (!allowed) revert GatingNotAllowed();
+            if (permanent) gatingActive = false;
+            gatingModule.onMint(msg.sender, UNIT);
+        }
+
+        freeMintClaimed[msg.sender] = true;
+        freeMintsClaimed++;
+        _transfer(address(this), msg.sender, UNIT);
+        emit FreeMintClaimed(msg.sender);
+    }
+
     // ┌─────────────────────────┐
     // │    Owner Functions      │
     // └─────────────────────────┘
@@ -257,10 +301,11 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IInstanceLife
         if (deadline != 0 && block.timestamp > deadline) revert TransactionExpired();
         if (!bondingActive) revert BondingNotActive();
         if (graduated) revert BondingEnded();
-        if (totalBondingSupply + amount > MAX_SUPPLY - LIQUIDITY_RESERVE) revert ExceedsBonding();
+        if (totalBondingSupply + amount > MAX_SUPPLY - LIQUIDITY_RESERVE - (freeMintAllocation * UNIT)) revert ExceedsBonding();
 
         // Gating check (address(0) or gatingActive==false = open)
-        if (address(gatingModule) != address(0) && gatingActive) {
+        if (address(gatingModule) != address(0) && gatingActive
+            && gatingScope != GatingScope.FREE_MINT_ONLY) {
             bytes memory gatingData = abi.encode(passwordHash, bondingOpenTime);
             (bool allowed, bool permanent) = gatingModule.canMint(msg.sender, amount, gatingData);
             if (!allowed) revert GatingNotAllowed();
@@ -314,7 +359,7 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IInstanceLife
         if (!bondingActive) revert BondingNotActive();
         if (graduated) revert BondingEnded();
 
-        uint256 maxBondingSupply = MAX_SUPPLY - LIQUIDITY_RESERVE;
+        uint256 maxBondingSupply = MAX_SUPPLY - LIQUIDITY_RESERVE - (freeMintAllocation * UNIT);
         if (totalBondingSupply >= maxBondingSupply) revert ExceedsBonding();
 
         uint256 balance = balanceOf(msg.sender);
@@ -394,7 +439,7 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IInstanceLife
         if (graduated) revert AlreadyDeployed();
         if (reserve == 0) revert NoReserve();
 
-        uint256 maxBondingSupply = MAX_SUPPLY - LIQUIDITY_RESERVE;
+        uint256 maxBondingSupply = MAX_SUPPLY - LIQUIDITY_RESERVE - (freeMintAllocation * UNIT);
         bool isFull = totalBondingSupply >= maxBondingSupply;
         bool isMatured = bondingMaturityTime != 0 && block.timestamp >= bondingMaturityTime;
         if (!isFull && !isMatured) {
