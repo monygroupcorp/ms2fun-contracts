@@ -143,14 +143,6 @@ Vaults are the economic engine of the protocol. They collect fees from all proje
 | **ZAMMAlignmentVault** | `src/vaults/zamm/` | ZAMM | Alternative |
 | **CypherAlignmentVault** | `src/vaults/cypher/` | Algebra V2 | Cypher chain |
 
-### Factory-to-Vault Pairing
-
-| Factory | Vault |
-|---------|-------|
-| ERC404Factory | UniAlignmentVaultFactory |
-| ERC404ZAMMFactory | ZAMMAlignmentVaultFactory |
-| ERC404CypherFactory | CypherAlignmentVaultFactory |
-
 ### UniAlignmentVault (`src/vaults/uni/`)
 
 The primary vault implementation. Uniswap V4 full-range LP with share-based fee distribution and O(1) claims. Implements `IUnlockCallback` for V4 LP operations. Hook integration via `UniAlignmentV4Hook` — post-graduation swap tax flows from the hook directly to the vault.
@@ -193,7 +185,7 @@ Benefactors (project instances) can delegate fee claims to another address:
 
 ### Multi-Vault Instance Support
 
-Multiple vault instances per alignment target are supported. A single target (e.g., Remilia) can have a UniAlignmentVault, ZAMMAlignmentVault, and CypherAlignmentVault simultaneously — each attracting different project factories. MasterRegistry tracks all instances linked to each target.
+Multiple vault instances per alignment target are supported. A single target (e.g., Remilia) can have multiple vaults deploying to different DEXes simultaneously. MasterRegistry tracks all instances linked to each target.
 
 ---
 
@@ -211,31 +203,37 @@ Instances receive `globalMessageRegistry` directly from their factory at constru
 
 ### ERC404 Bonding Factory
 
-Creates hybrid ERC20/ERC721 tokens with bonding curves.
+Creates hybrid ERC20/ERC721 tokens with bonding curves. A single `ERC404Factory` works with any DAO-approved liquidity deployer and any DEX — artists choose their deployer at instance creation time.
 
 **Instance lifecycle:**
-1. Artist deploys instance via factory with vault binding
+1. Artist deploys instance via factory, choosing a vault binding, a `LaunchManager` preset, and a liquidity deployer
 2. Users buy tokens on the bonding curve (`buyBonding()`)
 3. Bonding fees (1%) accumulate in the reserve (not extracted)
-4. At maturity, anyone triggers `deployLiquidity()` (graduation)
+4. At graduation, anyone triggers `deployLiquidity()` — the chosen deployer handles LP setup
 5. 1% of raise → protocol treasury, 19% → vault via `receiveContribution`, 80% → LP pool
-6. Post-graduation: tokens trade on V4/ZAMM/Algebra pool with hook-based swap tax → vault
+
+**Pluggable component model:**
+
+The factory advertises two user-selectable component slots via `features()`:
+- `GATING` (`keccak256("gating")`) — optional gating module that controls who can participate (e.g., password tiers). Pass `address(0)` for open access.
+- `LIQUIDITY_DEPLOYER` (`keccak256("liquidity")`) — liquidity deployment module that executes graduation into a DEX pool. Implements `ILiquidityDeployerModule`.
+
+Both slots are validated against `ComponentRegistry` at instance creation — only DAO-approved components are accepted.
+
+Bonding curve shape is determined by a `LaunchManager` preset identified by `identity.presetId`. The preset holds `targetETH`, `unitPerNFT`, `liquidityReserveBps`, and the address of a `ICurveComputer` implementation. The computer is called once at creation to derive `BondingCurveMath.Params`; thereafter the instance uses `BondingCurveMath` directly for buy/sell math — no stored curve computer reference on the instance.
 
 **Key features:**
-- Tier system: password-protected or time-gated access
-- Staking: holders can stake tokens to receive proportional vault fee distribution
-- Free mint: first purchaser gets 1M tokens if supply allows
+- Tier system: configurable gating via a DAO-approved `IGatingModule` implementation
 - Reroll: NFT reshuffling mechanism
-- V4 Hook: `afterSwap()` tax routed to vault with project attribution
+- Creation tiers: `STANDARD`, `PREMIUM`, `LAUNCH` — grant promotion perks via `LaunchManager`
 
 **Fee parameters (immutable per instance):**
 - `bondingFeeBps` — fee on bonding purchases (default 100 = 1%), accumulates in reserve
 
 **Factory family components:**
-- `ERC404StakingModule` — factory-scoped singleton accounting backend for vault yield delegation to token stakers. Holds no ETH or tokens — pure accounting keyed by instance address. Authorized via `MasterRegistry.isRegisteredInstance(msg.sender)`, same pattern as `GlobalMessageRegistry`. Deployed once alongside the factory; address passed immutably into every instance at construction. Enabling staking is irreversible — uses `rewardPerTokenStored` accounting (Synthetix model) to correctly handle stakers joining at different times.
-- `LiquidityDeployerModule` — V4 liquidity graduation logic. Handles the unlock callback, amount computation, and sqrtPrice calculation for deploying LP positions at graduation.
-- `LaunchManager` — Orchestrates instance creation lifecycle including tier perks (promotion badges, featured queue placement). Wired to PromotionBadges and FeaturedQueueManager.
-- `CurveParamsComputer` — Computes bonding curve parameters (coefficients, normalization) from graduation profile configuration.
+- `LaunchManager` — Orchestrates instance creation lifecycle including tier perks (promotion badges, featured queue placement). Wired to PromotionBadges and FeaturedQueueManager. Holds presets.
+- `CurveParamsComputer` — Default `ICurveComputer` implementation. Computes bonding curve parameters (coefficients, normalization) from preset configuration.
+- `ComponentRegistry` — DAO-governed approval list for pluggable components. Factories consult `isApprovedComponent()` at creation time to validate user-supplied deployer and gating module addresses.
 
 ### ERC1155 Edition Factory
 
@@ -503,11 +501,12 @@ Standalone registry for vault and hook metadata. Handles registration fees (0.05
 6. **FeaturedQueueManager** — Deploy, initialize with masterRegistry + owner
 7. **VaultRegistry** — Deploy standalone
 8. **FrontendRegistry** — Deploy implementation, then proxy with `initialize(daoOwner, ensResolver)`
-9. **Alignment Targets** — Register via AlignmentRegistry (DAO or owner during bootstrap)
-10. **Project Factories** — Deploy with masterRegistry + globalMessageRegistry, register in MasterRegistry
-11. **Vault Instances** — Deploy for approved targets, register via MasterRegistry
-12. **Timelock** — Deploy and initialize with Safe as admin/proposer/canceller, open executor, 48h delay
-13. **Migrate ownership** — Transfer MasterRegistry, AlignmentRegistry, FrontendRegistry, and all protocol contracts to Timelock
+9. **ComponentRegistry** — Deploy implementation, then proxy with `initialize(daoOwner)`. Approve DAO-vetted deployers and gating modules.
+10. **Alignment Targets** — Register via AlignmentRegistry (DAO or owner during bootstrap)
+11. **Project Factories** — Deploy with masterRegistry + globalMessageRegistry + componentRegistry, register in MasterRegistry
+12. **Vault Instances** — Deploy for approved targets, register via MasterRegistry
+13. **Timelock** — Deploy and initialize with Safe as admin/proposer/canceller, open executor, 48h delay
+14. **Migrate ownership** — Transfer MasterRegistry, AlignmentRegistry, ComponentRegistry, FrontendRegistry, and all protocol contracts to Timelock
 
 ### UUPS Upgrade Pattern
 
@@ -538,7 +537,7 @@ All protocol contracts with `onlyOwner` functions are owned by a Solady Timelock
 | **FrontendRegistry** | Timelock | ENS name management, release publishing, node steering |
 | **UniAlignmentVault** | Timelock (new instances) | Pool config, fee params, treasury address |
 | **ZAMMAlignmentVault** | Timelock (new instances) | Pool config, fee params, treasury address |
-| **CypherAlignmentVault** | Timelock (new instances) | Pool config, fee params, treasury address |
+| **ComponentRegistry** | Timelock | Component approval/revocation for pluggable factory slots |
 | **GrandCentral** | Self-governing (daoOnly) | Shares, loot, governance params, conductors |
 | **Project Factories** | Protocol + Creator | Instance deployment, fee withdrawal |
 | **Project Instances** | Instance creator (artist) | Withdrawals, configuration |
@@ -555,9 +554,8 @@ All protocol contracts with `onlyOwner` functions are owned by a Solady Timelock
 |------------|-----------|
 | MasterRegistryV1 (UUPS) | UniAlignmentVault (no proxy) |
 | AlignmentRegistryV1 (UUPS) | ZAMMAlignmentVault (no proxy) |
-| FrontendRegistry (UUPS) | CypherAlignmentVault (no proxy) |
-| | GrandCentral (no proxy) |
-| | All factory/instance contracts |
+| FrontendRegistry (UUPS) | GrandCentral (no proxy) |
+| ComponentRegistry (UUPS) | All factory/instance contracts |
 | | V4 hooks |
 
 ### Key Security Properties
@@ -603,12 +601,10 @@ src/
 │
 ├── factories/
 │   ├── erc404/
-│   │   ├── ERC404Factory.sol               # Bonding curve factory
-│   │   ├── ERC404BondingInstance.sol        # Bonding curve instance (thin coordinator)
-│   │   ├── ERC404StakingModule.sol          # Singleton yield delegation companion
-│   │   ├── LaunchManager.sol               # Instance creation lifecycle orchestrator
-│   │   ├── CurveParamsComputer.sol          # Bonding curve parameter computation
-│   │   ├── LiquidityDeployerModule.sol      # V4 graduation liquidity deployment
+│   │   ├── ERC404Factory.sol               # Bonding curve factory (AMM-agnostic)
+│   │   ├── ERC404BondingInstance.sol        # Bonding curve instance
+│   │   ├── LaunchManager.sol               # Preset management + creation tier perks
+│   │   ├── CurveParamsComputer.sol          # Default ICurveComputer implementation
 │   │   ├── hooks/
 │   │   │   ├── UniAlignmentV4Hook.sol
 │   │   │   └── UniAlignmentHookFactory.sol
@@ -654,10 +650,13 @@ src/
 │
 ├── interfaces/
 │   ├── IAlignmentVault.sol                 # Vault standard interface
-│   ├── IFactory.sol                        # Factory template interface
+│   ├── IFactory.sol                        # Factory template interface (includes features())
 │   ├── IFactoryInstance.sol                # Instance interface
 │   ├── IInstance.sol
-│   └── IInstanceLifecycle.sol              # Instance lifecycle hooks
+│   ├── IInstanceLifecycle.sol              # Instance lifecycle hooks
+│   ├── ICurveComputer.sol                  # Pluggable bonding curve parameter computer
+│   ├── ILiquidityDeployerModule.sol        # Pluggable graduation liquidity deployer
+│   └── IFactoryTypes.sol                  # Shared structs (IdentityParams)
 │
 ├── libraries/
 │   ├── MessageTypes.sol                    # Message type constants

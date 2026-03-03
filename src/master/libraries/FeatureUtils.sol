@@ -14,7 +14,8 @@ library FeatureUtils {
     bytes32 public constant PORTFOLIO = keccak256("PORTFOLIO");
 
     // Pluggable component tag categories (matched by ComponentRegistry)
-    bytes32 public constant GATING = keccak256("gating");
+    bytes32 public constant GATING             = keccak256("gating");
+    bytes32 public constant LIQUIDITY_DEPLOYER = keccak256("liquidity");
 
     /**
      * @notice Check if a feature array contains a specific feature

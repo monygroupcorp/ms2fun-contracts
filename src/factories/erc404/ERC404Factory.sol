@@ -55,8 +55,8 @@ contract ERC404Factory is OwnableRoles, ReentrancyGuard, IFactory {
     PasswordTierGatingModule public immutable tierGatingModule;
     IComponentRegistry public immutable componentRegistry;
 
-    // Feature matrix
-    bytes32[] internal _features = [FeatureUtils.GATING];
+    // Feature matrix — pluggable choices advertised to the frontend
+    bytes32[] internal _features = [FeatureUtils.GATING, FeatureUtils.LIQUIDITY_DEPLOYER];
 
     event InstanceCreated(
         address indexed instance,

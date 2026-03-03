@@ -82,8 +82,9 @@ contract FactoryFeaturesTest is Test {
         vm.stopPrank();
 
         bytes32[] memory feats = IFactory(address(factory)).features();
-        assertEq(feats.length, 1, "ERC404Factory: features() must have exactly 1 element");
-        assertEq(feats[0], FeatureUtils.GATING, "ERC404Factory: features()[0] must be GATING");
+        assertEq(feats.length, 2, "ERC404Factory: features() must have exactly 2 elements");
+        assertEq(feats[0], FeatureUtils.GATING,             "ERC404Factory: features()[0] must be GATING");
+        assertEq(feats[1], FeatureUtils.LIQUIDITY_DEPLOYER, "ERC404Factory: features()[1] must be LIQUIDITY_DEPLOYER");
     }
 
     // ─────────────────────────────────────────────────────────────────────────
