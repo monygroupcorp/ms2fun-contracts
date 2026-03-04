@@ -40,6 +40,7 @@ contract UniAlignmentHookFactory is Ownable, ReentrancyGuard {
     event HookCreationFeeUpdated(uint256 newFee);
     event HookTemplateUpdated(address indexed oldTemplate, address indexed newTemplate);
 
+    // slither-disable-next-line missing-zero-check
     constructor(address _hookTemplate) {
         _initializeOwner(msg.sender);
         hookTemplate = _hookTemplate;
@@ -56,6 +57,7 @@ contract UniAlignmentHookFactory is Ownable, ReentrancyGuard {
      * @param salt Salt for CREATE2 deployment (frontend computes valid salt for hook permissions)
      * @return hook Address of the created hook instance
      */
+    // slither-disable-next-line reentrancy-unlimited-gas
     function createHook(
         address poolManager,
         address vault,

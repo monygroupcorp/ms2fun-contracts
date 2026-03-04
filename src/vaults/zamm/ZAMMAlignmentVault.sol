@@ -75,8 +75,10 @@ contract ZAMMAlignmentVault is IAlignmentVault, Ownable, ReentrancyGuard {
     // ── Solady ReentrancyGuard slot ─────────────────────────────────────
     // Mirrors Solady's `_REENTRANCY_GUARD_SLOT` (private constant).
     // Derived as: uint72(bytes9(keccak256("_REENTRANCY_GUARD_SLOT")))
-    // If Solady changes this slot, the static assert below will fail at compile time.
     uint256 private constant _RG_SLOT = 0x929eee149b4bd21268;
+    // Compile-time assert: if the derivation changes, the denominator is 0 → compilation fails.
+    uint256 private constant _RG_SLOT_ASSERT =
+        1 / (_RG_SLOT == uint256(uint72(bytes9(keccak256("_REENTRANCY_GUARD_SLOT")))) ? 1 : 0);
 
     // ── Errors ────────────────────────────────────────────────────────────
     error VaultAlreadyInitialized();

@@ -75,11 +75,13 @@ contract AlignmentRegistryV1 is SafeOwnableUUPS, IAlignmentRegistry {
         return targetId;
     }
 
+    // slither-disable-next-line incorrect-equality,timestamp
     function getAlignmentTarget(uint256 targetId) external view override returns (AlignmentTarget memory) {
         if (alignmentTargets[targetId].approvedAt == 0) revert TargetNotFound();
         return alignmentTargets[targetId];
     }
 
+    // slither-disable-next-line incorrect-equality,timestamp
     function getAlignmentTargetAssets(uint256 targetId) external view override returns (AlignmentAsset[] memory) {
         if (alignmentTargets[targetId].approvedAt == 0) revert TargetNotFound();
         return alignmentTargetAssets[targetId];

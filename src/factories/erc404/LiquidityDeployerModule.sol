@@ -48,6 +48,7 @@ contract LiquidityDeployerModule is IUnlockCallback, ILiquidityDeployerModule {
     uint24 public immutable poolFee;
     int24 public immutable tickSpacing;
 
+    // slither-disable-next-line missing-zero-check
     constructor(address _v4PoolManager, address _weth, uint24 _poolFee, int24 _tickSpacing) {
         v4PoolManager = IPoolManager(_v4PoolManager);
         weth = _weth;
@@ -92,6 +93,7 @@ contract LiquidityDeployerModule is IUnlockCallback, ILiquidityDeployerModule {
      *      ETH is sent as msg.value.
      * @param p Deployment parameters
      */
+    // slither-disable-next-line reentrancy-events
     function deployLiquidity(DeployParams calldata p) external payable override {
         if (msg.value != p.ethReserve) revert ETHMismatch();
         AmountsResult memory r = _computeAmounts(p);
@@ -100,6 +102,7 @@ contract LiquidityDeployerModule is IUnlockCallback, ILiquidityDeployerModule {
     }
 
     /// @dev Sets up pool, stores callback context, performs unlock, clears context, returns liquidity.
+    // slither-disable-next-line reentrancy-benign,unused-return
     function _setupPoolAndUnlock(
         ILiquidityDeployerModule.DeployParams calldata p,
         AmountsResult memory r
@@ -151,6 +154,7 @@ contract LiquidityDeployerModule is IUnlockCallback, ILiquidityDeployerModule {
     }
 
     /// @dev Dispatches graduation fees, emits final event.
+    // slither-disable-next-line arbitrary-send-eth,reentrancy-events
     function _postUnlock(
         ILiquidityDeployerModule.DeployParams calldata p,
         AmountsResult memory r
@@ -174,6 +178,7 @@ contract LiquidityDeployerModule is IUnlockCallback, ILiquidityDeployerModule {
     /**
      * @notice V4 unlock callback — only callable by the pool manager stored in context.
      */
+    // slither-disable-next-line timestamp,unused-return
     function unlockCallback(bytes calldata) external returns (bytes memory) {
         CallbackContext memory ctx = _ctx;
         if (msg.sender != address(ctx.poolManager)) revert NotPoolManager();

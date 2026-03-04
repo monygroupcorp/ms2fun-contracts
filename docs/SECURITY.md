@@ -43,6 +43,18 @@ Before mainnet deployment:
 - Gas optimization
 - Documentation
 
+## MEV & Transaction-Ordering
+
+See [MEV_ANALYSIS.md](MEV_ANALYSIS.md) for the full analysis. Key protections:
+
+- **Bonding curve**: `maxCost`/`minRefund` slippage guards + opt-in `deadline`
+- **V4 hook**: `hookFeeBips` is immutable; `lpFeeRate` is owner-adjustable but bounded by `MAX_LP_FEE`
+- **Vault conversions**: Router-level `minOutTarget`/`minTokenOut` slippage; price oracle deviation check (UniVault)
+- **ERC721 auctions**: Immutable `timeBuffer` anti-snipe extension + absolute `bidIncrement`
+- **Governance**: Checkpoint snapshots at `votingStarts` prevent buy-and-vote; `minRetentionPercent` blocks ragequit dilution
+
+Residual risks include opt-in deadline on bonding (frontend should enforce), zero slippage on internal fee-sweep paths, and keeper-supplied minimums on vault harvest.
+
 ## Known Limitations
 
 - Factory applications require manual finalization

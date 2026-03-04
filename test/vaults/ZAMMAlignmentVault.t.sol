@@ -417,4 +417,107 @@ contract ZAMMAlignmentVaultTest is Test {
         assertEq(expected, 0x929eee149b4bd21268, "Solady reentrancy guard slot has changed");
     }
 
+    // ── Fuzz: vault accumulator properties ─────────────────────────────
+
+    /// @notice accRewardPerContribution must never decrease across harvests.
+    function testFuzz_AccRewardPerContributionGrowsMonotonically(
+        uint8 rounds,
+        uint72 contribSeed,
+        uint72 feeSeed
+    ) public {
+        rounds = uint8(bound(uint256(rounds), 2, 10));
+
+        uint256 prevAcc = 0;
+
+        for (uint256 i = 0; i < rounds; i++) {
+            // Contribute
+            uint256 contribution = bound(uint256(contribSeed) + i, 0.01 ether, 5 ether);
+            vm.deal(alice, alice.balance + contribution);
+            vm.prank(alice);
+            vault.receiveContribution{value: contribution}(Currency.wrap(address(0)), contribution, alice);
+
+            // Set pool reserves for swap math
+            uint256 pid = vault.poolId();
+            mockZamm.setPool(pid, 10 ether, 10_000e18, 1000 ether);
+
+            // Convert
+            vault.convertAndAddLiquidity(0, 0, 0);
+
+            // Simulate fee growth and harvest
+            uint256 feeGrowth = bound(uint256(feeSeed) + i, 0.001 ether, 0.01 ether);
+            mockZamm.setEthPerLp(feeGrowth);
+            mockZamm.setTokenPerLp(feeGrowth);
+            vm.deal(address(mockZamm), 1000 ether);
+
+            vault.harvest(0);
+
+            uint256 currentAcc = vault.accRewardPerContribution();
+            assertGe(currentAcc, prevAcc, "accRewardPerContribution decreased");
+            prevAcc = currentAcc;
+
+            // Reset mock
+            mockZamm.setEthPerLp(1e15);
+            mockZamm.setTokenPerLp(1e15);
+        }
+    }
+
+    /// @notice No benefactor can claim more than total fees deposited into the vault.
+    function testFuzz_ClaimableNeverExceedsDeposited(
+        uint72 aliceAmount,
+        uint72 bobAmount,
+        uint8 harvestCount
+    ) public {
+        uint256 aliceContrib = bound(uint256(aliceAmount), 0.1 ether, 10 ether);
+        uint256 bobContrib = bound(uint256(bobAmount), 0.1 ether, 10 ether);
+        harvestCount = uint8(bound(uint256(harvestCount), 1, 5));
+
+        // Both contribute
+        vm.deal(alice, alice.balance + aliceContrib);
+        vm.prank(alice);
+        vault.receiveContribution{value: aliceContrib}(Currency.wrap(address(0)), aliceContrib, alice);
+
+        vm.deal(bob, bob.balance + bobContrib);
+        vm.prank(bob);
+        vault.receiveContribution{value: bobContrib}(Currency.wrap(address(0)), bobContrib, bob);
+
+        // Set pool reserves and convert
+        uint256 pid = vault.poolId();
+        mockZamm.setPool(pid, 10 ether, 10_000e18, 1000 ether);
+        vault.convertAndAddLiquidity(0, 0, 0);
+
+        // Accumulate fees over multiple harvests
+        uint256 totalFeesHarvested = 0;
+        for (uint256 i = 0; i < harvestCount; i++) {
+            mockZamm.setEthPerLp(0.002 ether);
+            mockZamm.setTokenPerLp(0.002 ether);
+            vm.deal(address(mockZamm), 1000 ether);
+
+            uint256 fees = vault.harvest(0);
+            totalFeesHarvested += fees;
+
+            mockZamm.setEthPerLp(1e15);
+            mockZamm.setTokenPerLp(1e15);
+        }
+
+        // Check each benefactor's claimable
+        uint256 aliceClaimable = vault.calculateClaimableAmount(alice);
+        uint256 bobClaimable = vault.calculateClaimableAmount(bob);
+
+        assertLe(
+            aliceClaimable,
+            totalFeesHarvested,
+            "Alice claimable exceeds total fees deposited"
+        );
+        assertLe(
+            bobClaimable,
+            totalFeesHarvested,
+            "Bob claimable exceeds total fees deposited"
+        );
+        assertLe(
+            aliceClaimable + bobClaimable,
+            totalFeesHarvested,
+            "Sum of claimable exceeds total fees deposited"
+        );
+    }
+
 }

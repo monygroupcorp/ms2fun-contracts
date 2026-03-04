@@ -11,18 +11,55 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
-      
+        with:
+          submodules: recursive
+
       - name: Install Foundry
         uses: foundry-rs/foundry-toolchain@v1
         with:
           version: nightly
-      
+
       - name: Run tests
         run: forge test --gas-report
-      
+
       - name: Run linter
         run: forge fmt --check
-      
+
       - name: Build contracts
         run: forge build
 
+  slither:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          submodules: recursive
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: nightly
+
+      # ZAMMAlignmentVault uses a Solady compile-time assertion pattern
+      # (ternary in constant init) that crashes Slither's IR generator.
+      # Pre-build without it so Slither can analyze everything else.
+      # See: https://github.com/crytic/slither/issues/2578
+      - name: Build for Slither (excluding ZAMM vault)
+        run: forge build --build-info --skip "*/test/**" "*/script/**" "src/vaults/zamm/**" --force
+
+      - name: Run Slither
+        uses: crytic/slither-action@v0.4.0
+        id: slither
+        with:
+          fail-on: medium
+          sarif: results.sarif
+          slither-args: --checklist --foundry-ignore-compile
+
+      - name: Upload SARIF
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: results.sarif

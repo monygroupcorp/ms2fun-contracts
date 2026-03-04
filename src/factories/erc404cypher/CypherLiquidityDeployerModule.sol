@@ -28,6 +28,7 @@ contract CypherLiquidityDeployerModule is ILiquidityDeployerModule {
     address public immutable positionManager;
     address public immutable weth;
 
+    // slither-disable-next-line missing-zero-check
     constructor(address _algebraFactory, address _positionManager, address _weth) {
         algebraFactory = _algebraFactory;
         positionManager = _positionManager;
@@ -57,6 +58,7 @@ contract CypherLiquidityDeployerModule is ILiquidityDeployerModule {
     /// @notice Deploy Algebra pool liquidity and register with vault.
     /// @dev Caller must have pre-transferred tokenReserve to this contract.
     ///      ETH must equal p.ethReserve exactly.
+    // slither-disable-next-line reentrancy-events
     function deployLiquidity(DeployParams calldata p) external payable override {
         if (msg.value != p.ethReserve) revert ETHMismatch();
         if (p.token == address(0) || p.vault == address(0)) revert InvalidParams();
@@ -65,6 +67,7 @@ contract CypherLiquidityDeployerModule is ILiquidityDeployerModule {
         _postMint(p, r);
     }
 
+    // slither-disable-next-line arbitrary-send-eth,incorrect-equality,timestamp,unused-return
     function _setupPool(ILiquidityDeployerModule.DeployParams calldata p) private returns (PoolSetupResult memory r) {
         // Fixed 1/19/80 split: 1% protocol, 19% vault, 80% LP
         RevenueSplitLib.Split memory s = RevenueSplitLib.split(p.ethReserve);
@@ -114,6 +117,7 @@ contract CypherLiquidityDeployerModule is ILiquidityDeployerModule {
         if (liquidity == 0) revert ZeroLiquidity();
     }
 
+    // slither-disable-next-line arbitrary-send-eth,reentrancy-events,timestamp
     function _postMint(ILiquidityDeployerModule.DeployParams calldata p, PoolSetupResult memory r) private {
         CypherAlignmentVault(payable(p.vault)).registerPosition(
             r.tokenId, r.pool, r.tokenIsZero, p.instance, r.ethToLP

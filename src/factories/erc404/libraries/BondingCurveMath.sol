@@ -60,17 +60,21 @@ library BondingCurveMath {
         uint256 supply
     ) private pure returns (uint256) {
         if (params.normalizationFactor == 0) revert NormalizationFactorZero();
-        // Scale down by normalization factor (same as CULTEXEC404)
+        // Scale down by normalization factor — rounds down (floor), loses sub-normFactor
+        // token fractions. Consequence: purchases < normalizationFactor tokens cost 0,
+        // which is guarded by ERC404BondingInstance (revert PurchaseTooSmall).
         uint256 scaledSupplyWad = supply / params.normalizationFactor;
-        
-        // Base price integral (dewadded by 1e18)
+
+        // All mulWad calls below round down (floor). Each chained mulWad truncates
+        // independently, so compound rounding is cumulative. Worst case for the
+        // quartic chain (4 mulWad): ~4 wei undercount per term evaluation.
+        // Net effect: buyers pay slightly less than the theoretical curve price.
+        // See docs/BONDING_CURVE_ARITHMETIC.md for full precision analysis.
+
+        // Base price integral — 1 mulWad, rounds down ≤1 wei
         uint256 basePart = params.initialPrice.mulWad(scaledSupplyWad);
-        
-        // Calculate integral terms matching CULTEXEC404 formula exactly
-        // Original uses: 3 gwei * S^4, 1333333333 * S^3, 2 gwei * S^2
-        // Coefficients are pre-adjusted for integration (12/4, 4/3, 4/2)
-        
-        // Quartic term: coeff * S^4 (coeff should be like 3 gwei = 12/4 * 1 gwei)
+
+        // Quartic term: coeff * S^4 — 4 chained mulWad, rounds down ≤4 wei cumulative
         uint256 quarticTerm = params.quarticCoeff.mulWad(
             scaledSupplyWad.mulWad(
                 scaledSupplyWad.mulWad(
@@ -79,14 +83,14 @@ library BondingCurveMath {
             )
         );
 
-        // Cubic term: coeff * S^3 (coeff should be like 1333333333 = 4/3 * 1 gwei)
+        // Cubic term: coeff * S^3 — 3 chained mulWad, rounds down ≤3 wei cumulative
         uint256 cubicTerm = params.cubicCoeff.mulWad(
             scaledSupplyWad.mulWad(
                 scaledSupplyWad.mulWad(scaledSupplyWad)
             )
         );
-        
-        // Quadratic term: coeff * S^2 (coeff should be like 2 gwei = 4/2 * 1 gwei)
+
+        // Quadratic term: coeff * S^2 — 2 chained mulWad, rounds down ≤2 wei cumulative
         uint256 quadraticTerm = params.quadraticCoeff.mulWad(
             scaledSupplyWad.mulWad(scaledSupplyWad)
         );

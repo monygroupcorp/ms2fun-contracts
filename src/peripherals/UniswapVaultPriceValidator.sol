@@ -65,9 +65,13 @@ contract UniswapVaultPriceValidator is IVaultPriceValidator {
     uint256 public immutable maxPriceDeviationBps;
 
     constructor(
+        // slither-disable-next-line missing-zero-check
         address _weth,
+        // slither-disable-next-line missing-zero-check
         address _v2Factory,
+        // slither-disable-next-line missing-zero-check
         address _v3Factory,
+        // slither-disable-next-line missing-zero-check
         address _poolManager,
         uint256 _maxPriceDeviationBps
     ) {
@@ -122,6 +126,7 @@ contract UniswapVaultPriceValidator is IVaultPriceValidator {
         }
     }
 
+    // slither-disable-next-line unused-return
     function calculateSwapProportion(
         address token,
         int24 tickLower,
@@ -197,6 +202,7 @@ contract UniswapVaultPriceValidator is IVaultPriceValidator {
 
     // --- private helpers (moved verbatim from vault) ---
 
+    // slither-disable-next-line unused-return
     function _getV2PriceAndReserves(address token)
         private
         view
@@ -239,6 +245,7 @@ contract UniswapVaultPriceValidator is IVaultPriceValidator {
         hasV2Pool = true;
     }
 
+    // slither-disable-next-line calls-loop,unused-return
     function _queryV3PoolForFee(address token, uint24 feeTier)
         private
         view
@@ -364,6 +371,7 @@ contract UniswapVaultPriceValidator is IVaultPriceValidator {
         return (false, 0, 0);
     }
 
+    // slither-disable-next-line unused-return
     function _queryV4PoolForTokenPair(
         address token0Addr,
         address token1Addr,

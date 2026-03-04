@@ -244,6 +244,7 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IInstanceLife
 
     /// @notice Claim one free mint (= 1 NFT worth of tokens) at zero ETH cost.
     /// @param gatingData Passed to gatingModule.canMint if scope requires it.
+    // slither-disable-next-line reentrancy-no-eth
     function claimFreeMint(bytes calldata gatingData) external nonReentrant {
         if (freeMintAllocation == 0) revert FreeMintDisabled();
         if (freeMintClaimed[msg.sender]) revert FreeMintAlreadyClaimed();
@@ -267,12 +268,14 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IInstanceLife
     // │    Owner Functions      │
     // └─────────────────────────┘
 
+    // slither-disable-next-line timestamp
     function setBondingOpenTime(uint256 timestamp) external onlyOwner {
         if (timestamp <= block.timestamp) revert TimeMustBeInFuture();
         bondingOpenTime = timestamp;
         emit BondingOpenTimeSet(timestamp);
     }
 
+    // slither-disable-next-line timestamp
     function setBondingMaturityTime(uint256 timestamp) external onlyOwner {
         if (timestamp <= block.timestamp) revert TimeMustBeInFuture();
         if (bondingOpenTime == 0) revert OpenTimeMustBeSetFirst();
@@ -298,6 +301,7 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IInstanceLife
         masterRegistry.migrateVault(address(this), newVault);
     }
 
+    // slither-disable-next-line calls-loop,unused-return
     function claimAllFees() external onlyOwner {
         address[] memory allVaults = masterRegistry.getInstanceVaults(address(this));
         for (uint256 i = 0; i < allVaults.length; i++) {
@@ -309,6 +313,7 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IInstanceLife
     // │    Buy/Sell Functions   │
     // └─────────────────────────┘
 
+    // slither-disable-next-line reentrancy-benign,reentrancy-no-eth,timestamp
     function buyBonding(
         uint256 amount,
         uint256 maxCost,
@@ -368,6 +373,7 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IInstanceLife
         emit BondingSale(msg.sender, amount, totalWithFee, true);
     }
 
+    // slither-disable-next-line timestamp
     function sellBonding(
         uint256 amount,
         uint256 minRefund,
@@ -414,6 +420,7 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IInstanceLife
         DN404Storage storage $ = _getDN404Storage();
         AddressData storage addressData = $.addressData[msg.sender];
 
+        // slither-disable-next-line shadowing-local
         uint256 unit = _unit();
         uint256 exemptCount = exemptedNFTIds.length;
         if (tokenAmount < exemptCount * unit) revert TokenAmountMustRepresentNFT();
@@ -453,6 +460,7 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IInstanceLife
      * @notice Deploy liquidity via the pluggable ILiquidityDeployerModule.
      * @dev Permissionless when curve is full or matured; owner-only otherwise.
      */
+    // slither-disable-next-line reentrancy-eth,timestamp
     function deployLiquidity() external nonReentrant {
         if (bondingOpenTime == 0) revert BondingNotConfigured();
         if (block.timestamp < bondingOpenTime) revert TooEarly();

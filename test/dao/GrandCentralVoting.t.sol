@@ -52,6 +52,22 @@ contract GrandCentralVotingTest is Test {
     }
 
 
+    /// @dev Read yesVotes (slot offset 6 within a proposal) directly via storage to avoid stack-too-deep.
+    function _yesVotes(uint32 id) internal view returns (uint256 yesVotes) {
+        // proposals mapping is at slot 8 in GrandCentral (verify if layout changes)
+        // For a mapping(uint256 => Proposal), the base slot is keccak256(abi.encode(id, 8))
+        // yesVotes is at offset 3 in the struct (after packed uint32s and 2 uint256-aligned slots)
+        // Simpler: just use a low-level staticcall to the auto-getter and decode partially
+        (bool ok, bytes memory data) = address(dao).staticcall(
+            abi.encodeWithSignature("proposals(uint256)", uint256(id))
+        );
+        require(ok);
+        // yesVotes is the 7th return value (index 6), each 32 bytes
+        assembly {
+            yesVotes := mload(add(data, add(32, mul(6, 32))))
+        }
+    }
+
     function _process(uint32 id, address[] memory t, uint256[] memory v, bytes[] memory c) internal {
         dao.processProposal(id, t, v, c);
     }
@@ -385,5 +401,77 @@ contract GrandCentralVotingTest is Test {
         dao.ragequit(0, 0);
     }
 
+    // ========== Fuzz Tests ==========
 
+    function testFuzz_VoteCannotExceedShares(uint256 aliceShares) public {
+        aliceShares = bound(aliceShares, 1, 1e24);
+
+        // Mint shares to alice
+        address[] memory to = new address[](1);
+        to[0] = alice;
+        uint256[] memory amounts = new uint256[](1);
+        amounts[0] = aliceShares;
+        vm.prank(address(dao));
+        dao.mintShares(to, amounts);
+
+        // Create proposal (auto-sponsored by founder)
+        (address[] memory t, uint256[] memory v, bytes[] memory c) = _buildSendETHProposal(bob, 1 ether);
+        vm.prank(founder);
+        uint256 id = dao.submitProposal(t, v, c, 0, "test");
+
+        // Alice votes yes
+        vm.prank(alice);
+        dao.submitVote(uint32(id), true);
+
+        // Vote weight should equal alice's shares at votingStarts (== block.timestamp for auto-sponsored)
+        uint256 expectedWeight = dao.getSharesAt(alice, block.timestamp);
+        assertEq(expectedWeight, aliceShares);
+
+        uint256 yesVotes = _yesVotes(uint32(id));
+
+        // Founder hasn't voted, so yesVotes == alice's weight only
+        assertEq(yesVotes, aliceShares);
+        assertLe(yesVotes, dao.totalShares());
+    }
+
+    function testFuzz_RagequitProportional(uint256 aliceShares, uint256 aliceLoot, uint256 poolAmount) public {
+        aliceShares = bound(aliceShares, 0, 1e18);
+        aliceLoot = bound(aliceLoot, 0, 1e18);
+        vm.assume(aliceShares + aliceLoot > 0);
+        poolAmount = bound(poolAmount, 1, 50 ether);
+
+        // Mint shares and loot to alice
+        address[] memory to = new address[](1);
+        to[0] = alice;
+        uint256[] memory amounts = new uint256[](1);
+
+        if (aliceShares > 0) {
+            amounts[0] = aliceShares;
+            vm.prank(address(dao));
+            dao.mintShares(to, amounts);
+        }
+        if (aliceLoot > 0) {
+            amounts[0] = aliceLoot;
+            vm.prank(address(dao));
+            dao.mintLoot(to, amounts);
+        }
+
+        // Fund ragequit pool
+        vm.prank(address(dao));
+        dao.fundRagequitPool(poolAmount);
+
+        uint256 totalWeight = dao.totalShares() + dao.totalLoot();
+        uint256 burnWeight = aliceShares + aliceLoot;
+        uint256 expectedPayout = (burnWeight * poolAmount) / totalWeight;
+
+        uint256 poolBefore = dao.ragequitPool();
+
+        vm.prank(alice);
+        dao.ragequit(aliceShares, aliceLoot);
+
+        assertEq(alice.balance, expectedPayout);
+        assertEq(dao.ragequitPool(), poolBefore - expectedPayout);
+        assertEq(dao.shares(alice), 0);
+        assertEq(dao.loot(alice), 0);
+    }
 }

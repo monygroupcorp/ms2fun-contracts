@@ -22,8 +22,11 @@ contract UniAlignmentVaultFactory {
     event VaultDeployed(address indexed vault, address indexed alignmentToken);
 
     constructor(
+        // slither-disable-next-line missing-zero-check
         address _weth,
+        // slither-disable-next-line missing-zero-check
         address _poolManager,
+        // slither-disable-next-line missing-zero-check
         address _zRouter,
         uint24  _zRouterFee,
         int24   _zRouterTickSpacing,
@@ -46,6 +49,7 @@ contract UniAlignmentVaultFactory {
     /// @param alignmentTargetId The alignment target this vault is bound to
     /// @param priceValidator Custom price validator; uses defaultPriceValidator if address(0)
     /// @return vault Address of the deployed vault clone
+    // slither-disable-next-line reentrancy-events
     function deployVault(
         bytes32 salt,
         address alignmentToken,

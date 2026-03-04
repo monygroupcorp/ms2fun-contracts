@@ -621,4 +621,83 @@ contract ERC721AuctionFactoryTest is Test {
         // globalMessageRegistry is now set at factory construction, passed to instances as immutable
         assertTrue(inst.getGlobalMessageRegistry() != address(0));
     }
+
+    // ┌─────────────────────────┐
+    // │      Fuzz Tests         │
+    // └─────────────────────────┘
+
+    function testFuzz_BidIncrementEnforced(uint256 firstBidRaw, uint256 secondBidRaw) public {
+        ERC721AuctionInstance inst = _createDefaultInstance();
+
+        uint256 minBid = 0.1 ether;
+        vm.prank(artist);
+        inst.queuePiece{value: minBid}("ipfs://fuzz1");
+
+        // Bound first bid to [minBid, 100 ether]
+        uint256 firstBid = bound(firstBidRaw, minBid, 100 ether);
+
+        vm.deal(bidder1, firstBid);
+        vm.prank(bidder1);
+        inst.createBid{value: firstBid}(1, bytes(""));
+
+        ERC721AuctionInstance.Auction memory auction = inst.getAuction(1);
+        assertEq(auction.highBid, firstBid);
+
+        // Second bid must be >= highBid + bidIncrement
+        uint256 threshold = firstBid + BID_INCREMENT;
+
+        // Bids below threshold must revert
+        uint256 lowBid = bound(secondBidRaw, minBid, threshold - 1);
+        vm.deal(bidder2, lowBid);
+        vm.prank(bidder2);
+        vm.expectRevert(BidTooLow.selector);
+        inst.createBid{value: lowBid}(1, bytes(""));
+
+        // Bid at exactly threshold must succeed
+        vm.deal(bidder2, threshold);
+        vm.prank(bidder2);
+        inst.createBid{value: threshold}(1, bytes(""));
+
+        auction = inst.getAuction(1);
+        assertEq(auction.highBidder, bidder2);
+        assertEq(auction.highBid, threshold);
+    }
+
+    function testFuzz_SettlementSplitCorrect(uint256 highBidRaw) public {
+        // Bound to [0.01 ether, 10_000 ether] — realistic auction range
+        uint256 highBid = bound(highBidRaw, 0.01 ether, 10_000 ether);
+
+        ERC721AuctionInstance inst = _createDefaultInstance();
+
+        uint256 deposit = 0.01 ether;
+        vm.prank(artist);
+        inst.queuePiece{value: deposit}("ipfs://fuzz2");
+
+        vm.deal(bidder1, highBid);
+        vm.prank(bidder1);
+        inst.createBid{value: highBid}(1, bytes(""));
+
+        ERC721AuctionInstance.Auction memory auction = inst.getAuction(1);
+        vm.warp(auction.endTime);
+
+        uint256 artistBalBefore = artist.balance;
+        uint256 vaultBalBefore = address(vault).balance;
+        uint256 treasuryBalBefore = treasury.balance;
+
+        inst.settleAuction(1);
+
+        uint256 protocolReceived = treasury.balance - treasuryBalBefore;
+        uint256 vaultReceived = address(vault).balance - vaultBalBefore;
+        uint256 artistReceived = artist.balance - artistBalBefore;
+
+        // Artist receives deposit refund + creator cut, so subtract deposit to get creator cut
+        uint256 creatorCut = artistReceived - deposit;
+
+        // protocolCut + vaultCut + creatorCut must equal the winning bid exactly
+        assertEq(
+            protocolReceived + vaultReceived + creatorCut,
+            highBid,
+            "settlement split does not sum to highBid"
+        );
+    }
 }

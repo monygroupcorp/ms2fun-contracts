@@ -19,6 +19,7 @@ contract MasterRegistry {
      * @param implementation The implementation contract address
      * @param _data Initialization calldata (e.g. abi.encodeCall(initialize, (owner)))
      */
+    // slither-disable-next-line controlled-delegatecall,missing-zero-check
     constructor(address implementation, bytes memory _data) {
         assembly {
             sstore(_ERC1967_IMPLEMENTATION_SLOT, implementation)

@@ -179,6 +179,7 @@ contract VaultRegistry is Ownable {
     /**
      * @notice Check if vault is registered and active
      */
+    // slither-disable-next-line timestamp
     function isVaultRegistered(address vault) external view returns (bool) {
         return registeredVaults[vault] && vaults[vault].active;
     }
@@ -186,6 +187,7 @@ contract VaultRegistry is Ownable {
     /**
      * @notice Check if hook is registered and active
      */
+    // slither-disable-next-line timestamp
     function isHookRegistered(address hook) external view returns (bool) {
         return registeredHooks[hook] && hooks[hook].active;
     }

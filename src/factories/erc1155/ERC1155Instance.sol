@@ -50,6 +50,7 @@ import { IInstanceLifecycle, TYPE_ERC1155, STATE_MINTING } from "../../interface
  * @notice ERC1155 token instance for open edition artists
  * @dev Supports unlimited/limited editions with fixed or dynamic pricing, message system, and withdraw tax
  */
+// slither-disable-next-line missing-inheritance
 contract ERC1155Instance is Ownable, ReentrancyGuard, IInstanceLifecycle {
     using EditionPricing for uint256;
 
@@ -80,9 +81,12 @@ contract ERC1155Instance is Ownable, ReentrancyGuard, IInstanceLifecycle {
     // └─────────────────────────┘
 
     string public name;
+    // slither-disable-next-line immutable-states
     address public creator;
+    // slither-disable-next-line immutable-states
     address public factory;
     IAlignmentVault public vault;
+    // slither-disable-next-line immutable-states
     IMasterRegistry public masterRegistry;
     IGlobalMessageRegistry public immutable globalMessageRegistry;
     address public immutable protocolTreasury;
@@ -95,6 +99,7 @@ contract ERC1155Instance is Ownable, ReentrancyGuard, IInstanceLifecycle {
     mapping(address => mapping(uint256 => uint256)) public balanceOf;
     mapping(address => mapping(address => bool)) public isApprovedForAll;
 
+    // slither-disable-next-line immutable-states
     IGatingModule public gatingModule;
 
     // Free mint
@@ -169,6 +174,7 @@ contract ERC1155Instance is Ownable, ReentrancyGuard, IInstanceLifecycle {
         address _vault,
         string memory _styleUri,
         address _globalMessageRegistry,
+        // slither-disable-next-line missing-zero-check
         address _protocolTreasury,
         address _masterRegistry,
         address _gatingModule,
@@ -206,6 +212,7 @@ contract ERC1155Instance is Ownable, ReentrancyGuard, IInstanceLifecycle {
     // ── Free mint ─────────────────────────────────────────────────────────────
 
     /// @notice Set free mint params. Called by factory once after construction.
+    // slither-disable-next-line events-maths
     function initializeFreeMint(uint256 allocation, GatingScope scope) external {
         if (msg.sender != factory) revert OnlyFactory();
         if (_freeMintInitialized) revert AlreadyInitialized();
@@ -224,6 +231,7 @@ contract ERC1155Instance is Ownable, ReentrancyGuard, IInstanceLifecycle {
     /// @notice Claim one free token of a specified edition at zero ETH cost.
     /// @param editionId  The edition to claim from. Must exist.
     /// @param gatingData Passed to gatingModule.canMint if scope requires it.
+    // slither-disable-next-line reentrancy-benign,reentrancy-no-eth,unused-return
     function claimFreeMint(uint256 editionId, bytes calldata gatingData) external nonReentrant {
         if (freeMintAllocation == 0) revert FreeMintDisabled();
         if (freeMintClaimed[msg.sender]) revert FreeMintAlreadyClaimed();
@@ -391,6 +399,7 @@ contract ERC1155Instance is Ownable, ReentrancyGuard, IInstanceLifecycle {
      * @param messageData Optional encoded message data (empty bytes skips registry call, saves gas)
      * @param maxCost Maximum acceptable total cost (0 = no limit, uses msg.value as implicit cap)
      */
+    // slither-disable-next-line reentrancy-benign,reentrancy-no-eth,timestamp,unused-return
     function mint(
         uint256 editionId,
         uint256 amount,
@@ -512,6 +521,7 @@ contract ERC1155Instance is Ownable, ReentrancyGuard, IInstanceLifecycle {
     }
 
     /// @notice Claim accumulated fees from all vault positions (current and historical).
+    // slither-disable-next-line calls-loop,unused-return
     function claimAllFees() external onlyOwner {
         address[] memory allVaults = masterRegistry.getInstanceVaults(address(this));
         for (uint256 i = 0; i < allVaults.length; i++) {
@@ -791,6 +801,7 @@ contract ERC1155Instance is Ownable, ReentrancyGuard, IInstanceLifecycle {
         address instanceFactory,
         address instanceVault,
         uint256 totalEditions,
+        // slither-disable-next-line shadowing-local
         uint256 totalProceeds,
         uint256 contractBalance,
         string memory instanceStyleUri

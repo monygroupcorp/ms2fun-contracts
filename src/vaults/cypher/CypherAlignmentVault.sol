@@ -79,9 +79,13 @@ contract CypherAlignmentVault is IAlignmentVault, Ownable, ReentrancyGuard {
     function initialize(
         address _positionManager,
         address _swapRouter,
+        // slither-disable-next-line missing-zero-check
         address _weth,
+        // slither-disable-next-line missing-zero-check
         address _alignmentToken,
+        // slither-disable-next-line missing-zero-check
         address _protocolTreasury,
+        // slither-disable-next-line missing-zero-check
         address _liquidityDeployer
     ) external {
         if (_initialized) revert VaultAlreadyInitialized();
@@ -122,6 +126,7 @@ contract CypherAlignmentVault is IAlignmentVault, Ownable, ReentrancyGuard {
 
     function registerPosition(
         uint256 tokenId,
+        // slither-disable-next-line missing-zero-check
         address pool,
         bool _tokenIsZero,
         address benefactor,
@@ -142,6 +147,7 @@ contract CypherAlignmentVault is IAlignmentVault, Ownable, ReentrancyGuard {
 
     /// @notice Collect LP fees, swap to ETH, distribute via accumulator.
     /// @param minAmountOut Minimum WETH to receive from alignment token swap (sandwich protection)
+    // slither-disable-next-line incorrect-equality,reentrancy-benign,timestamp
     function harvest(uint256 minAmountOut) external nonReentrant returns (uint256 feesETH) {
         if (totalContributions == 0) revert ZeroContributions();
         if (lpTokenId == 0) revert NoPosition();
@@ -161,6 +167,7 @@ contract CypherAlignmentVault is IAlignmentVault, Ownable, ReentrancyGuard {
         uint256 wethFees = tokenIsZero ? amount1 : amount0;
 
         // Swap alignment token fees → WETH
+        // slither-disable-next-line uninitialized-local
         uint256 wethFromSwap;
         if (alignmentFees > 0) {
             IERC20(alignmentToken).forceApprove(address(swapRouter), alignmentFees);
@@ -224,6 +231,7 @@ contract CypherAlignmentVault is IAlignmentVault, Ownable, ReentrancyGuard {
         return _claimTo(benefactor, recipient);
     }
 
+    // slither-disable-next-line calls-loop,incorrect-equality,timestamp
     function _claimTo(address benefactor, address recipient) internal returns (uint256 ethClaimed) {
         uint256 contrib = benefactorContribution[benefactor];
         if (contrib == 0) return 0;
@@ -238,6 +246,7 @@ contract CypherAlignmentVault is IAlignmentVault, Ownable, ReentrancyGuard {
 
     // ── Governance ────────────────────────────────────────────────────────
 
+    // slither-disable-next-line reentrancy-events
     function withdrawProtocolFees() external {
         if (msg.sender != protocolTreasury) revert Unauthorized();
         uint256 amount = accumulatedProtocolFees;

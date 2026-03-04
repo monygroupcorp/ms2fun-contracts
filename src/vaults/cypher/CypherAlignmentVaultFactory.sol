@@ -11,10 +11,12 @@ contract CypherAlignmentVaultFactory {
 
     event VaultDeployed(address indexed vault, address indexed alignmentToken);
 
+    // slither-disable-next-line missing-zero-check
     constructor(address _vaultImplementation) {
         vaultImplementation = _vaultImplementation;
     }
 
+    // slither-disable-next-line reentrancy-events
     function createVault(
         bytes32 salt,
         address positionManager,

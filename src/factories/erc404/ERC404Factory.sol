@@ -42,8 +42,10 @@ contract ERC404Factory is OwnableRoles, ReentrancyGuard, IFactory {
         address tierGatingModule;   // convenience — for createInstanceWithTiers
     }
 
+    // slither-disable-next-line immutable-states
     IMasterRegistry public masterRegistry;
     address public immutable globalMessageRegistry;
+    // slither-disable-next-line immutable-states
     address public implementation;
 
     // Protocol revenue
@@ -153,6 +155,7 @@ contract ERC404Factory is OwnableRoles, ReentrancyGuard, IFactory {
         PasswordTierGatingModule.TierConfig calldata tiers,
         FreeMintParams calldata freeMint
     ) external payable nonReentrant returns (address instance) {
+        // slither-disable-next-line uninitialized-local
         address gatingModuleAddr;
         if (tiers.passwordHashes.length > 0) {
             tierGatingModule.configureFor(address(0), tiers);

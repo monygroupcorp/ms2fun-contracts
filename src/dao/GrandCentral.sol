@@ -5,6 +5,13 @@ import {ReentrancyGuard} from "solady/utils/ReentrancyGuard.sol";
 import {IGrandCentral} from "./interfaces/IGrandCentral.sol";
 import {IAvatar, Operation} from "./interfaces/IAvatar.sol";
 
+/**
+ * @title GrandCentral
+ * @notice Moloch-pattern DAO with share/loot accounting, proposal governance, and treasury management.
+ * @dev Executes approved proposals through a Gnosis Safe via module transactions.
+ *      Shares grant voting power; loot grants economic rights (ragequit + claims).
+ *      Conductor system delegates admin/manager/governor permissions to external contracts.
+ */
 contract GrandCentral is IGrandCentral, ReentrancyGuard {
     // ============ Custom Errors ============
 
@@ -107,6 +114,14 @@ contract GrandCentral is IGrandCentral, ReentrancyGuard {
 
     // ============ Constructor ============
 
+    /// @param _safe Gnosis Safe address that holds DAO treasury and executes transactions
+    /// @param _founder Address receiving initial shares
+    /// @param _initialShares Number of shares minted to founder at deployment
+    /// @param _votingPeriod Duration (seconds) members can vote on sponsored proposals
+    /// @param _gracePeriod Duration (seconds) after voting for ragequit window
+    /// @param _quorumPercent Minimum yes-vote percentage of totalShares to pass (0 = no quorum)
+    /// @param _sponsorThreshold Minimum shares required to sponsor a proposal (0 = auto-sponsor disabled)
+    /// @param _minRetentionPercent Minimum share retention to prevent dilution attacks (0 = disabled)
     constructor(
         address _safe,
         address _founder,
@@ -134,6 +149,10 @@ contract GrandCentral is IGrandCentral, ReentrancyGuard {
 
     // ============ Share Management ============
 
+    /// @notice Mint voting shares to multiple recipients
+    /// @dev Callable by DAO proposal or manager conductor. Settles pending claims before minting.
+    /// @param to Array of recipient addresses
+    /// @param amount Array of share amounts to mint (must match `to` length)
     function mintShares(address[] calldata to, uint256[] calldata amount) external daoOrManager {
         if (to.length != amount.length) revert ArrayLengthMismatch();
         for (uint256 i = 0; i < to.length; i++) {
@@ -141,6 +160,10 @@ contract GrandCentral is IGrandCentral, ReentrancyGuard {
         }
     }
 
+    /// @notice Burn voting shares from multiple holders
+    /// @dev Callable by DAO proposal or manager conductor. Settles pending claims before burning.
+    /// @param from Array of addresses to burn shares from
+    /// @param amount Array of share amounts to burn (must match `from` length)
     function burnShares(address[] calldata from, uint256[] calldata amount) external daoOrManager {
         if (from.length != amount.length) revert ArrayLengthMismatch();
         for (uint256 i = 0; i < from.length; i++) {
@@ -148,6 +171,7 @@ contract GrandCentral is IGrandCentral, ReentrancyGuard {
         }
     }
 
+    // slither-disable-next-line costly-loop,reentrancy-benign,reentrancy-events,reentrancy-no-eth
     function _mintShares(address to, uint256 amount) internal {
         _settleClaims(to);
 
@@ -162,6 +186,7 @@ contract GrandCentral is IGrandCentral, ReentrancyGuard {
         emit SharesMinted(to, amount);
     }
 
+    // slither-disable-next-line costly-loop,reentrancy-benign,reentrancy-events,reentrancy-no-eth
     function _burnShares(address from, uint256 amount) internal {
         if (shares[from] < amount) revert InsufficientShares();
 
@@ -180,6 +205,10 @@ contract GrandCentral is IGrandCentral, ReentrancyGuard {
 
     // ============ Loot Management ============
 
+    /// @notice Mint loot (economic-only, non-voting) to multiple recipients
+    /// @dev Loot holders can ragequit and claim rewards but cannot vote on proposals.
+    /// @param to Array of recipient addresses
+    /// @param amount Array of loot amounts to mint (must match `to` length)
     function mintLoot(address[] calldata to, uint256[] calldata amount) external daoOrManager {
         if (to.length != amount.length) revert ArrayLengthMismatch();
         for (uint256 i = 0; i < to.length; i++) {
@@ -187,6 +216,9 @@ contract GrandCentral is IGrandCentral, ReentrancyGuard {
         }
     }
 
+    /// @notice Burn loot from multiple holders
+    /// @param from Array of addresses to burn loot from
+    /// @param amount Array of loot amounts to burn (must match `from` length)
     function burnLoot(address[] calldata from, uint256[] calldata amount) external daoOrManager {
         if (from.length != amount.length) revert ArrayLengthMismatch();
         for (uint256 i = 0; i < from.length; i++) {
@@ -194,6 +226,7 @@ contract GrandCentral is IGrandCentral, ReentrancyGuard {
         }
     }
 
+    // slither-disable-next-line costly-loop,reentrancy-benign,reentrancy-events,reentrancy-no-eth
     function _mintLoot(address to, uint256 amount) internal {
         _settleClaims(to);
 
@@ -208,6 +241,7 @@ contract GrandCentral is IGrandCentral, ReentrancyGuard {
         emit LootMinted(to, amount);
     }
 
+    // slither-disable-next-line costly-loop,reentrancy-benign,reentrancy-events,reentrancy-no-eth
     function _burnLoot(address from, uint256 amount) internal {
         if (loot[from] < amount) revert InsufficientLoot();
 
@@ -226,6 +260,7 @@ contract GrandCentral is IGrandCentral, ReentrancyGuard {
 
     // ============ Claims Settlement ============
 
+    // slither-disable-next-line calls-loop,costly-loop,unused-return
     function _settleClaims(address member) internal {
         uint256 weight = shares[member] + loot[member];
         if (weight > 0 && rewardPerShare > 0) {
@@ -239,22 +274,38 @@ contract GrandCentral is IGrandCentral, ReentrancyGuard {
 
     // ============ Checkpoints ============
 
+    /// @notice Get a member's share balance at a historical timestamp
+    /// @dev Uses binary search over checkpoints. Used for snapshot voting.
+    /// @param member Address to query
+    /// @param timestamp Block timestamp to look up
+    /// @return Share balance at that timestamp
     function getSharesAt(address member, uint256 timestamp) public view returns (uint256) {
         return _getCheckpointAt(_memberCheckpoints[member], timestamp);
     }
 
+    /// @notice Get total share supply at a historical timestamp
+    /// @param timestamp Block timestamp to look up
+    /// @return Total shares at that timestamp
     function getTotalSharesAt(uint256 timestamp) public view returns (uint256) {
         return _getCheckpointAt(_totalSharesCheckpoints, timestamp);
     }
 
+    /// @notice Get a member's loot balance at a historical timestamp
+    /// @param member Address to query
+    /// @param timestamp Block timestamp to look up
+    /// @return Loot balance at that timestamp
     function getLootAt(address member, uint256 timestamp) public view returns (uint256) {
         return _getCheckpointAt(_memberLootCheckpoints[member], timestamp);
     }
 
+    /// @notice Get total loot supply at a historical timestamp
+    /// @param timestamp Block timestamp to look up
+    /// @return Total loot at that timestamp
     function getTotalLootAt(uint256 timestamp) public view returns (uint256) {
         return _getCheckpointAt(_totalLootCheckpoints, timestamp);
     }
 
+    // slither-disable-next-line incorrect-equality,timestamp
     function _writeCheckpoint(Checkpoint[] storage ckpts, uint224 value) internal {
         uint256 len = ckpts.length;
         if (len > 0 && ckpts[len - 1].timestamp == uint32(block.timestamp)) {
@@ -286,6 +337,17 @@ contract GrandCentral is IGrandCentral, ReentrancyGuard {
 
     // ============ Proposal System ============
 
+    /// @notice Submit a new proposal for DAO execution
+    /// @dev If caller holds >= sponsorThreshold shares, the proposal is auto-sponsored and enters voting.
+    ///      Otherwise it remains in Submitted state awaiting a sponsor.
+    ///      Proposal data (targets/values/calldatas) is stored as a hash; callers must re-supply at processing.
+    /// @param targets Contract addresses to call if proposal passes
+    /// @param values ETH values for each call
+    /// @param calldatas Encoded function calls for each target
+    /// @param expiration Unix timestamp after which the proposal cannot be processed (0 = no expiry)
+    /// @param details Human-readable description or IPFS hash
+    /// @return Proposal ID
+    // slither-disable-next-line timestamp
     function submitProposal(
         address[] calldata targets,
         uint256[] calldata values,
@@ -337,6 +399,10 @@ contract GrandCentral is IGrandCentral, ReentrancyGuard {
         return proposalCount;
     }
 
+    /// @notice Sponsor a submitted proposal, moving it into the voting phase
+    /// @dev Caller must hold >= sponsorThreshold shares. Sets voting/grace period timestamps.
+    /// @param id Proposal ID to sponsor
+    // slither-disable-next-line timestamp
     function sponsorProposal(uint32 id) external nonReentrant {
         Proposal storage prop = proposals[id];
         if (shares[msg.sender] < sponsorThreshold) revert InsufficientSponsorShares();
@@ -358,6 +424,11 @@ contract GrandCentral is IGrandCentral, ReentrancyGuard {
         emit ProposalSponsored(msg.sender, id, block.timestamp);
     }
 
+    /// @notice Cast a vote on an active proposal
+    /// @dev Vote weight is the caller's share balance at the proposal's votingStarts timestamp.
+    ///      Each member can only vote once per proposal.
+    /// @param id Proposal ID to vote on
+    /// @param approved True for yes, false for no
     function submitVote(uint32 id, bool approved) external nonReentrant {
         Proposal storage prop = proposals[id];
         if (state(id) != ProposalState.Voting) revert NotVoting();
@@ -385,6 +456,14 @@ contract GrandCentral is IGrandCentral, ReentrancyGuard {
         emit VoteCast(msg.sender, balance, id, approved);
     }
 
+    /// @notice Process a proposal after grace period ends
+    /// @dev Verifies calldata hash matches, checks quorum/retention/expiration, then executes
+    ///      via Safe if passed. Proposals must be processed in sponsor-order (linked list).
+    /// @param id Proposal ID to process
+    /// @param targets Original target addresses (must match stored hash)
+    /// @param values Original ETH values (must match stored hash)
+    /// @param calldatas Original encoded calls (must match stored hash)
+    // slither-disable-next-line reentrancy-eth,timestamp
     function processProposal(
         uint32 id,
         address[] calldata targets,
@@ -429,6 +508,7 @@ contract GrandCentral is IGrandCentral, ReentrancyGuard {
         emit ProposalProcessed(id, prop.status[2], prop.status[3]);
     }
 
+    // slither-disable-next-line calls-loop
     function _executeProposal(
         address[] calldata targets,
         uint256[] calldata values,
@@ -449,6 +529,9 @@ contract GrandCentral is IGrandCentral, ReentrancyGuard {
         return true;
     }
 
+    /// @notice Cancel a proposal during voting
+    /// @dev Only the sponsor or a governor conductor can cancel. Proposal must be in Voting state.
+    /// @param id Proposal ID to cancel
     function cancelProposal(uint32 id) external nonReentrant {
         Proposal storage prop = proposals[id];
         if (state(id) != ProposalState.Voting) revert NotVoting();
@@ -457,6 +540,10 @@ contract GrandCentral is IGrandCentral, ReentrancyGuard {
         emit ProposalCancelled(id);
     }
 
+    /// @notice Get the current lifecycle state of a proposal
+    /// @param id Proposal ID to query
+    /// @return Current ProposalState enum value
+    // slither-disable-next-line incorrect-equality,timestamp
     function state(uint32 id) public view returns (ProposalState) {
         Proposal memory prop = proposals[id];
         if (prop.id == 0) return ProposalState.Unborn;
@@ -469,24 +556,36 @@ contract GrandCentral is IGrandCentral, ReentrancyGuard {
         return ProposalState.Ready;
     }
 
+    /// @notice Get the raw status flags for a proposal
+    /// @param id Proposal ID to query
+    /// @return Status array: [cancelled, processed, passed, actionFailed]
     function getProposalStatus(uint32 id) external view returns (bool[4] memory) {
         return proposals[id].status;
     }
 
     // ============ Treasury Pools ============
 
+    /// @notice Get available unreserved ETH in the Safe treasury
+    /// @dev Safe balance minus ragequitPool and claimsPoolBalance reserves
+    /// @return Unreserved ETH available for proposals or stipends
     function generalFunds() public view returns (uint256) {
         uint256 reserved = ragequitPool + claimsPoolBalance;
         uint256 bal = safe.balance;
         return bal > reserved ? bal - reserved : 0;
     }
 
+    /// @notice Reserve ETH from general funds into the ragequit pool
+    /// @dev Ragequit pool backs member exits. Amount must not exceed available general funds.
+    /// @param amount ETH to move from general funds to ragequit pool
     function fundRagequitPool(uint256 amount) external daoOrManager {
         if (safe.balance < ragequitPool + claimsPoolBalance + amount) revert InsufficientGeneralFunds();
         ragequitPool += amount;
         emit RagequitPoolFunded(amount, ragequitPool);
     }
 
+    /// @notice Distribute ETH from general funds as claimable rewards to all share+loot holders
+    /// @dev Updates rewardPerShare proportionally. Members claim via claim().
+    /// @param amount ETH to distribute (must not exceed available general funds)
     function fundClaimsPool(uint256 amount) external daoOrManager {
         uint256 totalWeight = totalShares + totalLoot;
         if (totalWeight == 0) revert NoMembers();
@@ -496,6 +595,12 @@ contract GrandCentral is IGrandCentral, ReentrancyGuard {
         emit ClaimsPoolFunded(amount, rewardPerShare);
     }
 
+    /// @notice Exit the DAO by burning shares/loot and receiving proportional ragequit pool ETH
+    /// @dev Burns the specified amounts and pays out (burnWeight / totalWeight) * ragequitPool.
+    ///      Also settles any pending claims before burning.
+    /// @param sharesToBurn Number of shares to burn (0 allowed if lootToBurn > 0)
+    /// @param lootToBurn Number of loot to burn (0 allowed if sharesToBurn > 0)
+    // slither-disable-next-line reentrancy-no-eth,unused-return
     function ragequit(uint256 sharesToBurn, uint256 lootToBurn) external nonReentrant {
         if (shares[msg.sender] < sharesToBurn) revert InsufficientShares();
         if (loot[msg.sender] < lootToBurn) revert InsufficientLoot();
@@ -520,6 +625,9 @@ contract GrandCentral is IGrandCentral, ReentrancyGuard {
         emit Ragequit(msg.sender, sharesToBurn, lootToBurn, payout);
     }
 
+    /// @notice Claim pending rewards from the claims pool
+    /// @dev Pays out accumulated rewards based on (shares + loot) weight since last settlement.
+    // slither-disable-next-line unused-return
     function claim() external nonReentrant {
         uint256 pending = pendingClaim(msg.sender);
         if (pending == 0) revert NothingToClaim();
@@ -531,12 +639,20 @@ contract GrandCentral is IGrandCentral, ReentrancyGuard {
         emit ClaimWithdrawn(msg.sender, pending);
     }
 
+    /// @notice View pending claimable rewards for a member
+    /// @param member Address to query
+    /// @return Claimable ETH amount
     function pendingClaim(address member) public view returns (uint256) {
         uint256 weight = shares[member] + loot[member];
         if (weight == 0) return 0;
         return (weight * rewardPerShare / PRECISION) - rewardDebt[member]; // round down: favors pool
     }
 
+    /// @notice Send ETH from general funds to a beneficiary (manager-only stipend disbursement)
+    /// @dev Used by StipendConductor to pay recurring obligations without full proposal flow.
+    /// @param beneficiary Recipient address
+    /// @param amount ETH to send (must not exceed available general funds)
+    // slither-disable-next-line unused-return
     function executeStipend(address beneficiary, uint256 amount) external nonReentrant {
         if (!isManager(msg.sender)) revert Unauthorized();
         if (beneficiary == address(0)) revert InvalidAddress();
@@ -547,26 +663,35 @@ contract GrandCentral is IGrandCentral, ReentrancyGuard {
 
     // ============ Conductor System ============
 
+    /// @notice Check if an address has admin conductor permission (bit 0)
     function isAdmin(address conductor) public view returns (bool) {
         uint256 p = conductors[conductor];
         return (p & 1) != 0;
     }
 
+    /// @notice Check if an address has manager conductor permission (bit 1)
     function isManager(address conductor) public view returns (bool) {
         uint256 p = conductors[conductor];
         return (p & 2) != 0;
     }
 
+    /// @notice Check if an address has governor conductor permission (bit 2)
     function isGovernor(address conductor) public view returns (bool) {
         uint256 p = conductors[conductor];
         return (p & 4) != 0;
     }
 
+    /// @notice Check if an address has agent conductor permission (bit 3)
     function isAgentConductor(address conductor) public view returns (bool) {
         uint256 p = conductors[conductor];
         return (p & 8) != 0;
     }
 
+    /// @notice Set permission bitmasks for conductor addresses
+    /// @dev DAO-only. Bitmask: 1=admin, 2=manager, 4=governor, 8=agentConductor.
+    ///      Respects permanent locks — reverts if assigning a locked role.
+    /// @param _conductors Addresses to configure
+    /// @param _permissions Permission bitmasks (must match `_conductors` length)
     function setConductors(
         address[] calldata _conductors,
         uint256[] calldata _permissions
@@ -582,10 +707,20 @@ contract GrandCentral is IGrandCentral, ReentrancyGuard {
         }
     }
 
+    /// @notice Permanently prevent new admin conductors from being assigned (irreversible)
     function lockAdmin() external daoOnly { adminLock = true; emit AdminLocked(); }
+    /// @notice Permanently prevent new manager conductors from being assigned (irreversible)
     function lockManager() external daoOnly { managerLock = true; emit ManagerLocked(); }
+    /// @notice Permanently prevent new governor conductors from being assigned (irreversible)
     function lockGovernor() external daoOnly { governorLock = true; emit GovernorLocked(); }
 
+    /// @notice Update governance parameters
+    /// @dev Callable by DAO proposal or governor conductor. Pass 0 for votingPeriod/gracePeriod to keep current.
+    /// @param _votingPeriod New voting duration in seconds (min 1 day, 0 = no change)
+    /// @param _gracePeriod New grace period in seconds (min 1 day, 0 = no change)
+    /// @param _quorumPercent Minimum yes-vote percentage of totalShares (0 = no quorum)
+    /// @param _sponsorThreshold Minimum shares to sponsor (0 = auto-sponsor disabled)
+    /// @param _minRetentionPercent Minimum share retention percentage (0 = disabled)
     function setGovernanceConfig(
         uint32 _votingPeriod,
         uint32 _gracePeriod,

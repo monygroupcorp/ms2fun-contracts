@@ -6,6 +6,7 @@ import {IERC20} from "../../shared/interfaces/IERC20.sol";
 import {IAlignmentVault} from "../../interfaces/IAlignmentVault.sol";
 import {Currency} from "v4-core/types/Currency.sol";
 import {ILiquidityDeployerModule} from "../../interfaces/ILiquidityDeployerModule.sol";
+import {RevenueSplitLib} from "../../shared/libraries/RevenueSplitLib.sol";
 
 interface IZAMM {
     struct PoolKey {
@@ -40,6 +41,7 @@ contract ZAMMLiquidityDeployerModule is ILiquidityDeployerModule {
     address public immutable zamm;
     uint256 public immutable feeOrHook;
 
+    // slither-disable-next-line missing-zero-check
     constructor(address _zamm, uint256 _feeOrHook) {
         zamm = _zamm;
         feeOrHook = _feeOrHook;
@@ -64,17 +66,19 @@ contract ZAMMLiquidityDeployerModule is ILiquidityDeployerModule {
      * @dev Caller must transfer tokenReserve tokens to this contract before calling.
      *      ETH must equal p.ethReserve exactly.
      */
+    // slither-disable-next-line reentrancy-events
     function deployLiquidity(DeployParams calldata p) external payable override {
         if (msg.value != p.ethReserve) revert ETHMismatch();
         PoolResult memory r = _deployPool(p);
         _payFees(p, r);
     }
 
+    // slither-disable-next-line arbitrary-send-eth,unused-return
     function _deployPool(ILiquidityDeployerModule.DeployParams calldata p) private returns (PoolResult memory r) {
-        // Fixed 1/19/80 split: 1% protocol, 19% vault, 80% LP
-        r.protocolFee = p.ethReserve / 100; // round down (floor): dust absorbed by ethForPool
-        r.vaultCut    = (p.ethReserve * 19) / 100; // round down (floor): dust absorbed by ethForPool
-        r.ethForPool  = p.ethReserve - r.protocolFee - r.vaultCut;
+        RevenueSplitLib.Split memory s = RevenueSplitLib.split(p.ethReserve);
+        r.protocolFee = s.protocolCut;
+        r.vaultCut    = s.vaultCut;
+        r.ethForPool  = s.remainder;
         if (r.ethForPool == 0) revert NoETHForPool();
         if (p.tokenReserve == 0) revert NoTokensForPool();
 
@@ -98,6 +102,7 @@ contract ZAMMLiquidityDeployerModule is ILiquidityDeployerModule {
         );
     }
 
+    // slither-disable-next-line arbitrary-send-eth,reentrancy-events
     function _payFees(ILiquidityDeployerModule.DeployParams calldata p, PoolResult memory r) private {
         // 1% → protocol treasury
         if (r.protocolFee > 0 && p.protocolTreasury != address(0)) {

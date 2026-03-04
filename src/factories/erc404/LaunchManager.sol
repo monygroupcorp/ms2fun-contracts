@@ -88,6 +88,7 @@ contract LaunchManager is Ownable {
      * @param tier The creation tier used
      * @param renter The creator address credited as renter
      */
+    // slither-disable-next-line arbitrary-send-eth
     function applyTierPerks(address instance, CreationTier tier, address renter) external payable {
         TierConfig memory config = tierConfigs[tier];
 

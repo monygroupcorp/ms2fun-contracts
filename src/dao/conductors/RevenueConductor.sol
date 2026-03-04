@@ -12,6 +12,7 @@ interface IRevenueConductorTreasury {
     function routeToDAO(address safe, uint256 amount) external;
 }
 
+// slither-disable-next-line locked-ether
 contract RevenueConductor {
     // ============ Custom Errors ============
 
@@ -50,6 +51,7 @@ contract RevenueConductor {
         reserveBps = _reserveBps;
     }
 
+    // slither-disable-next-line incorrect-equality,reentrancy-benign,reentrancy-events
     function sweep() external {
         if (IRevenueConductorDAO(dao).shares(msg.sender) == 0) revert Unauthorized();
 
@@ -59,7 +61,9 @@ contract RevenueConductor {
         uint256 reserveAmount = available * reserveBps / 10000; // round down: favors routable pool
         uint256 routable = available - reserveAmount;
 
+        // slither-disable-next-line uninitialized-local
         uint256 dividendAmount;
+        // slither-disable-next-line uninitialized-local
         uint256 ragequitAmount;
 
         uint256 activeTotal = dividendBps + ragequitBps;

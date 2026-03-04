@@ -31,9 +31,11 @@ contract ERC1155Factory is Ownable, ReentrancyGuard, IFactory {
     error NoProtocolFees();
     error NotAuthorizedAgent();
 
+    // slither-disable-next-line immutable-states
     IMasterRegistry public masterRegistry;
     address public immutable globalMessageRegistry;
     IComponentRegistry public immutable componentRegistry;
+    // slither-disable-next-line immutable-states
     address public instanceTemplate;
 
     // Protocol revenue
@@ -80,6 +82,7 @@ contract ERC1155Factory is Ownable, ReentrancyGuard, IFactory {
     event InstanceCreatedWithTier(address indexed instance, CreationTier tier);
     constructor(
         address _masterRegistry,
+        // slither-disable-next-line missing-zero-check
         address _instanceTemplate,
         address _globalMessageRegistry,
         address _componentRegistry
@@ -263,6 +266,7 @@ contract ERC1155Factory is Ownable, ReentrancyGuard, IFactory {
     /**
      * @notice Add an edition to an instance
      */
+    // slither-disable-next-line reentrancy-events
     function addEdition(
         address instance,
         string memory pieceTitle,

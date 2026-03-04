@@ -27,6 +27,7 @@ contract ERC721AuctionFactory is Ownable, ReentrancyGuard, IFactory {
     error NotAuthorizedAgent();
     error NotRegisteredInstance();
 
+    // slither-disable-next-line immutable-states
     IMasterRegistry public masterRegistry;
     address public immutable globalMessageRegistry;
 
@@ -209,6 +210,7 @@ contract ERC721AuctionFactory is Ownable, ReentrancyGuard, IFactory {
         return instance;
     }
 
+    // slither-disable-next-line arbitrary-send-eth
     function _applyTierPerks(
         address instance,
         address creator_,

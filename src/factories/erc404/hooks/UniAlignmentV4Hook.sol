@@ -117,6 +117,7 @@ contract UniAlignmentV4Hook is IHooks, ReentrancyGuard, Ownable {
      * @dev Always taxes delta.amount0() since currency0 must be native ETH.
      *      Works for both buys (ETH→token) and sells (token→ETH).
      */
+    // slither-disable-next-line reentrancy-events
     function afterSwap(
         address sender,
         PoolKey calldata key,

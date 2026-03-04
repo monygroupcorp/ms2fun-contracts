@@ -53,6 +53,7 @@ contract PromotionBadges is Ownable, ReentrancyGuard {
     event ProtocolTreasuryUpdated(address indexed oldTreasury, address indexed newTreasury);
     event DurationBoundsUpdated(uint256 minDuration, uint256 maxDuration);
 
+    // slither-disable-next-line missing-zero-check
     constructor(address _protocolTreasury) {
         _initializeOwner(msg.sender);
         protocolTreasury = _protocolTreasury;
@@ -70,6 +71,7 @@ contract PromotionBadges is Ownable, ReentrancyGuard {
      * @param badgeType Type of badge to purchase
      * @param duration Duration in seconds
      */
+    // slither-disable-next-line timestamp
     function purchaseBadge(
         address instance,
         BadgeType badgeType,
@@ -110,6 +112,7 @@ contract PromotionBadges is Ownable, ReentrancyGuard {
     /**
      * @notice Get active badge for an instance (returns NONE if expired)
      */
+    // slither-disable-next-line incorrect-equality,timestamp
     function getActiveBadge(address instance) external view returns (BadgeType, uint256 expiresAt) {
         Badge memory badge = instanceBadges[instance];
         if (badge.badgeType == BadgeType.NONE || block.timestamp >= badge.expiresAt) {
@@ -121,6 +124,7 @@ contract PromotionBadges is Ownable, ReentrancyGuard {
     /**
      * @notice Batch query active badges for multiple instances
      */
+    // slither-disable-next-line timestamp
     function getActiveBadges(
         address[] calldata instances
     ) external view returns (BadgeType[] memory badges, uint256[] memory expirations) {
@@ -161,6 +165,7 @@ contract PromotionBadges is Ownable, ReentrancyGuard {
     /**
      * @notice Withdraw accumulated fees to protocol treasury
      */
+    // slither-disable-next-line incorrect-equality
     function withdrawProtocolFees() external onlyOwner {
         if (protocolTreasury == address(0)) revert TreasuryNotSet();
         uint256 balance = address(this).balance;

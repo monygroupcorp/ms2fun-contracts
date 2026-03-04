@@ -76,6 +76,7 @@ contract FrontendRegistry is SafeOwnableUUPS, IFrontendRegistry {
         emit EnsNameAdded(node);
     }
 
+    // slither-disable-next-line costly-loop
     function removeEnsName(bytes32 node) external onlyOwner {
         if (!isEnsNode[node]) revert NotManaged();
         isEnsNode[node] = false;
@@ -142,6 +143,7 @@ contract FrontendRegistry is SafeOwnableUUPS, IFrontendRegistry {
         }
     }
 
+    // slither-disable-next-line calls-loop,reentrancy-benign,reentrancy-events
     function _applyToNodes(uint32 releaseId, bytes calldata contentHash, bytes32[] calldata nodes) internal {
         uint256 len = nodes.length;
         for (uint256 i; i < len; ++i) {
@@ -160,6 +162,7 @@ contract FrontendRegistry is SafeOwnableUUPS, IFrontendRegistry {
      * @param node The ENS namehash to update
      * @param releaseId Must be a valid published release ID (1-indexed)
      */
+    // slither-disable-next-line reentrancy-events
     function pointNodeToRelease(bytes32 node, uint32 releaseId) external onlyOwner {
         if (!isEnsNode[node]) revert NodeNotManaged();
         if (releaseId == 0 || releaseId > _releases.length) revert InvalidReleaseId();

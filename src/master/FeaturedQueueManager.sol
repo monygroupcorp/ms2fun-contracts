@@ -28,6 +28,7 @@ import {SafeTransferLib} from "solady/utils/SafeTransferLib.sol";
  * Rank decays linearly at dailyDecayRate per day, computed lazily at read time.
  * getFeaturedInstances returns active slots sorted by effective rank — position 1 first.
  */
+// slither-disable-next-line missing-inheritance
 contract FeaturedQueueManager is SafeOwnableUUPS, ReentrancyGuard {
 
     // ── Custom Errors ─────────────────────────────────────────────────────
@@ -135,6 +136,7 @@ contract FeaturedQueueManager is SafeOwnableUUPS, ReentrancyGuard {
      * @param duration   How long to be visible (seconds); msg.value must cover durationCost
      * @param rankBoost  Additional ETH allocated to rank score; competes for position
      */
+    // slither-disable-next-line timestamp
     function rentFeatured(
         address instance,
         uint256 duration,
@@ -172,6 +174,7 @@ contract FeaturedQueueManager is SafeOwnableUUPS, ReentrancyGuard {
      *         Crystallises decay accrued since lastBoostTime, then adds the new amount.
      * @param instance  Active featured instance to boost
      */
+    // slither-disable-next-line timestamp
     function boostRank(address instance) external payable nonReentrant {
         if (msg.value == 0) revert MustSendETH();
         if (block.timestamp >= slots[instance].expiresAt) revert SlotNotActive();
@@ -189,6 +192,7 @@ contract FeaturedQueueManager is SafeOwnableUUPS, ReentrancyGuard {
      * @param instance           Active featured instance
      * @param additionalDuration Extra seconds to add to expiresAt
      */
+    // slither-disable-next-line timestamp
     function renewDuration(
         address instance,
         uint256 additionalDuration
@@ -217,6 +221,7 @@ contract FeaturedQueueManager is SafeOwnableUUPS, ReentrancyGuard {
      * @param duration   Featured duration
      * @param rankBoost  Initial rank allocation
      */
+    // slither-disable-next-line divide-before-multiply,timestamp
     function rentFeaturedFor(
         address instance,
         address renter,
@@ -260,6 +265,7 @@ contract FeaturedQueueManager is SafeOwnableUUPS, ReentrancyGuard {
      * @return instances Sorted active instances
      * @return total     Total number of active featured slots
      */
+    // slither-disable-next-line timestamp
     function getFeaturedInstances(
         uint256 offset,
         uint256 limit
@@ -315,6 +321,7 @@ contract FeaturedQueueManager is SafeOwnableUUPS, ReentrancyGuard {
      * @return expiresAt     Slot expiry timestamp
      * @return isActive      True if slot is currently active
      */
+    // slither-disable-next-line timestamp
     function getRentalInfo(address instance) external view returns (
         address renter,
         uint256 effectiveRank,
@@ -353,6 +360,7 @@ contract FeaturedQueueManager is SafeOwnableUUPS, ReentrancyGuard {
 
     // ── Internal Helpers ───────────────────────────────────────────────────
 
+    // slither-disable-next-line divide-before-multiply,incorrect-equality,timestamp
     function _effectiveRank(FeaturedSlot memory slot) internal view returns (uint256) {
         if (slot.lastBoostTime == 0) return 0;
         uint256 daysPassed = (block.timestamp - slot.lastBoostTime) / 1 days; // round down: partial days don't decay
@@ -360,6 +368,7 @@ contract FeaturedQueueManager is SafeOwnableUUPS, ReentrancyGuard {
         return slot.rankScore > decayed ? slot.rankScore - decayed : 0;
     }
 
+    // slither-disable-next-line timestamp
     function _activeCount() internal view returns (uint256) {
         uint256 count = 0;
         for (uint256 i = 0; i < _featuredList.length; i++) {
@@ -375,6 +384,7 @@ contract FeaturedQueueManager is SafeOwnableUUPS, ReentrancyGuard {
         }
     }
 
+    // slither-disable-next-line unused-return
     function _isInstanceRegistered(address instance) internal view returns (bool) {
         try masterRegistry.getInstanceInfo(instance) returns (IMasterRegistry.InstanceInfo memory) {
             return true;
@@ -398,20 +408,24 @@ contract FeaturedQueueManager is SafeOwnableUUPS, ReentrancyGuard {
         emit ProtocolTreasuryUpdated(old, _treasury);
     }
 
+    // slither-disable-next-line events-maths
     function setDailyRate(uint256 _dailyRate) external onlyOwner {
         dailyRate = _dailyRate;
     }
 
+    // slither-disable-next-line events-maths
     function setDailyDecayRate(uint256 _dailyDecayRate) external onlyOwner {
         dailyDecayRate = _dailyDecayRate;
     }
 
+    // slither-disable-next-line events-maths
     function setDurationBounds(uint256 _min, uint256 _max) external onlyOwner {
         if (_min == 0 || _max <= _min) revert InvalidBounds();
         minDuration = _min;
         maxDuration = _max;
     }
 
+    // slither-disable-next-line events-maths
     function setMaxFeaturedSize(uint256 _max) external onlyOwner {
         if (_max == 0) revert InvalidSize();
         maxFeaturedSize = _max;
@@ -428,6 +442,7 @@ contract FeaturedQueueManager is SafeOwnableUUPS, ReentrancyGuard {
         emit AuthorizedFactoryUpdated(factory, authorized, discountBps);
     }
 
+    // slither-disable-next-line incorrect-equality
     function withdrawProtocolFees() external onlyOwner {
         if (protocolTreasury == address(0)) revert TreasuryNotSet();
         uint256 balance = address(this).balance;

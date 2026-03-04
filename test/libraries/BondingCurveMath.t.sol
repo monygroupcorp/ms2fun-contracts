@@ -761,6 +761,59 @@ contract BondingCurveMathTest is Test {
         }
     }
 
+    function testFuzz_BuySellSymmetry(uint256 supply, uint256 amount) public view {
+        // refund(supply, amount) <= cost(supply - amount, amount) for all valid supply/amount
+        supply = bound(supply, 1, 10_000_000 * 1e18);
+        amount = bound(amount, 1, supply);
+
+        uint256 refund = BondingCurveMath.calculateRefund(standardParams, supply, amount);
+        uint256 cost = BondingCurveMath.calculateCost(standardParams, supply - amount, amount);
+
+        assertLe(refund, cost, "Refund should never exceed cost over same range");
+    }
+
+    function testFuzz_CostMonotonicity(uint256 s1, uint256 s2, uint256 amount) public view {
+        // cost increases with supply: calculateCost(s1, a) <= calculateCost(s2, a) when s2 > s1
+        // Allow small rounding tolerance: each calculateCost subtracts two _calculateIntegralFromZero
+        // calls, each with up to ~4 wei cumulative mulWad floor rounding per term (4 terms).
+        // Two independent cost calls can diverge by up to ~10 wei from rounding alone.
+        uint256 ROUNDING_TOLERANCE = 10;
+        amount = bound(amount, 1e18, 1_000_000 * 1e18);
+        s1 = bound(s1, 0, 8_000_000 * 1e18);
+        s2 = bound(s2, s1 + 1e18, 9_000_000 * 1e18);
+
+        uint256 cost1 = BondingCurveMath.calculateCost(standardParams, s1, amount);
+        uint256 cost2 = BondingCurveMath.calculateCost(standardParams, s2, amount);
+
+        assertLe(cost1, cost2 + ROUNDING_TOLERANCE, "Cost should increase with supply (within rounding)");
+    }
+
+    function testFuzz_RefundMonotonicity(uint256 s1, uint256 s2, uint256 amount) public view {
+        // refund increases with supply: calculateRefund(s1, a) <= calculateRefund(s2, a) when s2 > s1
+        // Same rounding tolerance as CostMonotonicity (see above).
+        uint256 ROUNDING_TOLERANCE = 10;
+        amount = bound(amount, 1e18, 1_000_000 * 1e18);
+        s1 = bound(s1, amount, 8_000_000 * 1e18);
+        s2 = bound(s2, s1 + 1e18, 9_000_000 * 1e18);
+
+        uint256 refund1 = BondingCurveMath.calculateRefund(standardParams, s1, amount);
+        uint256 refund2 = BondingCurveMath.calculateRefund(standardParams, s2, amount);
+
+        assertLe(refund1, refund2 + ROUNDING_TOLERANCE, "Refund should increase with supply (within rounding)");
+    }
+
+    function testFuzz_NonZeroCostAboveThreshold(uint256 supply, uint256 amount) public view {
+        // amount >= normalizationFactor tokens → cost > 0
+        // normalizationFactor is 1e7, so >= 1e7 tokens (1e25 wei) guarantees non-zero scaled delta
+        // Use >= 1 token as practical minimum where cost is reliably non-zero
+        supply = bound(supply, 0, 10_000_000 * 1e18);
+        amount = bound(amount, 1e18, 10_000_000 * 1e18);
+
+        uint256 cost = BondingCurveMath.calculateCost(standardParams, supply, amount);
+
+        assertGt(cost, 0, "Cost should be non-zero when amount >= 1 token");
+    }
+
     function testFuzz_IntegralAdditivity(uint256 a, uint256 b) public view {
         // Test that integral(a,b) + integral(b,c) = integral(a,c)
         a = bound(a, 0, 1_000_000 * 1e18);

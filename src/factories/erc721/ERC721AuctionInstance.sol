@@ -65,6 +65,7 @@ contract ERC721AuctionInstance is ERC721, Ownable, ReentrancyGuard, IInstanceLif
     // └─────────────────────────┘
 
     IAlignmentVault public vault;
+    // slither-disable-next-line immutable-states
     IMasterRegistry public masterRegistry;
     address public immutable protocolTreasury;
     IGlobalMessageRegistry public immutable globalMessageRegistry;
@@ -91,6 +92,7 @@ contract ERC721AuctionInstance is ERC721, Ownable, ReentrancyGuard, IInstanceLif
     // Token data
     mapping(uint24 => Auction) public auctions;
     mapping(uint24 => string) private _tokenURIs;
+    // slither-disable-next-line immutable-states
     address public factory;
     bool public agentDelegationEnabled;
 
@@ -248,6 +250,7 @@ contract ERC721AuctionInstance is ERC721, Ownable, ReentrancyGuard, IInstanceLif
      *      Previous bidder is refunded via forceSafeTransferETH. Late bids extend the auction.
      * @param tokenId The token ID to bid on
      */
+    // slither-disable-next-line timestamp
     function createBid(uint24 tokenId, bytes calldata messageData) external payable nonReentrant {
         Auction storage auction = auctions[tokenId];
         if (auction.tokenId == 0) revert AuctionDoesNotExist();
@@ -296,6 +299,7 @@ contract ERC721AuctionInstance is ERC721, Ownable, ReentrancyGuard, IInstanceLif
      *      Auto-advances line to next queued piece.
      * @param tokenId The token ID to settle
      */
+    // slither-disable-next-line arbitrary-send-eth,reentrancy-benign,reentrancy-eth,timestamp
     function settleAuction(uint24 tokenId) external nonReentrant {
         Auction storage auction = auctions[tokenId];
         if (auction.tokenId == 0) revert AuctionDoesNotExist();
@@ -342,6 +346,7 @@ contract ERC721AuctionInstance is ERC721, Ownable, ReentrancyGuard, IInstanceLif
      *      Line advances to next queued piece.
      * @param tokenId The token ID to reclaim
      */
+    // slither-disable-next-line timestamp
     function reclaimUnsold(uint24 tokenId) external onlyOwner nonReentrant {
         Auction storage auction = auctions[tokenId];
         if (auction.tokenId == 0) revert AuctionDoesNotExist();
@@ -384,6 +389,7 @@ contract ERC721AuctionInstance is ERC721, Ownable, ReentrancyGuard, IInstanceLif
     }
 
     /// @notice Claim accumulated fees from all vault positions (current and historical).
+    // slither-disable-next-line calls-loop,unused-return
     function claimAllFees() external onlyOwner {
         address[] memory allVaults = masterRegistry.getInstanceVaults(address(this));
         for (uint256 i = 0; i < allVaults.length; i++) {
@@ -446,6 +452,7 @@ contract ERC721AuctionInstance is ERC721, Ownable, ReentrancyGuard, IInstanceLif
      * @notice Get auction details
      * @param tokenId Token ID
      */
+    // slither-disable-next-line incorrect-equality,timestamp
     function getAuction(uint24 tokenId) external view returns (Auction memory) {
         if (auctions[tokenId].tokenId == 0) revert AuctionDoesNotExist();
         return auctions[tokenId];

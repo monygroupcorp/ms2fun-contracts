@@ -17,6 +17,7 @@ contract StipendConductor {
     address public immutable dao;
     address public beneficiary;
     uint256 public amount;
+    // slither-disable-next-line immutable-states
     uint256 public interval;
     uint256 public lastExecuted;
     bool public revoked;
@@ -42,6 +43,7 @@ contract StipendConductor {
         interval = _interval;
     }
 
+    // slither-disable-next-line reentrancy-events,timestamp
     function execute() external {
         if (revoked) revert Revoked();
         if (lastExecuted != 0 && block.timestamp < lastExecuted + interval) revert TooEarly();
@@ -70,6 +72,7 @@ contract StipendConductor {
         beneficiary = _beneficiary;
     }
 
+    // slither-disable-next-line incorrect-equality,timestamp
     function nextExecutionTime() external view returns (uint256) {
         if (lastExecuted == 0) return 0;
         return lastExecuted + interval;

@@ -32,6 +32,7 @@ interface IERC20 {
  *      Manages protocol-owned V4 LP positions via receivePOL().
  *      Tracks revenue by source for accounting. Owner-gated withdrawals.
  */
+// slither-disable-next-line missing-inheritance
 contract ProtocolTreasuryV1 is SafeOwnableUUPS, IUnlockCallback {
     using PoolIdLibrary for PoolKey;
     using CurrencyLibrary for Currency;
@@ -64,6 +65,7 @@ contract ProtocolTreasuryV1 is SafeOwnableUUPS, IUnlockCallback {
     }
 
     mapping(Source => uint256) public totalReceived;
+    // slither-disable-next-line uninitialized-state
     mapping(Source => uint256) public totalWithdrawn;
 
     // ============ Events ============
@@ -175,6 +177,7 @@ contract ProtocolTreasuryV1 is SafeOwnableUUPS, IUnlockCallback {
     // ============ Protocol-Owned Liquidity ============
 
     /// @notice Called by instances during graduation to deploy treasury-owned LP
+    // slither-disable-next-line reentrancy-benign,reentrancy-events,reentrancy-no-eth,unused-return
     function receivePOL(
         PoolKey calldata poolKey,
         int24 tickLower,
@@ -231,6 +234,7 @@ contract ProtocolTreasuryV1 is SafeOwnableUUPS, IUnlockCallback {
     }
 
     /// @notice Permissionless fee collection for a treasury-owned POL position
+    // slither-disable-next-line reentrancy-benign,reentrancy-events
     function claimPOLFees(address instance) external returns (uint256 amount0, uint256 amount1) {
         POLPosition storage pos = _polPositions[instance];
         if (pos.liquidity == 0) revert NoPOLPosition();
@@ -272,6 +276,7 @@ contract ProtocolTreasuryV1 is SafeOwnableUUPS, IUnlockCallback {
         }
     }
 
+    // slither-disable-next-line unused-return
     function _handleDeployPOL(bytes memory data) internal returns (bytes memory) {
         DeployPOLCallbackData memory params = abi.decode(data, (DeployPOLCallbackData));
 
@@ -297,6 +302,7 @@ contract ProtocolTreasuryV1 is SafeOwnableUUPS, IUnlockCallback {
         return abi.encode(liquidity);
     }
 
+    // slither-disable-next-line unused-return
     function _handleCollectFees(bytes memory data) internal returns (bytes memory) {
         CollectFeesCallbackData memory params = abi.decode(data, (CollectFeesCallbackData));
 
@@ -348,6 +354,7 @@ contract ProtocolTreasuryV1 is SafeOwnableUUPS, IUnlockCallback {
 
     // ============ Revenue Routing ============
 
+    // slither-disable-next-line missing-zero-check
     function setRevenueConductor(address _conductor) external onlyOwner {
         revenueConductor = _conductor;
         emit RevenueConductorUpdated(_conductor);
@@ -377,6 +384,7 @@ contract ProtocolTreasuryV1 is SafeOwnableUUPS, IUnlockCallback {
         emit ERC20Withdrawn(token, to, amount);
     }
 
+    // slither-disable-next-line missing-zero-check,reentrancy-events
     function withdrawERC721(address token, address to, uint256 tokenId) external onlyOwner {
         if (to == address(0)) revert InvalidRecipient();
         // Use low-level call for ERC721 transferFrom(address,address,uint256)

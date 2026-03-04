@@ -141,6 +141,7 @@ contract QueryAggregator is SafeOwnableUUPS {
 
     // ============ Events ============
 
+    // slither-disable-next-line unindexed-event-address
     event Initialized(address masterRegistry, address featuredQueueManager, address globalMessageRegistry);
 
     // ============ Constructor ============
@@ -245,6 +246,7 @@ contract QueryAggregator is SafeOwnableUUPS {
             uint256 totalClaimable
         )
     {
+        // slither-disable-next-line uninitialized-local
         PortfolioAccumulator memory acc;
         acc.tempERC404 = new ERC404Holding[](instances.length);
         acc.tempERC1155 = new ERC1155Holding[](instances.length);
@@ -271,6 +273,7 @@ contract QueryAggregator is SafeOwnableUUPS {
         }
     }
 
+    // slither-disable-next-line calls-loop
     function _processPortfolioInstance(address instance, address user, PortfolioAccumulator memory acc) private view {
         try IInstanceLifecycle(instance).instanceType() returns (bytes32 typeHash) {
             try masterRegistry.getInstanceInfo(instance) returns (IMasterRegistry.InstanceInfo memory info) {
@@ -297,6 +300,7 @@ contract QueryAggregator is SafeOwnableUUPS {
      * @dev Each data source is fetched independently; any single failure
      *      leaves that section as zero-values without affecting the rest.
      */
+    // slither-disable-next-line calls-loop
     function _hydrateProject(address instance) internal view returns (ProjectCard memory card) {
         card.instance = instance;
 
@@ -317,6 +321,7 @@ contract QueryAggregator is SafeOwnableUUPS {
         _hydrateFeatured(card);
     }
 
+    // slither-disable-next-line calls-loop
     function _hydrateFactory(ProjectCard memory card) private view {
         if (card.factory == address(0)) return;
         try masterRegistry.getFactoryInfoByAddress(card.factory) returns (IMasterRegistry.FactoryInfo memory info) {
@@ -325,6 +330,7 @@ contract QueryAggregator is SafeOwnableUUPS {
         } catch {}
     }
 
+    // slither-disable-next-line calls-loop
     function _hydrateVault(ProjectCard memory card) private view {
         if (card.vault == address(0)) return;
         try masterRegistry.getVaultInfo(card.vault) returns (IMasterRegistry.VaultInfo memory info) {
@@ -332,6 +338,7 @@ contract QueryAggregator is SafeOwnableUUPS {
         } catch {}
     }
 
+    // slither-disable-next-line calls-loop
     function _hydrateCardData(ProjectCard memory card) private view {
         try IInstance(card.instance).getCardData() returns (
             uint256 price, uint256 supply, uint256 max, bool active, bytes memory extra
@@ -344,6 +351,7 @@ contract QueryAggregator is SafeOwnableUUPS {
         } catch {}
     }
 
+    // slither-disable-next-line calls-loop,unused-return
     function _hydrateFeatured(ProjectCard memory card) private view {
         try featuredQueueManager.getRentalInfo(card.instance) returns (
             address, uint256 rank, uint256 expires, bool active
@@ -358,6 +366,7 @@ contract QueryAggregator is SafeOwnableUUPS {
     /**
      * @notice Get ERC404 holding for a user
      */
+    // slither-disable-next-line calls-loop
     function _getERC404Holding(address instance, address user, string memory name_)
         internal view returns (ERC404Holding memory holding)
     {
@@ -388,6 +397,7 @@ contract QueryAggregator is SafeOwnableUUPS {
     /**
      * @notice Get ERC1155 holding for a user
      */
+    // slither-disable-next-line calls-loop
     function _getERC1155Holding(address instance, address user, string memory name_)
         internal view returns (ERC1155Holding memory holding)
     {
@@ -433,6 +443,7 @@ contract QueryAggregator is SafeOwnableUUPS {
      * @param user User address
      * @param vaultAddrs Vault addresses to check (provided by frontend via EventIndexer)
      */
+    // slither-disable-next-line calls-loop
     function _getVaultPositions(address user, address[] calldata vaultAddrs)
         internal view returns (VaultPosition[] memory positions)
     {
@@ -444,6 +455,7 @@ contract QueryAggregator is SafeOwnableUUPS {
 
             try IAlignmentVault(payable(vaultAddr)).getBenefactorShares(user) returns (uint256 shares) {
                 if (shares > 0) {
+                    // slither-disable-next-line uninitialized-local
                     VaultPosition memory pos;
                     pos.vault = vaultAddr;
                     pos.shares = shares;

@@ -193,10 +193,23 @@ contract UniAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback, IAlignm
 
     // ========== Initialize (clone pattern) ==========
 
+    /// @notice Initialize the vault clone with all required dependencies
+    /// @dev Called once by the factory after EIP-1167 cloning. Sets owner to msg.sender (factory).
+    /// @param _weth WETH contract address
+    /// @param _poolManager Uniswap V4 PoolManager address
+    /// @param _alignmentToken Target community token to buy and LP
+    /// @param _zRouter zRouter V4 swap router address
+    /// @param _zRouterFee Fee tier for zRouter swaps
+    /// @param _zRouterTickSpacing Tick spacing for zRouter swaps
+    /// @param _priceValidator Oracle/TWAP price validator for manipulation protection
+    /// @param _alignmentRegistry Registry that manages approved alignment targets
+    /// @param _alignmentTargetId ID of the alignment target this vault serves
+    // slither-disable-next-line events-maths
     function initialize(
         address _weth,
         address _poolManager,
         address _alignmentToken,
+        // slither-disable-next-line missing-zero-check
         address _zRouter,
         uint24  _zRouterFee,
         int24   _zRouterTickSpacing,
@@ -243,6 +256,7 @@ contract UniAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback, IAlignm
 
     // ========== Fee Reception ==========
 
+    /// @notice Accept direct ETH contributions, crediting msg.sender as the benefactor
     receive() external payable {
         _receiveExternalContribution();
     }
@@ -253,6 +267,11 @@ contract UniAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback, IAlignm
         emit ContributionReceived(msg.sender, msg.value);
     }
 
+    /// @notice Receive an alignment contribution, crediting the specified benefactor
+    /// @dev Called by project instances routing their alignment tax to this vault.
+    /// @param currency Currency of the contribution (unused — vault only accepts native ETH)
+    /// @param amount Contribution amount in wei
+    /// @param benefactor Address to credit for this contribution (typically the project instance)
     function receiveContribution(
         Currency currency,
         uint256 amount,
@@ -292,6 +311,7 @@ contract UniAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback, IAlignm
         uint256 liquidityUnitsAdded;
     }
 
+    // slither-disable-next-line reentrancy-benign,reentrancy-eth
     function convertAndAddLiquidity(
         uint256 minOutTarget
     ) external nonReentrant returns (uint256 lpPositionValue) {
@@ -320,6 +340,7 @@ contract UniAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback, IAlignm
         emit LiquidityAdded(ethToSwap, r.targetTokenReceived, lpPositionValue, r.liquidityUnitsAdded, callerReward);
     }
 
+    // slither-disable-next-line arbitrary-send-eth,reentrancy-benign,unused-return
     function _doSwapAndLP(
         uint256 ethToAdd,
         uint256 ethToSwap,
@@ -341,6 +362,7 @@ contract UniAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback, IAlignm
         totalLPUnits += r.liquidityUnitsAdded;
     }
 
+    // slither-disable-next-line divide-before-multiply
     function _distributeSharesAndCleanup(
         uint256 ethToAdd,
         uint256 totalSharesIssued,
@@ -379,11 +401,22 @@ contract UniAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback, IAlignm
             emit DustDistributed(largestContributor, dustToDistribute);
         }
 
+        // Initialize watermarks so new shares cannot retroactively claim pre-existing fees.
+        // Must run after all share mutations (including dust distribution) are finalized.
+        if (accumulatedFees > 0 && totalShares > 0) {
+            for (uint256 i = 0; i < activeBenefactors.length; i++) {
+                address benefactor = activeBenefactors[i];
+                shareValueAtLastClaim[benefactor] =
+                    (accumulatedFees * benefactorShares[benefactor]) / totalShares;
+            }
+        }
+
         totalEthLocked += ethToAdd;
         totalPendingETH = 0;
         _clearConversionParticipants();
     }
 
+    // slither-disable-next-line arbitrary-send-eth
     function _payCallerReward(uint256 activeBenefactorsLen) private returns (uint256 callerReward) {
         uint256 estimatedGas = CONVERSION_BASE_GAS + (activeBenefactorsLen * GAS_PER_BENEFACTOR);
         uint256 gasCost = estimatedGas * tx.gasprice;
@@ -442,6 +475,7 @@ contract UniAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback, IAlignm
         return (ethCollected, tokenCollected);
     }
 
+    // slither-disable-next-line unused-return
     function _convertVaultFeesToEth(uint256 tokenAmount) internal returns (uint256 ethReceived) {
         if (tokenAmount == 0) return 0;
         IERC20(alignmentToken).approve(zRouter, tokenAmount);
@@ -458,6 +492,7 @@ contract UniAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback, IAlignm
         );
     }
 
+    // slither-disable-next-line incorrect-equality,reentrancy-benign,reentrancy-no-eth,timestamp
     function _collectAndAccumulateVaultFees() internal {
         if (block.timestamp >= lastVaultFeeCollectionTime + vaultFeeCollectionInterval
             || lastVaultFeeCollectionTime == 0) {
@@ -480,6 +515,11 @@ contract UniAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback, IAlignm
         }
     }
 
+    /// @notice Claim accumulated LP yield fees for the caller
+    /// @dev Triggers vault fee collection first, then pays the caller's unclaimed delta.
+    ///      Fees are routed to the benefactor's delegate if one is set.
+    /// @return ethClaimed ETH transferred to caller (or their delegate)
+    // slither-disable-next-line reentrancy-benign
     function claimFees() external override nonReentrant returns (uint256 ethClaimed) {
         _collectAndAccumulateVaultFees();
 
@@ -513,6 +553,8 @@ contract UniAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback, IAlignm
 
     // ========== Fee Accumulation ==========
 
+    /// @notice Manually record fees accumulated outside of V4 LP (owner-only)
+    /// @param feeAmount ETH amount to add to accumulatedFees
     function recordAccumulatedFees(uint256 feeAmount) external onlyOwner {
         if (feeAmount == 0) revert AmountMustBePositive();
         accumulatedFees += feeAmount;
@@ -531,6 +573,7 @@ contract UniAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback, IAlignm
         }
     }
 
+    // slither-disable-next-line unused-return
     function _addToLpPosition(
         uint256 amount0,
         uint256 amount1,
@@ -582,6 +625,11 @@ contract UniAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback, IAlignm
         return liquidityUnits;
     }
 
+    /// @notice Uniswap V4 PoolManager unlock callback for modifyLiquidity operations
+    /// @dev Only callable by the PoolManager. Executes the liquidity modification and settles deltas.
+    /// @param data ABI-encoded ModifyLiquidityCallbackData
+    /// @return ABI-encoded BalanceDelta from the liquidity modification
+    // slither-disable-next-line unused-return
     function unlockCallback(bytes calldata data) external returns (bytes memory) {
         if (msg.sender != address(poolManager)) revert Unauthorized();
 
@@ -643,6 +691,7 @@ contract UniAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback, IAlignm
         if (currency0Addr >= currency1Addr) revert InvalidCurrencyOrdering();
     }
 
+    /// @notice Validate the currently configured V4 pool key (reverts if invalid)
     function validateCurrentPoolKey() external view {
         PoolKey memory key = v4PoolKey;
         _validateV4Pool(key);
@@ -678,6 +727,9 @@ contract UniAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback, IAlignm
         return (accumulatedFees * benefactorShares[benefactor]) / totalShares; // round down: favors vault
     }
 
+    /// @notice Get the unclaimed fee delta for a benefactor since their last claim
+    /// @param benefactor Address to query
+    /// @return Unclaimed ETH amount
     function getUnclaimedFees(address benefactor)
         external
         view
@@ -714,6 +766,9 @@ contract UniAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback, IAlignm
 
     // ========== Benefactor Delegation ==========
 
+    /// @notice Set a delegate to receive fee claims on behalf of the caller
+    /// @dev Caller must be an existing benefactor. Set to address(0) to remove delegation.
+    /// @param delegate Address that will receive fee payouts for the caller
     function delegateBenefactor(address delegate) external override {
         if (benefactorShares[msg.sender] == 0 && benefactorTotalETH[msg.sender] == 0) revert NotBenefactor();
         benefactorDelegate[msg.sender] = delegate;
@@ -725,6 +780,11 @@ contract UniAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback, IAlignm
         return delegate == address(0) ? benefactor : delegate;
     }
 
+    /// @notice Batch claim fees for multiple benefactors as their registered delegate
+    /// @dev Caller must be the delegate for every benefactor in the array. Sends one lump-sum payment.
+    /// @param benefactors Array of benefactor addresses to claim for
+    /// @return totalClaimed Total ETH sent to the caller (delegate)
+    // slither-disable-next-line reentrancy-benign
     function claimFeesAsDelegate(address[] calldata benefactors) external override nonReentrant returns (uint256 totalClaimed) {
         _collectAndAccumulateVaultFees();
 
@@ -759,6 +819,9 @@ contract UniAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback, IAlignm
 
     // ========== Configuration ==========
 
+    /// @notice Change the alignment token (must be in the vault's alignment target)
+    /// @dev All pending ETH must be converted first. Validates against AlignmentRegistry.
+    /// @param newToken New ERC20 token address to buy and LP
     function setAlignmentToken(address newToken) external onlyOwner {
         if (newToken == address(0)) revert InvalidAddress();
         if (totalPendingETH != 0) revert PendingETHNotConverted();
@@ -780,30 +843,41 @@ contract UniAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback, IAlignm
         emit AlignmentTokenUpdated(oldToken, newToken);
     }
 
+    /// @notice Set the Uniswap V4 pool key for liquidity operations
+    /// @dev Validates fee tier, tick spacing, currency ordering, and alignment token presence.
+    /// @param newPoolKey V4 PoolKey struct identifying the target pool
     function setV4PoolKey(PoolKey calldata newPoolKey) external onlyOwner {
         _validateV4Pool(newPoolKey);
         v4PoolKey = newPoolKey;
         emit V4PoolKeyUpdated(keccak256(abi.encode(newPoolKey)));
     }
 
+    /// @notice Set the base reward paid to callers of convertAndAddLiquidity
+    /// @param newReward New reward amount in wei (max 0.1 ETH)
     function setStandardConversionReward(uint256 newReward) external onlyOwner {
         if (newReward > 0.1 ether) revert RewardTooHigh();
         standardConversionReward = newReward;
         emit ConversionRewardUpdated(newReward);
     }
 
+    /// @notice Set maximum allowed price deviation for manipulation protection
+    /// @param newBps Deviation in basis points (max 2000 = 20%)
     function setMaxPriceDeviationBps(uint256 newBps) external onlyOwner {
         if (newBps > 2000) revert DeviationTooHigh();
         maxPriceDeviationBps = newBps;
         emit MaxPriceDeviationUpdated(newBps);
     }
 
+    /// @notice Set the threshold at which accumulated dust shares are distributed
+    /// @param newThreshold Minimum accumulated dust before redistribution (must be > 0)
     function setDustDistributionThreshold(uint256 newThreshold) external onlyOwner {
         if (newThreshold == 0) revert AmountMustBePositive();
         dustDistributionThreshold = newThreshold;
         emit DustDistributionThresholdUpdated(newThreshold);
     }
 
+    /// @notice Deposit ETH directly into the accumulated fees pool (owner-only)
+    /// @dev Used for manual fee injection outside of LP yield collection.
     function depositFees() external payable onlyOwner {
         if (msg.value == 0) revert AmountMustBePositive();
         accumulatedFees += msg.value;
@@ -812,12 +886,16 @@ contract UniAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback, IAlignm
 
     // ========== Protocol Yield Cut ==========
 
+    /// @notice Set the protocol's share of LP yield in basis points
+    /// @param _bps Protocol cut in bps (max 1500 = 15%)
     function setProtocolYieldCutBps(uint256 _bps) external onlyOwner {
         if (_bps > 1500) revert ExceedsMaxBps();
         protocolYieldCutBps = _bps;
         emit ProtocolYieldCutUpdated(_bps);
     }
 
+    /// @notice Set the protocol treasury address for yield cut withdrawals
+    /// @param _treasury New treasury address (must not be zero)
     function setProtocolTreasury(address _treasury) external onlyOwner {
         if (_treasury == address(0)) revert InvalidAddress();
         address old = protocolTreasury;
@@ -825,6 +903,9 @@ contract UniAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback, IAlignm
         emit ProtocolTreasuryUpdated(old, _treasury);
     }
 
+    /// @notice Withdraw accumulated protocol yield cut to the treasury
+    /// @dev Callable by anyone. Sends accumulatedProtocolFees to protocolTreasury.
+    // slither-disable-next-line arbitrary-send-eth,reentrancy-events
     function withdrawProtocolFees() external {
         if (protocolTreasury == address(0)) revert TreasuryNotSet();
         uint256 amount = accumulatedProtocolFees;

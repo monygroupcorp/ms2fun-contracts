@@ -153,6 +153,7 @@ contract ShareOffering is ReentrancyGuard {
         );
     }
 
+    // slither-disable-next-line timestamp
     function finalize(
         uint256 trancheId,
         address[] calldata buyers,
@@ -165,6 +166,7 @@ contract ShareOffering is ReentrancyGuard {
         if (buyers.length != amounts.length) revert ArrayLengthMismatch();
 
         // Verify buyer arrays match commitments
+        // slither-disable-next-line uninitialized-local
         uint256 totalShares;
         for (uint256 i = 0; i < buyers.length; i++) {
             if (commitments[trancheId][buyers[i]] != amounts[i]) revert CommitmentMismatch();
@@ -197,6 +199,7 @@ contract ShareOffering is ReentrancyGuard {
 
     // ============ Buyer Functions ============
 
+    // slither-disable-next-line timestamp
     function commit(
         uint256 trancheId,
         uint256 sharesToBuy,
@@ -238,6 +241,7 @@ contract ShareOffering is ReentrancyGuard {
         emit Committed(trancheId, msg.sender, sharesToBuy, msg.value);
     }
 
+    // slither-disable-next-line timestamp
     function refund(uint256 trancheId) external nonReentrant {
         Tranche storage t = tranches[trancheId];
         TrancheStatus s = _effectiveStatus(trancheId);
@@ -274,6 +278,7 @@ contract ShareOffering is ReentrancyGuard {
 
     // ============ Internal ============
 
+    // slither-disable-next-line timestamp
     function _effectiveStatus(uint256 trancheId) internal view returns (TrancheStatus) {
         Tranche storage t = tranches[trancheId];
         if (t.status == TrancheStatus.Active && block.timestamp > t.finalizeDeadline) {

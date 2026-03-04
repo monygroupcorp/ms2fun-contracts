@@ -409,7 +409,7 @@ A comprehensive pre-audit review identified 17 findings:
 - [x] Prior security review documented
 - [x] Production deployment checklist (`SECURITY_REVIEW.md`)
 - [x] Known limitations documented
-- [ ] Glossary of domain terms (recommended addition)
+- [x] Glossary of domain terms (`GLOSSARY.md`)
 
 ---
 
@@ -427,7 +427,7 @@ A comprehensive pre-audit review identified 17 findings:
 7. **Check `IERC20.transfer()` return values** in CurrencySettler
 8. ~~**Add ETH withdrawal**~~ **DONE** - `withdrawETH()` added to `GlobalMessageRegistry`
 9. ~~**Consolidate IERC20**~~ **DONE** - Shared interface at `src/shared/interfaces/IERC20.sol`
-10. **Create domain glossary** (benefactor, alignment token, tithe, dragnet, etc.)
+10. ~~**Create domain glossary**~~ **DONE** - `docs/GLOSSARY.md`
 
 ### Nice to Have
 11. **Add emergency pause** to core contracts (mentioned in I-03)

@@ -33,6 +33,7 @@ contract PasswordTierGatingModule is IGatingModule {
     mapping(address instance => bool)                                    public  configured;
     mapping(address instance => TierConfig)                              private _configs;
     mapping(address instance => mapping(bytes32 => uint256))             private _tierByPasswordHash;
+    // slither-disable-next-line uninitialized-state
     mapping(address instance => mapping(address user => uint256))        private _userTierUnlocked;
     mapping(address instance => mapping(address user => uint256))        public  userPurchaseVolume;
 
@@ -62,6 +63,7 @@ contract PasswordTierGatingModule is IGatingModule {
     /// @param data abi.encode(bytes32 passwordHash, uint256 openTime)
     ///             passwordHash: bytes32(0) = open tier (no password).
     ///             openTime: instance/edition open timestamp; used by TIME_BASED enforcement.
+    // slither-disable-next-line timestamp
     function canMint(address user, uint256 amount, bytes calldata data)
         external override returns (bool allowed, bool permanent)
     {

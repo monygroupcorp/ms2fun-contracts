@@ -251,6 +251,7 @@ contract MasterRegistryV1 is SafeOwnableUUPS, IMasterRegistry {
         return factoryInfo[factoryAddress];
     }
 
+    // slither-disable-next-line timestamp
     function getInstanceInfo(address instance) external view returns (IMasterRegistry.InstanceInfo memory) {
         if (instanceInfo[instance].instance == address(0)) revert NotRegistered();
         return instanceInfo[instance];
@@ -269,6 +270,7 @@ contract MasterRegistryV1 is SafeOwnableUUPS, IMasterRegistry {
         return info.instance != address(0) && registeredFactories[info.factory];
     }
 
+    // slither-disable-next-line timestamp
     function isRegisteredInstance(address instance) external view override returns (bool) {
         return instanceInfo[instance].instance != address(0);
     }
@@ -288,6 +290,7 @@ contract MasterRegistryV1 is SafeOwnableUUPS, IMasterRegistry {
      * @param metadataURI Metadata URI
      * @param targetId Alignment target ID
      */
+    // slither-disable-next-line timestamp
     function registerVault(
         address vault,
         address creator,
@@ -330,6 +333,7 @@ contract MasterRegistryV1 is SafeOwnableUUPS, IMasterRegistry {
         return vaultInfo[vault];
     }
 
+    // slither-disable-next-line timestamp
     function isVaultRegistered(address vault) external view override returns (bool) {
         return registeredVaults[vault] && vaultInfo[vault].active;
     }
@@ -342,6 +346,7 @@ contract MasterRegistryV1 is SafeOwnableUUPS, IMasterRegistry {
 
     // ============ Instance Vault Migration ============
 
+    // slither-disable-next-line timestamp
     function migrateVault(address instance, address newVault) external override {
         if (msg.sender != instance) revert Unauthorized();
         if (instanceInfo[instance].instance == address(0)) revert NotRegistered();

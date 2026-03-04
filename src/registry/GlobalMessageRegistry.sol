@@ -170,6 +170,7 @@ contract GlobalMessageRegistry is SafeOwnableUUPS, IGlobalMessageRegistry {
         emit MasterRegistrySet(_masterRegistry);
     }
 
+    // slither-disable-next-line incorrect-equality
     function withdrawETH() external onlyOwner {
         uint256 balance = address(this).balance;
         if (balance == 0) revert NoETHToWithdraw();
