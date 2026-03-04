@@ -10,6 +10,8 @@ import {GatingScope} from "../../../src/gating/IGatingModule.sol";
 import {FreeMintDisabled, FreeMintAlreadyClaimed, FreeMintExhausted} from "../../../src/factories/erc1155/ERC1155Instance.sol";
 import {ComponentRegistry} from "../../../src/registry/ComponentRegistry.sol";
 import {LibClone} from "solady/utils/LibClone.sol";
+import {ICreateX, CREATEX} from "../../../src/shared/CreateXConstants.sol";
+import {CREATEX_BYTECODE} from "createx-forge/script/CreateX.d.sol";
 
 contract MockVaultERC1155FM {
     function supportsCapability(bytes32) external pure returns (bool) { return true; }
@@ -22,6 +24,8 @@ contract ERC1155FreeMintTest is Test {
     MockVaultERC1155FM mockVault;
     ComponentRegistry componentRegistry;
 
+    uint256 internal _saltCounter;
+
     address protocol = makeAddr("protocol");
     address creator  = makeAddr("creator");
     address user1    = makeAddr("user1");
@@ -30,8 +34,14 @@ contract ERC1155FreeMintTest is Test {
 
     uint256 constant FREE_ALLOC = 5;
 
+    function _nextSalt() internal returns (bytes32) {
+        _saltCounter++;
+        return bytes32(abi.encodePacked(address(factory), uint8(0x00), bytes11(uint88(_saltCounter))));
+    }
+
     function setUp() public {
         vm.startPrank(protocol);
+        vm.etch(CREATEX, CREATEX_BYTECODE);
         mockRegistry = new MockMasterRegistry();
         mockVault    = new MockVaultERC1155FM();
 
@@ -49,7 +59,7 @@ contract ERC1155FreeMintTest is Test {
     function _deploy(uint256 alloc, GatingScope scope) internal returns (ERC1155Instance) {
         vm.startPrank(creator);
         address inst = factory.createInstance(
-            "FreeMintEdition", "ipfs://meta", creator, address(mockVault), "",
+            _nextSalt(), "FreeMintEdition", "ipfs://meta", creator, address(mockVault), "",
             address(0), FreeMintParams({ allocation: alloc, scope: scope })
         );
         vm.stopPrank();

@@ -10,6 +10,8 @@ import {MockZRouter} from "../mocks/MockZRouter.sol";
 import {MockVaultPriceValidator} from "../mocks/MockVaultPriceValidator.sol";
 import {MockAlignmentRegistry} from "../mocks/MockAlignmentRegistry.sol";
 import {MockEXECToken} from "../mocks/MockEXECToken.sol";
+import {CREATEX} from "../../src/shared/CreateXConstants.sol";
+import {CREATEX_BYTECODE} from "createx-forge/script/CreateX.d.sol";
 
 contract UniAlignmentVaultFactoryTest is Test {
     UniAlignmentVaultFactory public factory;
@@ -23,11 +25,19 @@ contract UniAlignmentVaultFactoryTest is Test {
     MockZRouter public mockZRouter;
     MockVaultPriceValidator public mockPriceValidator;
 
+    uint256 internal _saltCounter;
+
     uint256 constant TARGET_ID = 1;
 
     event VaultDeployed(address indexed vault, address indexed alignmentToken);
 
+    function _nextSalt() internal returns (bytes32) {
+        _saltCounter++;
+        return bytes32(abi.encodePacked(address(factory), uint8(0x00), bytes11(uint88(_saltCounter))));
+    }
+
     function setUp() public {
+        vm.etch(CREATEX, CREATEX_BYTECODE);
         owner = address(this);
         mockPoolManager = makeAddr("poolManager");
         mockWeth = makeAddr("weth");
@@ -53,6 +63,7 @@ contract UniAlignmentVaultFactoryTest is Test {
 
     function test_deployVault_setsAlignmentToken() public {
         address vault = factory.deployVault(
+            _nextSalt(),
             address(alignmentToken),
             TARGET_ID,
             IVaultPriceValidator(address(0))
@@ -63,6 +74,7 @@ contract UniAlignmentVaultFactoryTest is Test {
 
     function test_deployVault_usesFactoryZRouterConfig() public {
         address vault = factory.deployVault(
+            _nextSalt(),
             address(alignmentToken),
             TARGET_ID,
             IVaultPriceValidator(address(0))
@@ -82,6 +94,7 @@ contract UniAlignmentVaultFactoryTest is Test {
         MockVaultPriceValidator customValidator = new MockVaultPriceValidator();
 
         address vault = factory.deployVault(
+            _nextSalt(),
             address(alignmentToken),
             TARGET_ID,
             IVaultPriceValidator(address(customValidator))
@@ -99,12 +112,14 @@ contract UniAlignmentVaultFactoryTest is Test {
         mockRegistry.setTokenInTarget(TARGET_ID, address(token2), true);
 
         address vault1 = factory.deployVault(
+            _nextSalt(),
             address(alignmentToken),
             TARGET_ID,
             IVaultPriceValidator(address(0))
         );
 
         address vault2 = factory.deployVault(
+            _nextSalt(),
             address(token2),
             TARGET_ID,
             IVaultPriceValidator(address(0))
@@ -120,6 +135,7 @@ contract UniAlignmentVaultFactoryTest is Test {
         emit VaultDeployed(address(0), address(alignmentToken));
 
         factory.deployVault(
+            _nextSalt(),
             address(alignmentToken),
             TARGET_ID,
             IVaultPriceValidator(address(0))
@@ -131,6 +147,7 @@ contract UniAlignmentVaultFactoryTest is Test {
 
         vm.expectRevert(UniAlignmentVault.TokenNotInTarget.selector);
         factory.deployVault(
+            _nextSalt(),
             rogueToken,
             TARGET_ID,
             IVaultPriceValidator(address(0))
@@ -142,6 +159,7 @@ contract UniAlignmentVaultFactoryTest is Test {
 
         vm.expectRevert(UniAlignmentVault.TargetNotActive.selector);
         factory.deployVault(
+            _nextSalt(),
             address(alignmentToken),
             TARGET_ID,
             IVaultPriceValidator(address(0))

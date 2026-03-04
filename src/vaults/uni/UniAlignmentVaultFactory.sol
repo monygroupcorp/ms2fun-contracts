@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import {LibClone} from "solady/utils/LibClone.sol";
 import {UniAlignmentVault} from "./UniAlignmentVault.sol";
 import {IVaultPriceValidator} from "../../interfaces/IVaultPriceValidator.sol";
 import {IAlignmentRegistry} from "../../master/interfaces/IAlignmentRegistry.sol";
+import {ICreateX, CREATEX} from "../../shared/CreateXConstants.sol";
 
 /// @title UniAlignmentVaultFactory
 /// @notice Deploys UniAlignmentVault clones; zRouter config is shared across all vaults.
@@ -40,17 +40,24 @@ contract UniAlignmentVaultFactory {
         vaultImplementation = address(new UniAlignmentVault());
     }
 
-    /// @notice Deploy a new vault clone
+    /// @notice Deploy a new vault clone via CREATE3
+    /// @param salt CREATE3 deployment salt for deterministic vanity address
     /// @param alignmentToken The token this vault aligns to
     /// @param alignmentTargetId The alignment target this vault is bound to
     /// @param priceValidator Custom price validator; uses defaultPriceValidator if address(0)
     /// @return vault Address of the deployed vault clone
     function deployVault(
+        bytes32 salt,
         address alignmentToken,
         uint256 alignmentTargetId,
         IVaultPriceValidator priceValidator
     ) external returns (address vault) {
-        vault = LibClone.clone(vaultImplementation);
+        bytes memory proxyCreationCode = abi.encodePacked(
+            hex"3d602d80600a3d3981f3363d3d373d3d3d363d73",
+            vaultImplementation,
+            hex"5af43d82803e903d91602b57fd5bf3"
+        );
+        vault = ICreateX(CREATEX).deployCreate3(salt, proxyCreationCode);
 
         UniAlignmentVault(payable(vault)).initialize(
             weth,
@@ -65,5 +72,11 @@ contract UniAlignmentVaultFactory {
         );
 
         emit VaultDeployed(vault, alignmentToken);
+    }
+
+    /// @notice Preview the deterministic address for a given salt
+    function computeVaultAddress(bytes32 salt) external view returns (address) {
+        bytes32 guardedSalt = keccak256(abi.encodePacked(uint256(uint160(address(this))), salt));
+        return ICreateX(CREATEX).computeCreate3Address(guardedSalt, CREATEX);
     }
 }

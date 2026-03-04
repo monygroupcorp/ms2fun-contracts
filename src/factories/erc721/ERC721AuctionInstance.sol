@@ -7,7 +7,7 @@ import {ReentrancyGuard} from "solady/utils/ReentrancyGuard.sol";
 import {SafeTransferLib} from "solady/utils/SafeTransferLib.sol";
 import {IAlignmentVault} from "../../interfaces/IAlignmentVault.sol";
 import {IMasterRegistry} from "../../master/interfaces/IMasterRegistry.sol";
-import {IFactoryInstance} from "../../interfaces/IFactoryInstance.sol";
+
 import {IGlobalMessageRegistry} from "../../registry/interfaces/IGlobalMessageRegistry.sol";
 import {Currency} from "v4-core/types/Currency.sol";
 import {RevenueSplitLib} from "../../shared/libraries/RevenueSplitLib.sol";
@@ -44,7 +44,7 @@ error Unauthorized();
  * @dev Implements parallel auction lines (1-3 concurrent slots) with round-robin token assignment.
  *      All auction parameters are immutable after creation for predictability.
  */
-contract ERC721AuctionInstance is ERC721, Ownable, ReentrancyGuard, IFactoryInstance, IInstanceLifecycle {
+contract ERC721AuctionInstance is ERC721, Ownable, ReentrancyGuard, IInstanceLifecycle {
     // ┌─────────────────────────┐
     // │         Types           │
     // └─────────────────────────┘
@@ -64,9 +64,9 @@ contract ERC721AuctionInstance is ERC721, Ownable, ReentrancyGuard, IFactoryInst
     // │   Immutable Config      │
     // └─────────────────────────┘
 
-    IAlignmentVault internal _vault;
+    IAlignmentVault public vault;
     IMasterRegistry public masterRegistry;
-    address internal immutable _protocolTreasury;
+    address public immutable protocolTreasury;
     IGlobalMessageRegistry public immutable globalMessageRegistry;
     uint8 public immutable lines;
     uint40 public immutable baseDuration;
@@ -109,42 +109,45 @@ contract ERC721AuctionInstance is ERC721, Ownable, ReentrancyGuard, IFactoryInst
     // │      Constructor        │
     // └─────────────────────────┘
 
-    constructor(
-        address vault_,
-        address protocolTreasury_,
-        address owner_,
-        string memory name_,
-        string memory symbol_,
-        uint8 lines_,
-        uint40 baseDuration_,
-        uint40 timeBuffer_,
-        uint256 bidIncrement_,
-        address globalMessageRegistry_,
-        address masterRegistry_
-    ) {
-        if (vault_ == address(0)) revert InvalidAddress();
-        if (protocolTreasury_ == address(0)) revert InvalidAddress();
-        if (owner_ == address(0)) revert InvalidAddress();
-        if (globalMessageRegistry_ == address(0)) revert InvalidAddress();
-        if (bytes(name_).length == 0) revert InvalidName();
-        if (bytes(symbol_).length == 0) revert InvalidSymbol();
-        if (lines_ < 1 || lines_ > 3) revert InvalidLines();
-        if (baseDuration_ == 0) revert InvalidDuration();
-        if (timeBuffer_ == 0) revert InvalidTimeBuffer();
-        if (bidIncrement_ == 0) revert InvalidBidIncrement();
+    struct ConstructorParams {
+        address vault;
+        address protocolTreasury;
+        address owner;
+        string name;
+        string symbol;
+        uint8 lines;
+        uint40 baseDuration;
+        uint40 timeBuffer;
+        uint256 bidIncrement;
+        address globalMessageRegistry;
+        address masterRegistry;
+        address factory;
+    }
 
-        _initializeOwner(owner_);
-        _vault = IAlignmentVault(payable(vault_));
-        masterRegistry = IMasterRegistry(masterRegistry_);
-        _protocolTreasury = protocolTreasury_;
-        _name = name_;
-        _symbol = symbol_;
-        lines = lines_;
-        baseDuration = baseDuration_;
-        timeBuffer = timeBuffer_;
-        bidIncrement = bidIncrement_;
-        globalMessageRegistry = IGlobalMessageRegistry(globalMessageRegistry_);
-        factory = msg.sender;
+    constructor(ConstructorParams memory p) {
+        if (p.vault == address(0)) revert InvalidAddress();
+        if (p.protocolTreasury == address(0)) revert InvalidAddress();
+        if (p.owner == address(0)) revert InvalidAddress();
+        if (p.globalMessageRegistry == address(0)) revert InvalidAddress();
+        if (bytes(p.name).length == 0) revert InvalidName();
+        if (bytes(p.symbol).length == 0) revert InvalidSymbol();
+        if (p.lines < 1 || p.lines > 3) revert InvalidLines();
+        if (p.baseDuration == 0) revert InvalidDuration();
+        if (p.timeBuffer == 0) revert InvalidTimeBuffer();
+        if (p.bidIncrement == 0) revert InvalidBidIncrement();
+
+        _initializeOwner(p.owner);
+        vault = IAlignmentVault(payable(p.vault));
+        masterRegistry = IMasterRegistry(p.masterRegistry);
+        protocolTreasury = p.protocolTreasury;
+        _name = p.name;
+        _symbol = p.symbol;
+        lines = p.lines;
+        baseDuration = p.baseDuration;
+        timeBuffer = p.timeBuffer;
+        bidIncrement = p.bidIncrement;
+        globalMessageRegistry = IGlobalMessageRegistry(p.globalMessageRegistry);
+        factory = p.factory;
         nextTokenId = 1;
     }
 
@@ -160,19 +163,7 @@ contract ERC721AuctionInstance is ERC721, Ownable, ReentrancyGuard, IFactoryInst
         emit AgentDelegationChanged(enabled);
     }
 
-    // ┌─────────────────────────┐
-    // │   IFactoryInstance      │
-    // └─────────────────────────┘
-
-    function vault() external view override returns (address) {
-        return address(_vault);
-    }
-
-    function protocolTreasury() external view override returns (address) {
-        return _protocolTreasury;
-    }
-
-    function getGlobalMessageRegistry() external view override returns (address) {
+    function getGlobalMessageRegistry() external view returns (address) {
         return address(globalMessageRegistry);
     }
 
@@ -324,11 +315,11 @@ contract ERC721AuctionInstance is ERC721, Ownable, ReentrancyGuard, IFactoryInst
         // Split winning bid: 1/19/80
         RevenueSplitLib.Split memory s = RevenueSplitLib.split(auction.highBid);
 
-        if (s.protocolCut > 0 && _protocolTreasury != address(0)) {
-            SafeTransferLib.safeTransferETH(_protocolTreasury, s.protocolCut);
+        if (s.protocolCut > 0 && protocolTreasury != address(0)) {
+            SafeTransferLib.safeTransferETH(protocolTreasury, s.protocolCut);
         }
 
-        _vault.receiveContribution{value: s.vaultCut}(
+        vault.receiveContribution{value: s.vaultCut}(
             Currency.wrap(address(0)),
             s.vaultCut,
             address(this)
@@ -363,7 +354,7 @@ contract ERC721AuctionInstance is ERC721, Ownable, ReentrancyGuard, IFactoryInst
 
         // Forfeit deposit to protocol treasury
         uint256 deposit = auction.minBid;
-        SafeTransferLib.safeTransferETH(_protocolTreasury, deposit);
+        SafeTransferLib.safeTransferETH(protocolTreasury, deposit);
 
         emit UnsoldReclaimed(tokenId, deposit);
 
@@ -380,7 +371,7 @@ contract ERC721AuctionInstance is ERC721, Ownable, ReentrancyGuard, IFactoryInst
      * @return totalClaimed Amount of ETH claimed
      */
     function claimVaultFees() external onlyOwner nonReentrant returns (uint256 totalClaimed) {
-        totalClaimed = _vault.claimFees();
+        totalClaimed = vault.claimFees();
         if (totalClaimed == 0) revert NoFeesToClaim();
         SafeTransferLib.safeTransferETH(owner(), totalClaimed);
     }
@@ -388,7 +379,7 @@ contract ERC721AuctionInstance is ERC721, Ownable, ReentrancyGuard, IFactoryInst
     /// @notice Migrate to a new vault. New vault must share this instance's alignment target.
     /// @dev Updates local active vault and appends to registry vault array.
     function migrateVault(address newVault) external onlyOwner {
-        _vault = IAlignmentVault(payable(newVault));
+        vault = IAlignmentVault(payable(newVault));
         masterRegistry.migrateVault(address(this), newVault);
     }
 

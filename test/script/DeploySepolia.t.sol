@@ -3,6 +3,8 @@ pragma solidity ^0.8.20;
 
 import {Test} from "forge-std/Test.sol";
 import {DeploySepolia} from "../../script/DeploySepolia.s.sol";
+import {CREATEX} from "../../src/shared/CreateXConstants.sol";
+import {CREATEX_BYTECODE} from "createx-forge/script/CreateX.d.sol";
 import {MasterRegistryV1} from "../../src/master/MasterRegistryV1.sol";
 import {IMasterRegistry} from "../../src/master/interfaces/IMasterRegistry.sol";
 import {IAlignmentRegistry} from "../../src/master/interfaces/IAlignmentRegistry.sol";
@@ -11,6 +13,7 @@ contract DeploySepoliaTest is Test {
     DeploySepolia s;
 
     function setUp() public {
+        vm.etch(CREATEX, CREATEX_BYTECODE);
         s = new DeploySepolia();
         s.deploy(address(s));
     }

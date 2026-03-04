@@ -15,6 +15,8 @@ import {ComponentRegistry} from "../../../src/registry/ComponentRegistry.sol";
 import {PasswordTierGatingModule} from "../../../src/gating/PasswordTierGatingModule.sol";
 import {ILiquidityDeployerModule} from "../../../src/interfaces/ILiquidityDeployerModule.sol";
 import {LibClone} from "solady/utils/LibClone.sol";
+import {ICreateX, CREATEX} from "../../../src/shared/CreateXConstants.sol";
+import {CREATEX_BYTECODE} from "createx-forge/script/CreateX.d.sol";
 
 contract MockVault {
     function supportsCapability(bytes32) external pure returns (bool) { return true; }
@@ -45,6 +47,8 @@ contract ERC404FactoryTest is Test {
     MockLiquidityDeployer public mockDeployer;
     PasswordTierGatingModule public tierGatingModule;
 
+    uint256 internal _saltCounter;
+
     address public protocolAdmin = address(0x9);
     address public creator1 = address(0x2);
     address public creator2 = address(0x3);
@@ -64,7 +68,13 @@ contract ERC404FactoryTest is Test {
         address indexed vault
     );
 
+    function _nextSalt() internal returns (bytes32) {
+        _saltCounter++;
+        return bytes32(abi.encodePacked(address(factory), uint8(0x00), bytes11(uint88(_saltCounter))));
+    }
+
     function setUp() public {
+        vm.etch(CREATEX, CREATEX_BYTECODE);
         vm.startPrank(protocolAdmin);
 
         mockRegistry = new MockMasterRegistry();
@@ -118,8 +128,9 @@ contract ERC404FactoryTest is Test {
         string memory name_,
         string memory symbol_,
         address owner_
-    ) internal view returns (IdentityParams memory) {
+    ) internal returns (IdentityParams memory) {
         return IdentityParams({
+            salt: _nextSalt(),
             owner: owner_,
             nftCount: DEFAULT_NFT_COUNT,
             presetId: uint8(DEFAULT_PRESET_ID),
@@ -169,6 +180,7 @@ contract ERC404FactoryTest is Test {
         vm.expectRevert(ERC404Factory.VaultRequired.selector);
         factory.createInstance{value: INSTANCE_CREATION_FEE}(
             IdentityParams({
+                salt: _nextSalt(),
                 owner: creator1,
                 nftCount: DEFAULT_NFT_COUNT,
                 presetId: uint8(DEFAULT_PRESET_ID),
@@ -220,6 +232,7 @@ contract ERC404FactoryTest is Test {
         vm.expectRevert(ERC404Factory.InvalidNftCount.selector);
         factory.createInstance{value: INSTANCE_CREATION_FEE}(
             IdentityParams({
+                salt: _nextSalt(),
                 owner: creator1,
                 nftCount: 0,
                 presetId: uint8(DEFAULT_PRESET_ID),
@@ -243,6 +256,7 @@ contract ERC404FactoryTest is Test {
         vm.expectRevert(ERC404Factory.InvalidOwner.selector);
         factory.createInstance{value: INSTANCE_CREATION_FEE}(
             IdentityParams({
+                salt: _nextSalt(),
                 owner: address(0),
                 nftCount: DEFAULT_NFT_COUNT,
                 presetId: uint8(DEFAULT_PRESET_ID),
@@ -529,6 +543,7 @@ contract ERC404FactoryTest is Test {
         vm.startPrank(creator1);
         address instance = factory.createInstance{value: 0.05 ether}(
             IdentityParams({
+                salt: _nextSalt(),
                 owner: creator1,
                 nftCount: DEFAULT_NFT_COUNT,
                 presetId: uint8(DEFAULT_PRESET_ID),
@@ -560,6 +575,7 @@ contract ERC404FactoryTest is Test {
         vm.startPrank(creator1);
         address instance = factory.createInstance{value: 0.1 ether}(
             IdentityParams({
+                salt: _nextSalt(),
                 owner: creator1,
                 nftCount: DEFAULT_NFT_COUNT,
                 presetId: uint8(DEFAULT_PRESET_ID),
@@ -593,6 +609,7 @@ contract ERC404FactoryTest is Test {
         vm.startPrank(creator1);
         address instance = factory.createInstance{value: 0.1 ether}(
             IdentityParams({
+                salt: _nextSalt(),
                 owner: creator1,
                 nftCount: DEFAULT_NFT_COUNT,
                 presetId: uint8(DEFAULT_PRESET_ID),
@@ -665,6 +682,7 @@ contract ERC404FactoryTest is Test {
         vm.startPrank(creator1);
         address instance = factory.createInstance{value: INSTANCE_CREATION_FEE}(
             IdentityParams({
+                salt: _nextSalt(),
                 owner: creator1,
                 nftCount: 100,
                 presetId: uint8(DEFAULT_PRESET_ID),
@@ -692,6 +710,7 @@ contract ERC404FactoryTest is Test {
         vm.expectRevert(abi.encodeWithSignature("PresetNotActive()"));
         factory.createInstance{value: INSTANCE_CREATION_FEE}(
             IdentityParams({
+                salt: _nextSalt(),
                 owner: creator1,
                 nftCount: 100,
                 presetId: uint8(5), // inactive preset
@@ -715,6 +734,7 @@ contract ERC404FactoryTest is Test {
         vm.expectRevert(ERC404Factory.InvalidNftCount.selector);
         factory.createInstance{value: INSTANCE_CREATION_FEE}(
             IdentityParams({
+                salt: _nextSalt(),
                 owner: creator1,
                 nftCount: 0,
                 presetId: uint8(DEFAULT_PRESET_ID),
@@ -854,6 +874,7 @@ contract ERC404FactoryTest is Test {
         vm.prank(creator1);
         address instance = factory.createInstance{value: INSTANCE_CREATION_FEE}(
             IdentityParams({
+                salt: _nextSalt(),
                 owner: creator1,
                 nftCount: DEFAULT_NFT_COUNT,
                 presetId: uint8(DEFAULT_PRESET_ID),

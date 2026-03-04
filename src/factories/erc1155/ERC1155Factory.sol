@@ -14,6 +14,7 @@ import {IComponentRegistry} from "../../registry/interfaces/IComponentRegistry.s
 import {FeatureUtils} from "../../master/libraries/FeatureUtils.sol";
 import {FreeMintParams} from "../../interfaces/IFactoryTypes.sol";
 import {GatingScope} from "../../gating/IGatingModule.sol";
+import {ICreateX, CREATEX} from "../../shared/CreateXConstants.sol";
 
 /**
  * @title ERC1155Factory
@@ -96,13 +97,14 @@ contract ERC1155Factory is Ownable, ReentrancyGuard, IFactory {
      * @notice Create a new ERC1155 instance (backward-compatible, defaults to STANDARD tier)
      */
     function createInstance(
+        bytes32 salt,
         string memory name,
         string memory metadataURI,
         address creator,
         address vault,
         string memory styleUri
     ) external payable nonReentrant returns (address instance) {
-        return _createInstanceInternal(name, metadataURI, creator, vault, styleUri, CreationTier.STANDARD, address(0),
+        return _createInstanceInternal(salt, name, metadataURI, creator, vault, styleUri, CreationTier.STANDARD, address(0),
             FreeMintParams({ allocation: 0, scope: GatingScope.BOTH }));
     }
 
@@ -110,6 +112,7 @@ contract ERC1155Factory is Ownable, ReentrancyGuard, IFactory {
      * @notice Create a new ERC1155 instance with a specific creation tier
      */
     function createInstance(
+        bytes32 salt,
         string memory name,
         string memory metadataURI,
         address creator,
@@ -117,7 +120,7 @@ contract ERC1155Factory is Ownable, ReentrancyGuard, IFactory {
         string memory styleUri,
         CreationTier creationTier
     ) external payable nonReentrant returns (address instance) {
-        return _createInstanceInternal(name, metadataURI, creator, vault, styleUri, creationTier, address(0),
+        return _createInstanceInternal(salt, name, metadataURI, creator, vault, styleUri, creationTier, address(0),
             FreeMintParams({ allocation: 0, scope: GatingScope.BOTH }));
     }
 
@@ -126,6 +129,7 @@ contract ERC1155Factory is Ownable, ReentrancyGuard, IFactory {
      * @param gatingModule address(0) = open; otherwise must be approved in ComponentRegistry.
      */
     function createInstance(
+        bytes32 salt,
         string memory name,
         string memory metadataURI,
         address creator,
@@ -136,12 +140,13 @@ contract ERC1155Factory is Ownable, ReentrancyGuard, IFactory {
         if (gatingModule != address(0)) {
             if (!componentRegistry.isApprovedComponent(gatingModule)) revert UnapprovedComponent();
         }
-        return _createInstanceInternal(name, metadataURI, creator, vault, styleUri, CreationTier.STANDARD, gatingModule,
+        return _createInstanceInternal(salt, name, metadataURI, creator, vault, styleUri, CreationTier.STANDARD, gatingModule,
             FreeMintParams({ allocation: 0, scope: GatingScope.BOTH }));
     }
 
     /// @notice Create an instance with gating module and free mint configuration.
     function createInstance(
+        bytes32 salt,
         string memory name,
         string memory metadataURI,
         address creator,
@@ -153,10 +158,11 @@ contract ERC1155Factory is Ownable, ReentrancyGuard, IFactory {
         if (gatingModule != address(0)) {
             if (!componentRegistry.isApprovedComponent(gatingModule)) revert UnapprovedComponent();
         }
-        return _createInstanceInternal(name, metadataURI, creator, vault, styleUri, CreationTier.STANDARD, gatingModule, freeMint);
+        return _createInstanceInternal(salt, name, metadataURI, creator, vault, styleUri, CreationTier.STANDARD, gatingModule, freeMint);
     }
 
     function _createInstanceInternal(
+        bytes32 salt,
         string memory name,
         string memory metadataURI,
         address creator,
@@ -203,7 +209,7 @@ contract ERC1155Factory is Ownable, ReentrancyGuard, IFactory {
         // Check namespace availability before deploying (saves gas on collision)
         if (masterRegistry.isNameTaken(name)) revert NameAlreadyTaken();
 
-        instance = _deployAndRegister(name, metadataURI, creator, vault, styleUri, gatingModule, agentCreated);
+        instance = _deployAndRegister(salt, name, metadataURI, creator, vault, styleUri, gatingModule, agentCreated);
         // Wire free mint tranche (no-op when allocation == 0)
         ERC1155Instance(instance).initializeFreeMint(freeMint.allocation, freeMint.scope);
 
@@ -226,6 +232,7 @@ contract ERC1155Factory is Ownable, ReentrancyGuard, IFactory {
     }
 
     function _deployAndRegister(
+        bytes32 salt,
         string memory name,
         string memory metadataURI,
         address creator,
@@ -234,19 +241,15 @@ contract ERC1155Factory is Ownable, ReentrancyGuard, IFactory {
         address gatingModule,
         bool agentCreated
     ) private returns (address instance) {
-        instance = address(new ERC1155Instance(
-            name,
-            metadataURI,
-            creator,
-            address(this),
-            vault,
-            styleUri,
-            globalMessageRegistry,
-            protocolTreasury,
-            address(masterRegistry),
-            gatingModule,
-            agentCreated
-        ));
+        bytes memory initCode = abi.encodePacked(
+            type(ERC1155Instance).creationCode,
+            abi.encode(
+                name, metadataURI, creator, address(this), vault, styleUri,
+                globalMessageRegistry, protocolTreasury, address(masterRegistry),
+                gatingModule, agentCreated
+            )
+        );
+        instance = ICreateX(CREATEX).deployCreate3(salt, initCode);
         masterRegistry.registerInstance(
             instance,
             address(this),
@@ -336,5 +339,11 @@ contract ERC1155Factory is Ownable, ReentrancyGuard, IFactory {
 
     function requiredFeatures() external pure returns (bytes32[] memory) {
         return new bytes32[](0);
+    }
+
+    /// @notice Preview the deterministic address for a given salt
+    function computeInstanceAddress(bytes32 salt) external view returns (address) {
+        bytes32 guardedSalt = keccak256(abi.encodePacked(uint256(uint160(address(this))), salt));
+        return ICreateX(CREATEX).computeCreate3Address(guardedSalt, CREATEX);
     }
 }

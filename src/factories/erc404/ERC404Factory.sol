@@ -4,7 +4,6 @@ pragma solidity ^0.8.20;
 import {OwnableRoles} from "solady/auth/OwnableRoles.sol";
 import {ReentrancyGuard} from "solady/utils/ReentrancyGuard.sol";
 import {SafeTransferLib} from "solady/utils/SafeTransferLib.sol";
-import {LibClone} from "solady/utils/LibClone.sol";
 import {IMasterRegistry} from "../../master/interfaces/IMasterRegistry.sol";
 import {FeatureUtils} from "../../master/libraries/FeatureUtils.sol";
 import {IAlignmentVault} from "../../interfaces/IAlignmentVault.sol";
@@ -16,6 +15,7 @@ import {PasswordTierGatingModule} from "../../gating/PasswordTierGatingModule.so
 import {IComponentRegistry} from "../../registry/interfaces/IComponentRegistry.sol";
 import {IdentityParams, FreeMintParams} from "../../interfaces/IFactoryTypes.sol";
 import {GatingScope} from "../../gating/IGatingModule.sol";
+import {ICreateX, CREATEX} from "../../shared/CreateXConstants.sol";
 
 /**
  * @title ERC404Factory
@@ -199,8 +199,13 @@ contract ERC404Factory is OwnableRoles, ReentrancyGuard, IFactory {
             emit VaultCapabilityWarning(identity.vault, keccak256("YIELD_GENERATION"));
         }
 
-        // Deploy clone and initialize via helpers (avoids stack-too-deep)
-        instance = LibClone.clone(implementation);
+        // Deploy EIP-1167 minimal proxy via CREATE3 for deterministic vanity address
+        bytes memory proxyCreationCode = abi.encodePacked(
+            hex"3d602d80600a3d3981f3363d3d373d3d3d363d73",
+            implementation,
+            hex"5af43d82803e903d91602b57fd5bf3"
+        );
+        instance = ICreateX(CREATEX).deployCreate3(identity.salt, proxyCreationCode);
         _initializeInstance(instance, identity, liquidityDeployer, gatingModule, freeMint, agentCreated);
         _finalizeInstance(instance, identity, metadataURI);
     }
@@ -312,5 +317,11 @@ contract ERC404Factory is OwnableRoles, ReentrancyGuard, IFactory {
         if (_bps > 300) revert MaxBondingFeeExceeded();
         bondingFeeBps = _bps;
         emit BondingFeeUpdated(_bps);
+    }
+
+    /// @notice Preview the deterministic address for a given salt
+    function computeInstanceAddress(bytes32 salt) external view returns (address) {
+        bytes32 guardedSalt = keccak256(abi.encodePacked(uint256(uint160(address(this))), salt));
+        return ICreateX(CREATEX).computeCreate3Address(guardedSalt, CREATEX);
     }
 }

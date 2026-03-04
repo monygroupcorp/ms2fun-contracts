@@ -14,6 +14,8 @@ import {ComponentRegistry} from "../../../src/registry/ComponentRegistry.sol";
 import {ILiquidityDeployerModule} from "../../../src/interfaces/ILiquidityDeployerModule.sol";
 import {PasswordTierGatingModule} from "../../../src/gating/PasswordTierGatingModule.sol";
 import {LibClone} from "solady/utils/LibClone.sol";
+import {ICreateX, CREATEX} from "../../../src/shared/CreateXConstants.sol";
+import {CREATEX_BYTECODE} from "createx-forge/script/CreateX.d.sol";
 
 contract MockVaultFM {
     function supportsCapability(bytes32) external pure returns (bool) { return true; }
@@ -25,6 +27,8 @@ contract MockDeployerFM is ILiquidityDeployerModule {
 }
 
 contract ERC404FreeMintTest is Test {
+    uint256 internal _saltCounter;
+
     ERC404Factory factory;
     LaunchManager launchMgr;
     CurveParamsComputer curveComp;
@@ -44,7 +48,13 @@ contract ERC404FreeMintTest is Test {
     uint256 constant NFT_COUNT = 10;
     uint256 constant FREE_MINT_COUNT = 3;
 
+    function _nextSalt() internal returns (bytes32) {
+        _saltCounter++;
+        return bytes32(abi.encodePacked(address(factory), uint8(0x00), bytes11(uint88(_saltCounter))));
+    }
+
     function setUp() public {
+        vm.etch(CREATEX, CREATEX_BYTECODE);
         vm.startPrank(protocol);
 
         mockRegistry = new MockMasterRegistry();
@@ -89,8 +99,9 @@ contract ERC404FreeMintTest is Test {
 
     // ── helpers ──────────────────────────────────────────────────────────────
 
-    function _identity() internal view returns (IdentityParams memory) {
+    function _identity() internal returns (IdentityParams memory) {
         return IdentityParams({
+            salt: _nextSalt(),
             owner: creator, nftCount: NFT_COUNT, presetId: PRESET_ID,
             creationTier: 0, vault: address(mockVault),
             name: "FreeMintToken", symbol: "FMT", styleUri: ""

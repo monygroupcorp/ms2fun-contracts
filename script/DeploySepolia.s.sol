@@ -2,7 +2,6 @@
 pragma solidity ^0.8.20;
 
 import {Script, console} from "forge-std/Script.sol";
-import {LibClone} from "solady/utils/LibClone.sol";
 import {MasterRegistryV1} from "../src/master/MasterRegistryV1.sol";
 import {MasterRegistry} from "../src/master/MasterRegistry.sol";
 import {IMasterRegistry} from "../src/master/interfaces/IMasterRegistry.sol";
@@ -27,6 +26,7 @@ import {ERC721AuctionFactory} from "../src/factories/erc721/ERC721AuctionFactory
 import {PromotionBadges} from "../src/promotion/PromotionBadges.sol";
 import {MockSafe} from "../test/mocks/MockSafe.sol";
 import {MockERC20} from "../test/mocks/MockERC20.sol";
+import {ICreateX, CREATEX} from "../src/shared/CreateXConstants.sol";
 
 contract DeploySepolia is Script {
     // Algebra V2 (Cypher AMM) addresses on Sepolia — fill before deploying
@@ -97,31 +97,46 @@ contract DeploySepolia is Script {
         // 1. MasterRegistryV1 implementation
         masterRegistryImpl = new MasterRegistryV1();
 
-        // 2. MasterRegistry proxy
-        bytes memory initData = abi.encodeWithSignature("initialize(address)", deployer);
-        masterRegistryProxy = new MasterRegistry(address(masterRegistryImpl), initData);
+        // 2. MasterRegistry proxy via CREATE3
+        {
+            bytes memory proxyInitCode = abi.encodePacked(
+                type(MasterRegistry).creationCode,
+                abi.encode(address(masterRegistryImpl), abi.encodeWithSignature("initialize(address)", deployer))
+            );
+            masterRegistryProxy = MasterRegistry(payable(
+                ICreateX(CREATEX).deployCreate3(vm.envOr("MASTER_REGISTRY_SALT", bytes32(uint256(1))), proxyInitCode)
+            ));
+        }
         masterRegistry = address(masterRegistryProxy);
 
-        // 3. ProtocolTreasuryV1
+        // 3. ProtocolTreasuryV1 via CREATE3
         treasuryImpl = new ProtocolTreasuryV1();
-        treasury = ProtocolTreasuryV1(payable(LibClone.deployERC1967(address(treasuryImpl))));
+        treasury = ProtocolTreasuryV1(payable(
+            _deployCloneCreate3(address(treasuryImpl), vm.envOr("TREASURY_SALT", bytes32(uint256(2))))
+        ));
         treasury.initialize(deployer);
         treasury.setV4PoolManager(poolManager);
         treasury.setWETH(weth);
 
-        // 4. FeaturedQueueManager
+        // 4. FeaturedQueueManager via CREATE3
         queueManagerImpl = new FeaturedQueueManager();
-        queueManager = FeaturedQueueManager(payable(LibClone.deployERC1967(address(queueManagerImpl))));
+        queueManager = FeaturedQueueManager(payable(
+            _deployCloneCreate3(address(queueManagerImpl), vm.envOr("QUEUE_MANAGER_SALT", bytes32(uint256(3))))
+        ));
         queueManager.initialize(masterRegistry, deployer);
 
-        // 5. GlobalMessageRegistry
+        // 5. GlobalMessageRegistry via CREATE3
         globalMessageRegistryImpl = new GlobalMessageRegistry();
-        globalMessageRegistry = GlobalMessageRegistry(LibClone.deployERC1967(address(globalMessageRegistryImpl)));
+        globalMessageRegistry = GlobalMessageRegistry(
+            _deployCloneCreate3(address(globalMessageRegistryImpl), vm.envOr("GLOBAL_MSG_REGISTRY_SALT", bytes32(uint256(4))))
+        );
         globalMessageRegistry.initialize(deployer, masterRegistry);
 
-        // 6. AlignmentRegistryV1
+        // 6. AlignmentRegistryV1 via CREATE3
         alignmentRegistryImpl = new AlignmentRegistryV1();
-        alignmentRegistry = AlignmentRegistryV1(LibClone.deployERC1967(address(alignmentRegistryImpl)));
+        alignmentRegistry = AlignmentRegistryV1(
+            _deployCloneCreate3(address(alignmentRegistryImpl), vm.envOr("ALIGNMENT_REGISTRY_SALT", bytes32(uint256(5))))
+        );
         alignmentRegistry.initialize(deployer);
         MasterRegistryV1(masterRegistry).setAlignmentRegistry(address(alignmentRegistry));
 
@@ -183,7 +198,9 @@ contract DeploySepolia is Script {
             weth, v2Factory, v3Factory, poolManager, 1000
         );
         UniAlignmentVault vaultImpl = new UniAlignmentVault();
-        vault = UniAlignmentVault(payable(LibClone.clone(address(vaultImpl))));
+        vault = UniAlignmentVault(payable(
+            _deployCloneCreate3(address(vaultImpl), vm.envOr("VAULT_SALT", bytes32(uint256(7))))
+        ));
         vault.initialize(
             weth,
             poolManager,
@@ -250,10 +267,11 @@ contract DeploySepolia is Script {
         launchManager = new LaunchManager(deployer);
         curveParamsComputer = new CurveParamsComputer(deployer);
 
-        // Deploy ComponentRegistry (UUPS proxy)
+        // Deploy ComponentRegistry (UUPS proxy via CREATE3)
         ComponentRegistry compRegImpl = new ComponentRegistry();
-        address compRegProxy = LibClone.deployERC1967(address(compRegImpl));
-        componentRegistry = ComponentRegistry(compRegProxy);
+        componentRegistry = ComponentRegistry(
+            _deployCloneCreate3(address(compRegImpl), vm.envOr("COMPONENT_REGISTRY_SALT", bytes32(uint256(6))))
+        );
         componentRegistry.initialize(deployer);
 
         erc404Factory = new ERC404Factory(
@@ -285,6 +303,15 @@ contract DeploySepolia is Script {
         );
         erc721Factory.setProtocolTreasury(address(treasury));
 
+    }
+
+    function _deployCloneCreate3(address impl, bytes32 salt) private returns (address) {
+        bytes memory proxyCreationCode = abi.encodePacked(
+            hex"3d602d80600a3d3981f3363d3d373d3d3d363d73",
+            impl,
+            hex"5af43d82803e903d91602b57fd5bf3"
+        );
+        return ICreateX(CREATEX).deployCreate3(salt, proxyCreationCode);
     }
 
     function _logAddresses() internal view {

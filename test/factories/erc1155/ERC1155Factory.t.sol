@@ -20,6 +20,8 @@ import {GlobalMessageRegistry} from "../../../src/registry/GlobalMessageRegistry
 import {PromotionBadges} from "../../../src/promotion/PromotionBadges.sol";
 import {MockAlignmentRegistry} from "../../mocks/MockAlignmentRegistry.sol";
 import {IAlignmentRegistry} from "../../../src/master/interfaces/IAlignmentRegistry.sol";
+import {ICreateX, CREATEX} from "../../../src/shared/CreateXConstants.sol";
+import {CREATEX_BYTECODE} from "createx-forge/script/CreateX.d.sol";
 
 contract MockRejectGatingModule {
     function canMint(address, uint256, bytes calldata) external pure returns (bool allowed, bool permanent) {
@@ -49,6 +51,8 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
     MockAlignmentRegistry public mockAlignmentRegistry;
     MockMasterRegistry public mockRegistry;
 
+    uint256 internal _saltCounter;
+
     uint256 constant TARGET_ID = 1;
 
     address public owner = address(0x1);
@@ -60,8 +64,14 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
 
     address public mockInstanceTemplate = address(0x200);
 
+    function _nextSalt() internal returns (bytes32) {
+        _saltCounter++;
+        return bytes32(abi.encodePacked(address(factory), uint8(0x00), bytes11(uint88(_saltCounter))));
+    }
+
     function setUp() public {
         vm.startPrank(owner);
+        vm.etch(CREATEX, CREATEX_BYTECODE);
 
         // Deploy mock token for vault
         token = new MockEXECToken(1000000e18);
@@ -132,7 +142,7 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
         address _vault
     ) internal returns (address instance) {
         instance = factory.createInstance{value: 0.01 ether}(
-            _name, "ipfs://test", _creator, _vault, ""
+            _nextSalt(), _name, "ipfs://test", _creator, _vault, ""
         );
         ERC1155Instance(instance).setAgentDelegation(true);
     }
@@ -142,12 +152,24 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
         assertEq(address(factory.instanceTemplate()), mockInstanceTemplate);
     }
 
+    function test_computeInstanceAddress() public {
+        bytes32 salt = _nextSalt();
+        address predicted = factory.computeInstanceAddress(salt);
+
+        vm.deal(creator, 1 ether);
+        vm.prank(creator);
+        address actual = factory.createInstance{value: 0}(
+            salt, "PredictTest", "ipfs://predict", creator, address(vault), ""
+        );
+        assertEq(actual, predicted, "Instance should deploy at predicted CREATE3 address");
+    }
+
     function test_CreateInstance() public {
         vm.deal(creator, 1 ether);
         vm.startPrank(creator);
         
         address instance = factory.createInstance{value: 0.01 ether}(
-            "Test Collection",
+            _nextSalt(), "Test Collection",
             "ipfs://test",
             creator,
             address(vault),
@@ -170,7 +192,7 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
 
         // No fee required for STANDARD tier (no featured placement)
         address instance = factory.createInstance{value: 0}(
-            "Test Collection",
+            _nextSalt(), "Test Collection",
             "ipfs://test",
             creator,
             address(vault),
@@ -186,7 +208,7 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
         vm.startPrank(creator);
         
         address instance = factory.createInstance{value: 0.01 ether}(
-            "Test Collection",
+            _nextSalt(), "Test Collection",
             "ipfs://test",
             creator,
             address(vault),
@@ -223,7 +245,7 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
         vm.startPrank(creator);
 
         address instance = factory.createInstance{value: 0.01 ether}(
-            "Test Collection",
+            _nextSalt(), "Test Collection",
             "ipfs://test",
             creator,
             address(vault),
@@ -257,7 +279,7 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
         vm.startPrank(creator);
 
         address instance = factory.createInstance{value: 0.01 ether}(
-            "Test Collection",
+            _nextSalt(), "Test Collection",
             "ipfs://test",
             creator,
             address(vault),
@@ -292,7 +314,7 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
 
         vm.startPrank(creator);
         address instance = factory.createInstance{value: 0.01 ether}(
-            "Test Collection",
+            _nextSalt(), "Test Collection",
             "ipfs://test",
             creator,
             address(vault),
@@ -331,7 +353,7 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
 
         vm.startPrank(creator);
         address instance = factory.createInstance{value: 0.01 ether}(
-            "Test Collection",
+            _nextSalt(), "Test Collection",
             "ipfs://test",
             creator,
             address(vault),
@@ -378,7 +400,7 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
 
         vm.startPrank(creator);
         address instance = factory.createInstance{value: 0.01 ether}(
-            "Test Collection",
+            _nextSalt(), "Test Collection",
             "ipfs://test",
             creator,
             address(vault),
@@ -421,7 +443,7 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
 
         vm.startPrank(creator);
         address instance = factory.createInstance{value: 0.01 ether}(
-            "Test Collection",
+            _nextSalt(), "Test Collection",
             "ipfs://test",
             creator,
             address(vault),
@@ -463,7 +485,7 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
 
         vm.startPrank(creator);
         address instance = factory.createInstance{value: 0.01 ether}(
-            "Test Collection",
+            _nextSalt(), "Test Collection",
             "ipfs://test",
             creator,
             address(vault),
@@ -513,7 +535,7 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
 
         vm.startPrank(creator);
         address instance = factory.createInstance{value: 0.01 ether}(
-            "Test Collection",
+            _nextSalt(), "Test Collection",
             "ipfs://test",
             creator,
             address(vault),
@@ -551,7 +573,7 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
 
         vm.startPrank(creator);
         address instance = factory.createInstance{value: 0.01 ether}(
-            "Test Collection",
+            _nextSalt(), "Test Collection",
             "ipfs://test",
             creator,
             address(vault),
@@ -584,7 +606,7 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
 
         vm.startPrank(creator);
         address instance = factory.createInstance{value: 0.01 ether}(
-            "Test Collection",
+            _nextSalt(), "Test Collection",
             "ipfs://test",
             creator,
             address(vault),
@@ -617,7 +639,7 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
 
         vm.startPrank(creator);
         address instance = factory.createInstance{value: 0.01 ether}(
-            "Test Collection",
+            _nextSalt(), "Test Collection",
             "ipfs://test",
             creator,
             address(vault),
@@ -668,7 +690,7 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
 
         vm.startPrank(creator);
         address instance = factory.createInstance{value: 0.01 ether}(
-            "Test Collection",
+            _nextSalt(), "Test Collection",
             "ipfs://test",
             creator,
             address(vault),
@@ -701,7 +723,7 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
 
         vm.startPrank(creator);
         address instance = factory.createInstance{value: 0.01 ether}(
-            "Test Collection",
+            _nextSalt(), "Test Collection",
             "ipfs://test",
             creator,
             address(vault),
@@ -742,7 +764,7 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
         
         vm.startPrank(creator);
         address instance = factory.createInstance{value: 0.01 ether}(
-            "Test Collection",
+            _nextSalt(), "Test Collection",
             "ipfs://test",
             creator,
             address(vault),
@@ -777,7 +799,7 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
 
         vm.startPrank(creator);
         address instance = factory.createInstance{value: 0.01 ether}(
-            "Test Collection",
+            _nextSalt(), "Test Collection",
             "ipfs://test",
             creator,
             address(vault),
@@ -824,7 +846,7 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
 
         vm.startPrank(creator);
         address instance = factory.createInstance{value: 0.01 ether}(
-            "Test Collection",
+            _nextSalt(), "Test Collection",
             "ipfs://test",
             creator,
             address(vault),
@@ -892,7 +914,7 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
         vm.deal(creator, 1 ether);
         vm.startPrank(creator);
         factory.createInstance{value: 0.01 ether}(
-            "Fee Collection",
+            _nextSalt(), "Fee Collection",
             "ipfs://test",
             creator,
             address(vault),
@@ -938,7 +960,7 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
         vm.deal(creator, 1 ether);
         vm.startPrank(creator);
         address instance = factory.createInstance{value: 0.01 ether}(
-            "Treasury Test",
+            _nextSalt(), "Treasury Test",
             "ipfs://test",
             creator,
             address(vault),
@@ -957,7 +979,7 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
 
         vm.startPrank(creator);
         address instance = factory.createInstance{value: 0.01 ether}(
-            "Test Collection",
+            _nextSalt(), "Test Collection",
             "ipfs://test",
             creator,
             address(vault),
@@ -1033,7 +1055,7 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
         vm.startPrank(creator);
 
         address instance = factory.createInstance{value: 0}(
-            "Standard Collection",
+            _nextSalt(), "Standard Collection",
             "ipfs://test",
             creator,
             address(vault),
@@ -1062,7 +1084,7 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
         vm.startPrank(creator);
 
         address instance = factory.createInstance{value: 0}(
-            "Premium Collection",
+            _nextSalt(), "Premium Collection",
             "ipfs://test",
             creator,
             address(vault),
@@ -1081,7 +1103,7 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
         vm.startPrank(creator);
 
         address instance = factory.createInstance{value: 0}(
-            "Launch Collection",
+            _nextSalt(), "Launch Collection",
             "ipfs://test",
             creator,
             address(vault),
@@ -1112,7 +1134,7 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
 
         vm.startPrank(creator);
         factory.createInstance{value: sent}(
-            "Refund Collection",
+            _nextSalt(), "Refund Collection",
             "ipfs://test",
             creator,
             address(vault),
@@ -1143,7 +1165,7 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
 
         // Should succeed — perks are skipped when contracts not set (featuredCost = 0 since no queue manager)
         address instance = factory.createInstance{value: 0}(
-            "Launch Collection",
+            _nextSalt(), "Launch Collection",
             "ipfs://test",
             creator,
             address(vault),
@@ -1177,7 +1199,7 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
         vm.startPrank(creator);
 
         address instance = factory.createInstance{value: 0}(
-            "Badge Collection",
+            _nextSalt(), "Badge Collection",
             "ipfs://test",
             creator,
             address(vault),
@@ -1205,7 +1227,7 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
         vm.deal(artist, 1 ether);
         vm.prank(artist);
         instance = factory.createInstance{value: 0}(
-            "GatedProject",
+            _nextSalt(), "GatedProject",
             "ipfs://Qm",
             artist,
             address(vault),
@@ -1296,7 +1318,7 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
         vm.prank(artist);
         vm.expectRevert(ERC1155Factory.UnapprovedComponent.selector);
         factory.createInstance{value: 0}(
-            "TestProject",
+            _nextSalt(), "TestProject",
             "ipfs://Qm",
             artist,
             address(vault),
@@ -1314,7 +1336,7 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
         vm.deal(artist, 1 ether);
         vm.prank(artist);
         address instance = factory.createInstance{value: 0}(
-            "GatedProject",
+            _nextSalt(), "GatedProject",
             "ipfs://Qm",
             artist,
             address(vault),
@@ -1330,7 +1352,7 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
         vm.deal(artist, 1 ether);
         vm.prank(artist);
         address instance = factory.createInstance{value: 0}(
-            "OpenProject",
+            _nextSalt(), "OpenProject",
             "ipfs://Qm",
             artist,
             address(vault),
@@ -1344,7 +1366,7 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
         vm.deal(artist, 1 ether);
         vm.prank(artist);
         address instance = factory.createInstance{value: 0}(
-            "Project",
+            _nextSalt(), "Project",
             "ipfs://Qm",
             artist,
             address(vault),

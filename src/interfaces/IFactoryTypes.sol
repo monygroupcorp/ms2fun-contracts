@@ -11,6 +11,7 @@ struct FreeMintParams {
 
 /// @notice User-provided identity for any ERC404 factory instance.
 struct IdentityParams {
+    bytes32 salt;          // CREATE3 deployment salt for vanity address
     string  name;
     string  symbol;
     string  styleUri;

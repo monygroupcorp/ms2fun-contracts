@@ -17,6 +17,8 @@ import {IHooks} from "v4-core/interfaces/IHooks.sol";
 import {GlobalMessagingTestBase} from "../../base/GlobalMessagingTestBase.sol";
 import {MockAlignmentRegistry} from "../../mocks/MockAlignmentRegistry.sol";
 import {IAlignmentRegistry} from "../../../src/master/interfaces/IAlignmentRegistry.sol";
+import {ICreateX, CREATEX} from "../../../src/shared/CreateXConstants.sol";
+import {CREATEX_BYTECODE} from "createx-forge/script/CreateX.d.sol";
 
 contract ERC721AgentDelegationTest is GlobalMessagingTestBase {
     ERC721AuctionFactory public factory;
@@ -25,13 +27,22 @@ contract ERC721AgentDelegationTest is GlobalMessagingTestBase {
     MockEXECToken public token;
     MockAlignmentRegistry public mockAlignmentRegistry;
 
+    uint256 internal _saltCounter;
+
     uint256 constant TARGET_ID = 1;
     address public owner = address(0x1);
     address public artist = address(0x5);
     address public agent = address(0x10);
     address public nobody = address(0x99);
 
+    function _nextSalt() internal returns (bytes32) {
+        _saltCounter++;
+        return bytes32(abi.encodePacked(address(factory), uint8(0x00), bytes11(uint88(_saltCounter))));
+    }
+
     function setUp() public {
+        vm.etch(CREATEX, CREATEX_BYTECODE);
+
         vm.startPrank(owner);
 
         token = new MockEXECToken(1000000e18);
@@ -78,6 +89,7 @@ contract ERC721AgentDelegationTest is GlobalMessagingTestBase {
         vm.deal(agent, 1 ether);
         vm.prank(agent);
         address instance = factory.createInstance{value: 0.01 ether}(
+            _nextSalt(),
             "Agent Auction",
             "ipfs://test",
             artist,
@@ -98,6 +110,7 @@ contract ERC721AgentDelegationTest is GlobalMessagingTestBase {
         vm.deal(artist, 1 ether);
         vm.prank(artist);
         address instance = factory.createInstance{value: 0.01 ether}(
+            _nextSalt(),
             "Self Auction",
             "ipfs://test",
             artist,
@@ -114,6 +127,7 @@ contract ERC721AgentDelegationTest is GlobalMessagingTestBase {
         vm.prank(nobody);
         vm.expectRevert();
         factory.createInstance{value: 0.01 ether}(
+            _nextSalt(),
             "Should Fail",
             "ipfs://test",
             artist,
@@ -129,6 +143,7 @@ contract ERC721AgentDelegationTest is GlobalMessagingTestBase {
         vm.deal(agent, 2 ether);
         vm.prank(agent);
         address instance = factory.createInstance{value: 0.01 ether}(
+            _nextSalt(),
             "Queue Test",
             "ipfs://test",
             artist,
@@ -147,6 +162,7 @@ contract ERC721AgentDelegationTest is GlobalMessagingTestBase {
         vm.deal(agent, 2 ether);
         vm.prank(agent);
         address instance = factory.createInstance{value: 0.01 ether}(
+            _nextSalt(),
             "Toggle Test",
             "ipfs://test",
             artist,
@@ -167,6 +183,7 @@ contract ERC721AgentDelegationTest is GlobalMessagingTestBase {
         vm.deal(agent, 2 ether);
         vm.prank(agent);
         address instance = factory.createInstance{value: 0.01 ether}(
+            _nextSalt(),
             "Revoke Test",
             "ipfs://test",
             artist,
@@ -188,6 +205,7 @@ contract ERC721AgentDelegationTest is GlobalMessagingTestBase {
         vm.deal(artist, 1 ether);
         vm.prank(artist);
         address instance = factory.createInstance{value: 0.01 ether}(
+            _nextSalt(),
             "Direct Test",
             "ipfs://test",
             artist,
@@ -205,6 +223,7 @@ contract ERC721AgentDelegationTest is GlobalMessagingTestBase {
         vm.deal(artist, 1 ether);
         vm.prank(artist);
         address instance = factory.createInstance{value: 0.01 ether}(
+            _nextSalt(),
             "Auth Test",
             "ipfs://test",
             artist,

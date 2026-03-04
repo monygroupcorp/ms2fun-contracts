@@ -17,6 +17,8 @@ import {PoolKey} from "v4-core/types/PoolKey.sol";
 import {IHooks} from "v4-core/interfaces/IHooks.sol";
 import {MockAlignmentRegistry} from "../../mocks/MockAlignmentRegistry.sol";
 import {IAlignmentRegistry} from "../../../src/master/interfaces/IAlignmentRegistry.sol";
+import {ICreateX, CREATEX} from "../../../src/shared/CreateXConstants.sol";
+import {CREATEX_BYTECODE} from "createx-forge/script/CreateX.d.sol";
 
 contract ERC721AuctionFactoryTest is Test {
     ERC721AuctionFactory public factory;
@@ -33,11 +35,19 @@ contract ERC721AuctionFactoryTest is Test {
     address public bidder2 = address(0x4);
     address public treasury = address(0x5);
 
+    uint256 internal _saltCounter;
+
     uint40 constant BASE_DURATION = 1 hours;
     uint40 constant TIME_BUFFER = 5 minutes;
     uint256 constant BID_INCREMENT = 0.01 ether;
 
+    function _nextSalt() internal returns (bytes32) {
+        _saltCounter++;
+        return bytes32(abi.encodePacked(address(factory), uint8(0x00), bytes11(uint88(_saltCounter))));
+    }
+
     function setUp() public {
+        vm.etch(CREATEX, CREATEX_BYTECODE);
         vm.startPrank(owner);
 
         token = new MockEXECToken(1000000e18);
@@ -95,6 +105,7 @@ contract ERC721AuctionFactoryTest is Test {
         vm.prank(artist);
 
         address instance = factory.createInstance{value: 0.01 ether}(
+            _nextSalt(),
             "Test Auctions",
             "ipfs://test",
             artist,
@@ -110,7 +121,7 @@ contract ERC721AuctionFactoryTest is Test {
         ERC721AuctionInstance inst = ERC721AuctionInstance(payable(instance));
         assertEq(inst.name(), "Test Auctions");
         assertEq(inst.symbol(), "TART");
-        assertEq(inst.vault(), address(vault));
+        assertEq(address(inst.vault()), address(vault));
         assertEq(inst.protocolTreasury(), treasury);
         assertEq(inst.lines(), 1);
         assertEq(inst.baseDuration(), BASE_DURATION);
@@ -124,6 +135,7 @@ contract ERC721AuctionFactoryTest is Test {
         vm.deal(artist, 1 ether);
         vm.prank(artist);
         factory.createInstance{value: 0.01 ether}(
+            _nextSalt(),
             "Test Auctions",
             "ipfs://test",
             artist,
@@ -149,6 +161,7 @@ contract ERC721AuctionFactoryTest is Test {
         vm.deal(artist, 100 ether);
         vm.prank(artist);
         address instance = factory.createInstance{value: 0.01 ether}(
+            _nextSalt(),
             "Artist Collection",
             "ipfs://meta",
             artist,
@@ -450,6 +463,7 @@ contract ERC721AuctionFactoryTest is Test {
         vm.deal(artist, 100 ether);
         vm.prank(artist);
         address instance = factory.createInstance{value: 0.01 ether}(
+            _nextSalt(),
             "Multi Line",
             "ipfs://meta",
             artist,

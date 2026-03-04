@@ -10,6 +10,7 @@ import {IAlignmentVault} from "../../interfaces/IAlignmentVault.sol";
 import {IFactory} from "../../interfaces/IFactory.sol";
 import {PromotionBadges} from "../../promotion/PromotionBadges.sol";
 import {FeaturedQueueManager} from "../../master/FeaturedQueueManager.sol";
+import {ICreateX, CREATEX} from "../../shared/CreateXConstants.sol";
 
 /**
  * @title ERC721AuctionFactory
@@ -38,6 +39,7 @@ contract ERC721AuctionFactory is Ownable, ReentrancyGuard, IFactory {
 
     /// @dev Packs all per-instance creation params to avoid stack-too-deep in _createInstanceInternal.
     struct CreateArgs {
+        bytes32 salt;
         string name;
         string metadataURI;
         address creator;
@@ -88,6 +90,7 @@ contract ERC721AuctionFactory is Ownable, ReentrancyGuard, IFactory {
      * @notice Create a new ERC721 auction instance (defaults to STANDARD tier)
      */
     function createInstance(
+        bytes32 salt,
         string memory _name,
         string memory metadataURI,
         address _creator,
@@ -99,7 +102,7 @@ contract ERC721AuctionFactory is Ownable, ReentrancyGuard, IFactory {
         uint256 _bidIncrement
     ) external payable nonReentrant returns (address instance) {
         return _createInstanceInternal(CreateArgs({
-            name: _name, metadataURI: metadataURI, creator: _creator, vault: _vault,
+            salt: salt, name: _name, metadataURI: metadataURI, creator: _creator, vault: _vault,
             symbol: _symbol, lines: _lines, baseDuration: _baseDuration,
             timeBuffer: _timeBuffer, bidIncrement: _bidIncrement
         }), CreationTier.STANDARD);
@@ -109,6 +112,7 @@ contract ERC721AuctionFactory is Ownable, ReentrancyGuard, IFactory {
      * @notice Create a new ERC721 auction instance with a specific creation tier
      */
     function createInstance(
+        bytes32 salt,
         string memory _name,
         string memory metadataURI,
         address _creator,
@@ -121,7 +125,7 @@ contract ERC721AuctionFactory is Ownable, ReentrancyGuard, IFactory {
         CreationTier creationTier
     ) external payable nonReentrant returns (address instance) {
         return _createInstanceInternal(CreateArgs({
-            name: _name, metadataURI: metadataURI, creator: _creator, vault: _vault,
+            salt: salt, name: _name, metadataURI: metadataURI, creator: _creator, vault: _vault,
             symbol: _symbol, lines: _lines, baseDuration: _baseDuration,
             timeBuffer: _timeBuffer, bidIncrement: _bidIncrement
         }), creationTier);
@@ -179,11 +183,26 @@ contract ERC721AuctionFactory is Ownable, ReentrancyGuard, IFactory {
     }
 
     function _deployInstance(CreateArgs memory args, bool agentCreated) private returns (address) {
-        address instance = address(new ERC721AuctionInstance(
-            args.vault, protocolTreasury, args.creator, args.name, args.symbol,
-            args.lines, args.baseDuration, args.timeBuffer, args.bidIncrement,
-            globalMessageRegistry, address(masterRegistry)
-        ));
+        bytes memory initCode = abi.encodePacked(
+            type(ERC721AuctionInstance).creationCode,
+            abi.encode(
+                ERC721AuctionInstance.ConstructorParams({
+                    vault: args.vault,
+                    protocolTreasury: protocolTreasury,
+                    owner: args.creator,
+                    name: args.name,
+                    symbol: args.symbol,
+                    lines: args.lines,
+                    baseDuration: args.baseDuration,
+                    timeBuffer: args.timeBuffer,
+                    bidIncrement: args.bidIncrement,
+                    globalMessageRegistry: globalMessageRegistry,
+                    masterRegistry: address(masterRegistry),
+                    factory: address(this)
+                })
+            )
+        );
+        address instance = ICreateX(CREATEX).deployCreate3(args.salt, initCode);
         if (agentCreated) {
             ERC721AuctionInstance(payable(instance)).setAgentDelegationFromFactory();
         }
@@ -260,5 +279,11 @@ contract ERC721AuctionFactory is Ownable, ReentrancyGuard, IFactory {
 
     function requiredFeatures() external pure returns (bytes32[] memory) {
         return new bytes32[](0);
+    }
+
+    /// @notice Preview the deterministic address for a given salt
+    function computeInstanceAddress(bytes32 salt) external view returns (address) {
+        bytes32 guardedSalt = keccak256(abi.encodePacked(uint256(uint160(address(this))), salt));
+        return ICreateX(CREATEX).computeCreate3Address(guardedSalt, CREATEX);
     }
 }
