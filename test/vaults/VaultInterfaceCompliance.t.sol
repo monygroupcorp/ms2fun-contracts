@@ -48,6 +48,7 @@ contract VaultInterfaceComplianceTest is Test {
         UniAlignmentVault impl = new UniAlignmentVault();
         ultraVault = UniAlignmentVault(payable(LibClone.clone(address(impl))));
         ultraVault.initialize(
+            address(this),
             MOCK_WETH,
             MOCK_POOL_MANAGER,
             MOCK_ALIGNMENT_TOKEN,

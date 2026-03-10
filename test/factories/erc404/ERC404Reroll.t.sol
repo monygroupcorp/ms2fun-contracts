@@ -22,7 +22,7 @@ contract ERC404RerollTest is Test {
     address user2 = address(0x20);
 
     uint256 constant MAX_SUPPLY = 1_000_000_000 ether;
-    uint256 constant LIQUIDITY_RESERVE_PERCENT = 10;
+    uint256 constant LIQUIDITY_RESERVE_BPS = 1000;
     uint256 constant UNIT = 1_000_000 ether; // 1M tokens = 1 NFT
 
     function setUp() public {
@@ -44,7 +44,7 @@ contract ERC404RerollTest is Test {
         ERC404BondingInstance.BondingParams memory bonding = ERC404BondingInstance.BondingParams({
             maxSupply: MAX_SUPPLY,
             unit: UNIT,
-            liquidityReservePercent: LIQUIDITY_RESERVE_PERCENT,
+            liquidityReserveBps: LIQUIDITY_RESERVE_BPS,
             curve: curveParams
         });
         token.initialize(owner, address(0xBEEF), bonding, mockLiquidityDeployer, address(0));

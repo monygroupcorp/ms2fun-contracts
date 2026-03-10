@@ -18,6 +18,7 @@ import {SafeTransferLib} from "solady/utils/SafeTransferLib.sol";
 import {IERC20} from "../../shared/interfaces/IERC20.sol";
 import {IAlignmentVault} from "../../interfaces/IAlignmentVault.sol";
 import {ILiquidityDeployerModule} from "../../interfaces/ILiquidityDeployerModule.sol";
+import {Ownable} from "solady/auth/Ownable.sol";
 
 interface IWETH {
     function deposit() external payable;
@@ -32,7 +33,7 @@ interface IWETH {
  *         Owns the unlockCallback so V4 bytecode is not embedded in the instance.
  *         Pool fee and tick spacing are fixed at construction time.
  */
-contract LiquidityDeployerModule is IUnlockCallback, ILiquidityDeployerModule {
+contract LiquidityDeployerModule is IUnlockCallback, ILiquidityDeployerModule, Ownable {
     using CurrencyLibrary for Currency;
     using StateLibrary for IPoolManager;
     using CurrencySettler for Currency;
@@ -48,12 +49,15 @@ contract LiquidityDeployerModule is IUnlockCallback, ILiquidityDeployerModule {
     uint24 public immutable poolFee;
     int24 public immutable tickSpacing;
 
+    string private _metadataURI;
+
     // slither-disable-next-line missing-zero-check
     constructor(address _v4PoolManager, address _weth, uint24 _poolFee, int24 _tickSpacing) {
         v4PoolManager = IPoolManager(_v4PoolManager);
         weth = _weth;
         poolFee = _poolFee;
         tickSpacing = _tickSpacing;
+        _initializeOwner(msg.sender);
     }
 
     struct AmountsResult {
@@ -238,11 +242,24 @@ contract LiquidityDeployerModule is IUnlockCallback, ILiquidityDeployerModule {
         uint256 numerator = token0IsThis ? ethForPool : tokensForPool;
         uint256 denominator = token0IsThis ? tokensForPool : ethForPool;
         uint256 priceX192 = FixedPointMathLib.fullMulDiv(numerator, 1 << 192, denominator);
-        sqrtPriceX96 = uint160(FixedPointMathLib.sqrt(priceX192));
+        uint256 sqrtRaw = FixedPointMathLib.sqrt(priceX192);
+        if (sqrtRaw > type(uint160).max) sqrtRaw = type(uint160).max;
+        sqrtPriceX96 = uint160(sqrtRaw);
         if (sqrtPriceX96 < TickMath.MIN_SQRT_PRICE + 1) sqrtPriceX96 = TickMath.MIN_SQRT_PRICE + 1;
         if (sqrtPriceX96 > TickMath.MAX_SQRT_PRICE - 1) sqrtPriceX96 = TickMath.MAX_SQRT_PRICE - 1;
     }
 
     /// @notice Accept ETH (needed for WETH deposits returning change, etc.)
     receive() external payable {}
+
+    // ── IComponentModule ───────────────────────────────────────────────────────
+
+    function metadataURI() external view override returns (string memory) {
+        return _metadataURI;
+    }
+
+    function setMetadataURI(string calldata uri) external override onlyOwner {
+        _metadataURI = uri;
+        emit MetadataURIUpdated(uri);
+    }
 }

@@ -43,7 +43,7 @@ contract VaultMultiDepositTest is ForkTestBase {
         // Deploy peripherals and vault (clone pattern)
         address alignmentToken = USDC; // Use real USDC for fork tests (has V3 pool with WETH)
         UniswapVaultPriceValidator priceValidator = new UniswapVaultPriceValidator(
-            WETH, UNISWAP_V2_FACTORY, UNISWAP_V3_FACTORY, UNISWAP_V4_POOL_MANAGER, 1000
+            WETH, UNISWAP_V2_FACTORY, UNISWAP_V3_FACTORY, UNISWAP_V4_POOL_MANAGER, 1000, 1800
         );
 
         // Setup mock alignment registry
@@ -55,6 +55,7 @@ contract VaultMultiDepositTest is ForkTestBase {
         vault = UniAlignmentVault(payable(LibClone.clone(address(vaultImpl))));
         vm.prank(owner);
         vault.initialize(
+            owner,
             WETH,
             UNISWAP_V4_POOL_MANAGER,
             alignmentToken,
@@ -110,7 +111,7 @@ contract VaultMultiDepositTest is ForkTestBase {
         // NOTE: Using 5 ETH to ensure stub's integer division produces non-zero amounts
         _contribute(alice, 5 ether);
         _contribute(bob, 5 ether);
-        vault.convertAndAddLiquidity(0);
+        vault.convertAndAddLiquidity(1);
 
         uint256 aliceSharesCycle1 = vault.benefactorShares(alice);
         uint256 bobSharesCycle1 = vault.benefactorShares(bob);
@@ -125,7 +126,7 @@ contract VaultMultiDepositTest is ForkTestBase {
         // Cycle 2: Alice 5 ETH, Bob 5 ETH → convert (same dragnet)
         _contribute(alice, 5 ether);
         _contribute(bob, 5 ether);
-        vault.convertAndAddLiquidity(0);
+        vault.convertAndAddLiquidity(1);
 
         uint256 aliceSharesCycle2 = vault.benefactorShares(alice);
         uint256 bobSharesCycle2 = vault.benefactorShares(bob);
@@ -153,7 +154,7 @@ contract VaultMultiDepositTest is ForkTestBase {
         // NOTE: Using 5+ ETH amounts to work with stub's integer division
         _contribute(alice, 10 ether);
         _contribute(bob, 5 ether);
-        vault.convertAndAddLiquidity(0);
+        vault.convertAndAddLiquidity(1);
 
         uint256 aliceShares1 = vault.benefactorShares(alice);
         uint256 bobShares1 = vault.benefactorShares(bob);
@@ -168,7 +169,7 @@ contract VaultMultiDepositTest is ForkTestBase {
         // Cycle 2: Alice 5 ETH, Bob 10 ETH (1:2 ratio this cycle)
         _contribute(alice, 5 ether);
         _contribute(bob, 10 ether);
-        vault.convertAndAddLiquidity(0);
+        vault.convertAndAddLiquidity(1);
 
         uint256 aliceShares2 = vault.benefactorShares(alice);
         uint256 bobShares2 = vault.benefactorShares(bob);
@@ -182,7 +183,7 @@ contract VaultMultiDepositTest is ForkTestBase {
         // Cycle 3: Alice 5 ETH, Bob 5 ETH (1:1 ratio this cycle)
         _contribute(alice, 5 ether);
         _contribute(bob, 5 ether);
-        vault.convertAndAddLiquidity(0);
+        vault.convertAndAddLiquidity(1);
 
         uint256 aliceSharesFinal = vault.benefactorShares(alice);
         uint256 bobSharesFinal = vault.benefactorShares(bob);
@@ -213,7 +214,7 @@ contract VaultMultiDepositTest is ForkTestBase {
 
         // Cycle 1: Alice contributes 10 ETH alone
         _contribute(alice, 10 ether);
-        vault.convertAndAddLiquidity(0);
+        vault.convertAndAddLiquidity(1);
 
         uint256 aliceShares = vault.benefactorShares(alice);
         uint256 totalSharesAfterCycle1 = vault.totalShares();
@@ -226,7 +227,7 @@ contract VaultMultiDepositTest is ForkTestBase {
 
         // Cycle 2: Bob contributes 10 ETH (same amount as Alice contributed)
         _contribute(bob, 10 ether);
-        vault.convertAndAddLiquidity(0);
+        vault.convertAndAddLiquidity(1);
 
         uint256 aliceSharesAfter = vault.benefactorShares(alice);
         uint256 bobShares = vault.benefactorShares(bob);
@@ -266,7 +267,7 @@ contract VaultMultiDepositTest is ForkTestBase {
         // Setup: Alice 5 ETH, Bob 5 ETH → equal shares
         _contribute(alice, 5 ether);
         _contribute(bob, 5 ether);
-        vault.convertAndAddLiquidity(0);
+        vault.convertAndAddLiquidity(1);
 
         uint256 aliceShares = vault.benefactorShares(alice);
         uint256 bobShares = vault.benefactorShares(bob);
@@ -335,7 +336,7 @@ contract VaultMultiDepositTest is ForkTestBase {
         // NOTE: Using 5+ ETH amounts to work with stub's integer division
         _contribute(alice, 50 ether);
         _contribute(bob, 5 ether);
-        vault.convertAndAddLiquidity(0);
+        vault.convertAndAddLiquidity(1);
 
         uint256 aliceShares = vault.benefactorShares(alice);
         uint256 bobShares = vault.benefactorShares(bob);
@@ -377,7 +378,7 @@ contract VaultMultiDepositTest is ForkTestBase {
         _contribute(alice, 10 ether);
         _contribute(bob, 6 ether);
         _contribute(charlie, 4 ether);
-        vault.convertAndAddLiquidity(0);
+        vault.convertAndAddLiquidity(1);
 
         uint256 aliceShares = vault.benefactorShares(alice);
         uint256 bobShares = vault.benefactorShares(bob);

@@ -25,4 +25,9 @@ contract MockVaultPriceValidator is IVaultPriceValidator {
     ) external view override returns (uint256) {
         return fixedProportion;
     }
+
+    // Returns 0 by default so existing tests are unaffected (no token fees collected in mocks).
+    function quoteEthForTokens(address, uint256) external pure override returns (uint256) {
+        return 0;
+    }
 }

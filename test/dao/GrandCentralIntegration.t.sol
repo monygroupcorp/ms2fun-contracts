@@ -22,6 +22,8 @@ contract GrandCentralIntegrationTest is Test {
         mockSafe = new MockSafe();
         dao = new GrandCentral(address(mockSafe), founder, INITIAL_SHARES, 5 days, 2 days, 0, 1, 66);
         vm.deal(address(mockSafe), 100 ether);
+        // Advance time so initial shares are in the past; snapshot voting uses votingStarts - 1.
+        vm.warp(block.timestamp + 1);
     }
 
     // ========== Full Lifecycle: Tribute Proposal ==========
@@ -145,6 +147,9 @@ contract GrandCentralIntegrationTest is Test {
         amounts[0] = 100;
         vm.prank(address(dao));
         dao.mintShares(to, amounts);
+
+        // Advance time so buyer's shares are past the snapshot boundary.
+        vm.warp(block.timestamp + 1);
 
         address[] memory targets = new address[](1);
         targets[0] = makeAddr("ops");

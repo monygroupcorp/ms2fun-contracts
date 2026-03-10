@@ -68,7 +68,7 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IInstanceLife
     struct BondingParams {
         uint256 maxSupply;
         uint256 unit;
-        uint256 liquidityReservePercent;
+        uint256 liquidityReserveBps;
         BondingCurveMath.Params curve;
     }
 
@@ -176,7 +176,7 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IInstanceLife
         vault = IAlignmentVault(payable(vault_));
 
         maxSupply = bonding.maxSupply;
-        liquidityReserve = (bonding.maxSupply * bonding.liquidityReservePercent) / 100; // round down: slightly less reserved for LP
+        liquidityReserve = (bonding.maxSupply * bonding.liquidityReserveBps) / 10000; // round down: slightly less reserved for LP
         curveParams = bonding.curve;
         unit = bonding.unit;
 

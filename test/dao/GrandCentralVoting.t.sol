@@ -35,6 +35,8 @@ contract GrandCentralVotingTest is Test {
             MIN_RETENTION
         );
         vm.deal(address(mockSafe), 100 ether);
+        // Advance time so initial shares are in the past; snapshot voting uses votingStarts - 1.
+        vm.warp(block.timestamp + 1);
     }
 
     // ========== Initialization Tests ==========
@@ -132,6 +134,27 @@ contract GrandCentralVotingTest is Test {
     // ========== Voting Tests ==========
 
 
+    /// @dev Regression: shares minted in the same block as proposal creation must not count.
+    function test_SubmitVote_SameBlockMintCannotVote() public {
+        address[] memory to = new address[](1);
+        to[0] = alice;
+        uint256[] memory amounts = new uint256[](1);
+        amounts[0] = 10_000;
+        vm.prank(address(dao));
+        dao.mintShares(to, amounts); // minted at block.timestamp T
+
+        // No warp — proposal created in the SAME second as minting
+        (address[] memory t, uint256[] memory v, bytes[] memory c) = _buildSendETHProposal(bob, 1 ether);
+        vm.prank(founder);
+        uint256 id = dao.submitProposal(t, v, c, 0, "test"); // votingStarts = T
+
+        // Alice's snapshot is at votingStarts - 1 = T - 1, before her shares existed → 0
+        vm.prank(alice);
+        vm.expectRevert(GrandCentral.NotMember.selector);
+        dao.submitVote(uint32(id), true);
+    }
+
+
     function test_SubmitVote_YesVote() public {
         uint256 id;
         { (address[] memory t, uint256[] memory v, bytes[] memory c) = _buildSendETHProposal(alice, 1 ether);
@@ -185,6 +208,9 @@ contract GrandCentralVotingTest is Test {
         amounts[0] = 100;
         vm.prank(address(dao));
         dao.mintShares(to, amounts); }
+
+        // Advance time so alice's shares are past the snapshot boundary.
+        vm.warp(block.timestamp + 1);
 
         (address[] memory t, uint256[] memory v, bytes[] memory c) = _buildSendETHProposal(bob, 1 ether);
 
@@ -414,6 +440,9 @@ contract GrandCentralVotingTest is Test {
         vm.prank(address(dao));
         dao.mintShares(to, amounts);
 
+        // Advance time so alice's shares are past the snapshot boundary (votingStarts - 1).
+        vm.warp(block.timestamp + 1);
+
         // Create proposal (auto-sponsored by founder)
         (address[] memory t, uint256[] memory v, bytes[] memory c) = _buildSendETHProposal(bob, 1 ether);
         vm.prank(founder);
@@ -423,8 +452,8 @@ contract GrandCentralVotingTest is Test {
         vm.prank(alice);
         dao.submitVote(uint32(id), true);
 
-        // Vote weight should equal alice's shares at votingStarts (== block.timestamp for auto-sponsored)
-        uint256 expectedWeight = dao.getSharesAt(alice, block.timestamp);
+        // Vote weight is alice's shares at (votingStarts - 1), i.e. the second before the proposal.
+        uint256 expectedWeight = dao.getSharesAt(alice, block.timestamp - 1);
         assertEq(expectedWeight, aliceShares);
 
         uint256 yesVotes = _yesVotes(uint32(id));

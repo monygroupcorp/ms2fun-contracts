@@ -33,6 +33,7 @@ contract UniAlignmentV4Hook is IHooks, ReentrancyGuard, Ownable {
     error LpFeeTooHigh();
     error PoolCurrency0MustBeNativeETH();
     error RateTooHigh();
+    error NoQueuedFees();
 
     IPoolManager public immutable poolManager;
     IAlignmentVault public immutable vault;
@@ -45,7 +46,12 @@ contract UniAlignmentV4Hook is IHooks, ReentrancyGuard, Ownable {
     uint24 public lpFeeRate;
 
     event AlignmentFeeCollected(uint256 ethAmount, address indexed benefactor);
+    event AlignmentFeeQueued(uint256 ethAmount, address indexed benefactor);
+    event QueuedFeesForwarded(uint256 ethAmount);
     event LpFeeRateUpdated(uint24 newRate);
+
+    /// @notice ETH held in hook pending retry after a failed vault.receiveContribution call
+    uint256 public queuedFees;
 
     constructor(
         IPoolManager _poolManager,
@@ -134,12 +140,31 @@ contract UniAlignmentV4Hook is IHooks, ReentrancyGuard, Ownable {
 
         if (feeAmount > 0) {
             poolManager.take(key.currency0, address(this), feeAmount);
-            vault.receiveContribution{value: feeAmount}(key.currency0, feeAmount, sender);
-            emit AlignmentFeeCollected(feeAmount, sender);
+            (bool ok,) = address(vault).call{value: feeAmount}(
+                abi.encodeCall(IAlignmentVault.receiveContribution, (key.currency0, feeAmount, sender))
+            );
+            if (ok) {
+                emit AlignmentFeeCollected(feeAmount, sender);
+            } else {
+                queuedFees += feeAmount;
+                emit AlignmentFeeQueued(feeAmount, sender);
+            }
             return (IHooks.afterSwap.selector, feeAmount.toInt128());
         }
 
         return (IHooks.afterSwap.selector, int128(0));
+    }
+
+    /**
+     * @notice Retry forwarding accumulated queued fees to the vault
+     * @dev Callable by anyone. Reverts if no queued fees or if vault still reverts.
+     */
+    function flushQueuedFees() external nonReentrant {
+        uint256 amount = queuedFees;
+        if (amount == 0) revert NoQueuedFees();
+        queuedFees = 0;
+        vault.receiveContribution{value: amount}(Currency.wrap(address(0)), amount, address(this));
+        emit QueuedFeesForwarded(amount);
     }
 
     /**

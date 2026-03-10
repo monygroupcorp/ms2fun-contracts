@@ -12,6 +12,7 @@ import {SafeCast} from "v4-core/libraries/SafeCast.sol";
 import {LPFeeLibrary} from "v4-core/libraries/LPFeeLibrary.sol";
 import {UniAlignmentVault} from "../../src/vaults/uni/UniAlignmentVault.sol";
 import {UniAlignmentV4Hook} from "../../src/factories/erc404/hooks/UniAlignmentV4Hook.sol";
+import {IAlignmentVault} from "../../src/interfaces/IAlignmentVault.sol";
 import {ReentrancyGuard} from "solady/utils/ReentrancyGuard.sol";
 import {Ownable} from "solady/auth/Ownable.sol";
 
@@ -509,7 +510,7 @@ contract UniAlignmentV4HookTest is Test {
         assertEq(mockVault.lastFeeAmount(), 50e18);
     }
 
-    function test_vaultRevert_propagatesToSwap() public {
+    function test_vaultRevert_doesNotBrickSwap() public {
         MockRevertingVault revertingVault = new MockRevertingVault();
 
         vm.prank(owner);
@@ -532,10 +533,18 @@ contract UniAlignmentV4HookTest is Test {
         });
 
         BalanceDelta delta = _buyDelta(50e18, 25e18);
+        uint256 expectedFee = (50e18 * DEFAULT_HOOK_FEE_BIPS) / 10000;
+
+        // Vault reverts but swap must NOT revert — fee queued instead
+        vm.expectEmit(true, false, false, true, address(revertingHook));
+        emit TestableHook.AlignmentFeeQueued(expectedFee, alice);
 
         vm.prank(address(mockPoolManager));
-        vm.expectRevert("Vault revert");
-        revertingHook.afterSwap(alice, key, _buyParams(50e18), delta, bytes(""));
+        (bytes4 sel, int128 delta2) = revertingHook.afterSwap(alice, key, _buyParams(50e18), delta, bytes(""));
+
+        assertEq(sel, IHooks.afterSwap.selector);
+        assertEq(delta2, int128(uint128(expectedFee)));
+        assertEq(revertingHook.queuedFees(), expectedFee, "Fee must be queued when vault reverts");
     }
 
     // ========== Gas Efficiency ==========
@@ -603,6 +612,7 @@ contract TestableHook is ReentrancyGuard, Ownable {
     error LpFeeTooHigh();
     error PoolCurrency0MustBeNativeETH();
     error RateTooHigh();
+    error NoQueuedFees();
 
     IPoolManager public immutable poolManager;
     UniAlignmentVault public immutable vault;
@@ -610,7 +620,11 @@ contract TestableHook is ReentrancyGuard, Ownable {
     uint256 public immutable hookFeeBips;
     uint24 public lpFeeRate;
 
+    uint256 public queuedFees;
+
     event AlignmentFeeCollected(uint256 ethAmount, address indexed benefactor);
+    event AlignmentFeeQueued(uint256 ethAmount, address indexed benefactor);
+    event QueuedFeesForwarded(uint256 ethAmount);
     event LpFeeRateUpdated(uint24 newRate);
 
     constructor(
@@ -670,12 +684,28 @@ contract TestableHook is ReentrancyGuard, Ownable {
 
         if (feeAmount > 0) {
             poolManager.take(key.currency0, address(this), feeAmount);
-            vault.receiveContribution{value: feeAmount}(key.currency0, feeAmount, sender);
-            emit AlignmentFeeCollected(feeAmount, sender);
+            (bool ok,) = address(vault).call{value: feeAmount}(
+                abi.encodeCall(IAlignmentVault.receiveContribution, (key.currency0, feeAmount, sender))
+            );
+            if (ok) {
+                emit AlignmentFeeCollected(feeAmount, sender);
+            } else {
+                queuedFees += feeAmount;
+                emit AlignmentFeeQueued(feeAmount, sender);
+            }
             return (IHooks.afterSwap.selector, feeAmount.toInt128());
         }
 
         return (IHooks.afterSwap.selector, int128(0));
+    }
+
+    /// @dev MIRRORS production flushQueuedFees exactly
+    function flushQueuedFees() external nonReentrant {
+        uint256 amount = queuedFees;
+        if (amount == 0) revert NoQueuedFees();
+        queuedFees = 0;
+        vault.receiveContribution{value: amount}(Currency.wrap(address(0)), amount, address(this));
+        emit QueuedFeesForwarded(amount);
     }
 
     /// @dev MIRRORS production setLpFeeRate exactly
@@ -684,6 +714,8 @@ contract TestableHook is ReentrancyGuard, Ownable {
         lpFeeRate = _rate;
         emit LpFeeRateUpdated(_rate);
     }
+
+    receive() external payable {}
 }
 
 // ========== Mocks ==========

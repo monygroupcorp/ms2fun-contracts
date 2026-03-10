@@ -21,10 +21,6 @@ interface IWETH {
     function approve(address spender, uint256 amount) external returns (bool);
 }
 
-interface IERC20 {
-    function approve(address spender, uint256 amount) external returns (bool);
-}
-
 /**
  * @title ProtocolTreasuryV1
  * @notice UUPS upgradeable treasury that receives protocol revenue from all sources
@@ -198,10 +194,10 @@ contract ProtocolTreasuryV1 is SafeOwnableUUPS, IUnlockCallback {
         Currency currency0 = poolKey.currency0;
         Currency currency1 = poolKey.currency1;
         if (!currency0.isAddressZero()) {
-            IERC20(Currency.unwrap(currency0)).approve(v4PoolManager, amount0);
+            SafeTransferLib.safeApproveWithRetry(Currency.unwrap(currency0), v4PoolManager, amount0);
         }
         if (!currency1.isAddressZero()) {
-            IERC20(Currency.unwrap(currency1)).approve(v4PoolManager, amount1);
+            SafeTransferLib.safeApproveWithRetry(Currency.unwrap(currency1), v4PoolManager, amount1);
         }
 
         // Deploy via unlock callback

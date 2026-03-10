@@ -12,6 +12,8 @@ import {BondingCurveHandler} from "./handlers/BondingCurveHandler.sol";
 
 contract MockLiqDeployer is ILiquidityDeployerModule {
     function deployLiquidity(ILiquidityDeployerModule.DeployParams calldata) external payable override {}
+    function metadataURI() external view override returns (string memory) { return ""; }
+    function setMetadataURI(string calldata) external override {}
 }
 
 contract BondingCurveInvariantTest is StdInvariant, Test {
@@ -30,7 +32,7 @@ contract BondingCurveInvariantTest is StdInvariant, Test {
 
     uint256 constant MAX_SUPPLY = 10_000_000 * 1e18;
     uint256 constant UNIT = 1_000_000 ether;
-    uint256 constant LIQUIDITY_RESERVE_PERCENT = 10;
+    uint256 constant LIQUIDITY_RESERVE_BPS = 1000;
     uint256 constant BONDING_FEE_BPS = 100; // 1%
 
     function setUp() public {
@@ -52,7 +54,7 @@ contract BondingCurveInvariantTest is StdInvariant, Test {
         ERC404BondingInstance.BondingParams memory bp = ERC404BondingInstance.BondingParams({
             maxSupply: MAX_SUPPLY,
             unit: UNIT,
-            liquidityReservePercent: LIQUIDITY_RESERVE_PERCENT,
+            liquidityReserveBps: LIQUIDITY_RESERVE_BPS,
             curve: curveParams
         });
 

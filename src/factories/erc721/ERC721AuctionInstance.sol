@@ -310,11 +310,13 @@ contract ERC721AuctionInstance is ERC721, Ownable, ReentrancyGuard, IInstanceLif
 
         auction.settled = true;
 
-        // Mint NFT to winner
-        _mint(auction.highBidder, tokenId);
+        // Mint NFT to winner — use _safeMint so contract winners without IERC721Receiver revert
+        // rather than receiving a permanently locked token.
+        // Reentrancy is safe: auction.settled = true is set above and nonReentrant guards this function.
+        _safeMint(auction.highBidder, tokenId);
 
-        // Refund creator's deposit
-        SafeTransferLib.safeTransferETH(owner(), auction.minBid);
+        // Refund creator's deposit (force-transfer so a non-receiving owner cannot permanently strand the bidder's funds)
+        SafeTransferLib.forceSafeTransferETH(owner(), auction.minBid);
 
         // Split winning bid: 1/19/80
         RevenueSplitLib.Split memory s = RevenueSplitLib.split(auction.highBid);

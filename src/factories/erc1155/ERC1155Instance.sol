@@ -34,6 +34,7 @@ error LimitedMustHavePositiveSupply();
 error DynamicPricingRequiresIncreaseRate();
 error EditionLimitReached();
 error NoFeesToClaim();
+error NoPendingVaultCut();
 error LengthMismatch();
 error InvalidEditionRange();
 error GatingCheckFailed();
@@ -112,6 +113,10 @@ contract ERC1155Instance is Ownable, ReentrancyGuard, IInstanceLifecycle {
 
     uint256 public nextEditionId;
     uint256 public totalProceeds; // Total ETH collected from mints
+    /// @dev INVARIANT: pendingVaultCut <= address(this).balance at all times.
+    ///      Failed vault contributions stay in the contract, tracked here so they
+    ///      cannot be re-withdrawn as artist proceeds.
+    uint256 public pendingVaultCut;
 
     // Events
     event TransferSingle(
@@ -157,6 +162,9 @@ contract ERC1155Instance is Ownable, ReentrancyGuard, IInstanceLifecycle {
         uint256 vaultCut,
         uint256 protocolCut
     );
+
+    event VaultContributionFailed(address indexed vault, uint256 amount);
+    event VaultContributionRetried(address indexed vault, uint256 amount);
 
     event EditionMetadataUpdated(uint256 indexed editionId, string metadataURI);
     event FreeMintClaimed(address indexed user, uint256 indexed editionId);
@@ -465,7 +473,8 @@ contract ERC1155Instance is Ownable, ReentrancyGuard, IInstanceLifecycle {
     function withdraw(uint256 amount) external nonReentrant {
         if (msg.sender != owner()) revert Unauthorized();
         if (amount == 0) revert AmountMustBePositive();
-        if (amount > address(this).balance) revert InsufficientBalance();
+        // Exclude stranded vault cuts from withdrawable balance
+        if (amount > address(this).balance - pendingVaultCut) revert InsufficientBalance();
 
         // 1/19/80 split
         RevenueSplitLib.Split memory s = RevenueSplitLib.split(amount);
@@ -476,12 +485,34 @@ contract ERC1155Instance is Ownable, ReentrancyGuard, IInstanceLifecycle {
         }
 
         // Vault cut — tracks this instance as benefactor
-        vault.receiveContribution{value: s.vaultCut}(Currency.wrap(address(0)), s.vaultCut, address(this));
+        // If the vault reverts (e.g. broken upgrade), accumulate for retry rather than
+        // blocking creator proceeds permanently.
+        uint256 vaultCutSent;
+        if (s.vaultCut > 0) {
+            try vault.receiveContribution{value: s.vaultCut}(Currency.wrap(address(0)), s.vaultCut, address(this)) {
+                vaultCutSent = s.vaultCut;
+            } catch {
+                pendingVaultCut += s.vaultCut;
+                emit VaultContributionFailed(address(vault), s.vaultCut);
+            }
+        }
 
         // Transfer remainder to artist
         SafeTransferLib.safeTransferETH(owner(), s.remainder);
 
-        emit Withdrawn(owner(), s.remainder, s.vaultCut, s.protocolCut);
+        emit Withdrawn(owner(), s.remainder, vaultCutSent, s.protocolCut);
+    }
+
+    /**
+     * @notice Retry sending any accumulated failed vault contributions.
+     * @dev Permissionless — anyone can call once the vault is restored.
+     */
+    function retryVaultContribution() external nonReentrant {
+        uint256 pending = pendingVaultCut;
+        if (pending == 0) revert NoPendingVaultCut();
+        pendingVaultCut = 0;
+        vault.receiveContribution{value: pending}(Currency.wrap(address(0)), pending, address(this));
+        emit VaultContributionRetried(address(vault), pending);
     }
 
     /**

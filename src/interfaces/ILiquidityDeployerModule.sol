@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
+import {IComponentModule} from "./IComponentModule.sol";
+
 /// @notice Uniform interface for all ERC404 liquidity deployer modules.
 ///         Each deployer is pre-configured with its AMM-specific params at construction —
 ///         the instance only sends the base assets and graduation metadata.
-interface ILiquidityDeployerModule {
+interface ILiquidityDeployerModule is IComponentModule {
     struct DeployParams {
         uint256 ethReserve;     // ETH to deploy (also sent as msg.value)
         uint256 tokenReserve;   // ERC404 tokens to deploy (pre-transferred to deployer)

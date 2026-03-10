@@ -64,6 +64,7 @@ contract UniAlignmentVaultFactory {
         vault = ICreateX(CREATEX).deployCreate3(salt, proxyCreationCode);
 
         UniAlignmentVault(payable(vault)).initialize(
+            address(this),
             weth,
             poolManager,
             alignmentToken,

@@ -54,6 +54,7 @@ contract ERC721AgentDelegationTest is GlobalMessagingTestBase {
             UniAlignmentVault _impl = new UniAlignmentVault();
             vault = UniAlignmentVault(payable(LibClone.clone(address(_impl))));
             vault.initialize(
+                address(this),
                 address(0x2222222222222222222222222222222222222222),
                 address(0x4444444444444444444444444444444444444444),
                 address(token),

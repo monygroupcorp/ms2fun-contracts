@@ -3,15 +3,30 @@ pragma solidity ^0.8.20;
 
 import {Test} from "forge-std/Test.sol";
 import {PasswordTierGatingModule} from "../../src/gating/PasswordTierGatingModule.sol";
+import {MockMasterRegistry} from "../mocks/MockMasterRegistry.sol";
+import {IMasterRegistry} from "../../src/master/interfaces/IMasterRegistry.sol";
+import {IComponentRegistry} from "../../src/registry/interfaces/IComponentRegistry.sol";
+import {Ownable} from "solady/auth/Ownable.sol";
+
+/// @dev Registry that rejects one specific address (for Unauthorized path testing).
+contract MockRejectRegistry {
+    address public immutable rejected;
+    constructor(address _rejected) { rejected = _rejected; }
+    function isFactoryRegistered(address factory) external view returns (bool) {
+        return factory != rejected;
+    }
+}
 
 contract PasswordTierGatingModuleTest is Test {
     PasswordTierGatingModule module;
+    MockMasterRegistry mockRegistry;
     address instance1 = address(0xAAAA);
     address instance2 = address(0xBBBB);
     address user1 = address(0x1111);
 
     function setUp() public {
-        module = new PasswordTierGatingModule();
+        mockRegistry = new MockMasterRegistry();
+        module = new PasswordTierGatingModule(address(mockRegistry));
     }
 
     function _volumeCapConfig() internal pure returns (PasswordTierGatingModule.TierConfig memory) {
@@ -37,9 +52,38 @@ contract PasswordTierGatingModuleTest is Test {
         assertTrue(module.configured(instance1));
     }
 
-    function test_configureFor_revertsIfAlreadyConfigured() public {
+    function test_configureFor_revertsIfUnauthorizedCaller() public {
+        address attacker = address(0xDEAD);
+        // MockMasterRegistry returns true for all addresses, so we need a registry
+        // that returns false for the attacker to test the Unauthorized path.
+        // Deploy a registry that rejects the attacker specifically.
+        MockRejectRegistry rejectRegistry = new MockRejectRegistry(attacker);
+        PasswordTierGatingModule strictModule = new PasswordTierGatingModule(address(rejectRegistry));
+
+        vm.prank(attacker);
+        vm.expectRevert(Ownable.Unauthorized.selector);
+        strictModule.configureFor(instance1, _volumeCapConfig());
+    }
+
+    function test_configureFor_ownerCanReconfigure() public {
+        // Initial config by factory (test contract — MockMasterRegistry says registered)
         module.configureFor(instance1, _volumeCapConfig());
-        vm.expectRevert(PasswordTierGatingModule.AlreadyConfigured.selector);
+        assertTrue(module.configured(instance1));
+
+        // Re-config must come from the instance owner; instance1 is address(0xAAAA) which
+        // has no deployed code, so we use vm.mockCall to make owner() return address(this).
+        vm.mockCall(instance1, abi.encodeWithSignature("owner()"), abi.encode(address(this)));
+        module.configureFor(instance1, _volumeCapConfig());
+        assertTrue(module.configured(instance1));
+    }
+
+    function test_configureFor_revertsIfNonOwnerReconfigures() public {
+        module.configureFor(instance1, _volumeCapConfig());
+
+        vm.mockCall(instance1, abi.encodeWithSignature("owner()"), abi.encode(address(this)));
+        address notOwner = address(0xBEEF);
+        vm.prank(notOwner);
+        vm.expectRevert(Ownable.Unauthorized.selector);
         module.configureFor(instance1, _volumeCapConfig());
     }
 
@@ -112,7 +156,7 @@ contract PasswordTierGatingModuleTest is Test {
             tierUnlockTimes: unlockTimes
         });
 
-        vm.prank(instance);
+        // Called from test contract — MockMasterRegistry treats any address as a registered factory.
         module.configureFor(instance, config);
     }
 
@@ -225,7 +269,7 @@ contract PasswordTierGatingModuleTest is Test {
             tierUnlockTimes: new uint256[](0)
         });
 
-        vm.prank(inst);
+        // Called from test contract — MockMasterRegistry treats any address as a registered factory.
         module.configureFor(inst, config);
 
         bytes32 tier1Hash = keccak256("vippass");

@@ -35,6 +35,8 @@ contract MockLiquidityDeployer is ILiquidityDeployerModule {
     function deployLiquidity(ILiquidityDeployerModule.DeployParams calldata) external payable override {
         called = true;
     }
+    function metadataURI() external view override returns (string memory) { return ""; }
+    function setMetadataURI(string calldata) external override {}
 }
 
 contract ERC404FactoryTest is Test {
@@ -81,7 +83,7 @@ contract ERC404FactoryTest is Test {
         mockVault = new MockVault();
         launchMgr = new LaunchManager(protocolAdmin);
         curveComp = new CurveParamsComputer(protocolAdmin);
-        tierGatingModule = new PasswordTierGatingModule();
+        tierGatingModule = new PasswordTierGatingModule(address(mockRegistry));
         mockDeployer = new MockLiquidityDeployer();
 
         ComponentRegistry compRegImpl = new ComponentRegistry();
@@ -800,7 +802,7 @@ contract ERC404FactoryTest is Test {
     }
 
     function test_createInstanceWithGating_succeedsWithApprovedModule() public {
-        address gatingModule = address(new PasswordTierGatingModule());
+        address gatingModule = address(new PasswordTierGatingModule(address(mockRegistry)));
         vm.prank(protocolAdmin);
         componentRegistry.approveComponent(gatingModule, keccak256("gating"), "PasswordTierGating");
 
@@ -832,7 +834,7 @@ contract ERC404FactoryTest is Test {
     }
 
     function test_createInstance_withGating_storesModule() public {
-        address gatingModule = address(new PasswordTierGatingModule());
+        address gatingModule = address(new PasswordTierGatingModule(address(mockRegistry)));
         vm.prank(protocolAdmin);
         componentRegistry.approveComponent(gatingModule, keccak256("gating"), "PasswordTierGating2");
 

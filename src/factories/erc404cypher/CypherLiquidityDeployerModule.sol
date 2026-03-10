@@ -9,6 +9,7 @@ import {CypherAlignmentVault} from "../../vaults/cypher/CypherAlignmentVault.sol
 import {Currency} from "v4-core/types/Currency.sol";
 import {ILiquidityDeployerModule} from "../../interfaces/ILiquidityDeployerModule.sol";
 import {RevenueSplitLib} from "../../shared/libraries/RevenueSplitLib.sol";
+import {Ownable} from "solady/auth/Ownable.sol";
 
 interface IWETH {
     function deposit() external payable;
@@ -17,7 +18,7 @@ interface IWETH {
 /// @title CypherLiquidityDeployerModule
 /// @notice Called by ERC404BondingInstance at graduation.
 ///         Creates Algebra pool, mints LP to vault, registers benefactor.
-contract CypherLiquidityDeployerModule is ILiquidityDeployerModule {
+contract CypherLiquidityDeployerModule is ILiquidityDeployerModule, Ownable {
     using FixedPointMathLib for uint256;
 
     error ETHMismatch();
@@ -28,11 +29,14 @@ contract CypherLiquidityDeployerModule is ILiquidityDeployerModule {
     address public immutable positionManager;
     address public immutable weth;
 
+    string private _metadataURI;
+
     // slither-disable-next-line missing-zero-check
     constructor(address _algebraFactory, address _positionManager, address _weth) {
         algebraFactory = _algebraFactory;
         positionManager = _positionManager;
         weth = _weth;
+        _initializeOwner(msg.sender);
     }
 
     // Full-range ticks for tick spacing 60: floor(887272/60)*60 = 887220
@@ -138,4 +142,15 @@ contract CypherLiquidityDeployerModule is ILiquidityDeployerModule {
     }
 
     receive() external payable {}
+
+    // ── IComponentModule ───────────────────────────────────────────────────────
+
+    function metadataURI() external view override returns (string memory) {
+        return _metadataURI;
+    }
+
+    function setMetadataURI(string calldata uri) external override onlyOwner {
+        _metadataURI = uri;
+        emit MetadataURIUpdated(uri);
+    }
 }

@@ -160,6 +160,7 @@ contract M04_GriefingAttackTests is Test {
         vaultImpl = new TestableUniAlignmentVault();
         vault = TestableUniAlignmentVault(payable(LibClone.clone(address(vaultImpl))));
         vault.initialize(
+            address(this),
             mockWeth,
             mockPoolManager,
             address(alignmentToken),
@@ -203,7 +204,7 @@ contract M04_GriefingAttackTests is Test {
 
         // Attack: Griefer tries to block conversion by rejecting reward
         // ✅ KEY TEST: This should NOT revert (pre-fix it would have reverted)
-        griefer.attemptConversion(0);
+        griefer.attemptConversion(1);
 
         // ✅ VERIFY: Operation succeeded despite griefing attempt
         uint256 pendingAfter = vault.totalPendingETH();
@@ -230,7 +231,7 @@ contract M04_GriefingAttackTests is Test {
         griefer.setGriefing(true);
 
         // Attack should fail to block operation
-        griefer.attemptConversion(0);
+        griefer.attemptConversion(1);
 
         // Verify conversion completed
         assertEq(vault.totalPendingETH(), 0, "Conversion completed despite griefing");
@@ -247,7 +248,7 @@ contract M04_GriefingAttackTests is Test {
         GrieferOutOfGas griefer = new GrieferOutOfGas(vault);
 
         // Attack: Out of gas on receive (accidental griefing)
-        griefer.attemptConversion(0);
+        griefer.attemptConversion(1);
 
         // Verify operation succeeded
         assertEq(vault.totalPendingETH(), 0, "Conversion completed");
@@ -270,7 +271,7 @@ contract M04_GriefingAttackTests is Test {
 
         // Legitimate call - should receive reward
         vm.prank(caller);
-        vault.convertAndAddLiquidity(0);
+        vault.convertAndAddLiquidity(1);
 
         // Verify caller received reward
         uint256 balanceAfter = caller.balance;
@@ -297,7 +298,7 @@ contract M04_GriefingAttackTests is Test {
         uint256 balanceBefore = address(goodCaller).balance;
 
         // Legitimate call
-        goodCaller.callConversion(0);
+        goodCaller.callConversion(1);
 
         // Verify reward received
         assertGt(address(goodCaller).balance, balanceBefore, "Good caller should receive reward");
@@ -313,6 +314,7 @@ contract M04_GriefingAttackTests is Test {
 
         UniAlignmentVault poorVault = TestableUniAlignmentVault(payable(LibClone.clone(address(vaultImpl))));
         poorVault.initialize(
+            address(this),
             mockWeth,
             mockPoolManager,
             address(alignmentToken),
@@ -350,7 +352,7 @@ contract M04_GriefingAttackTests is Test {
 
         // Call should succeed even though reward can't be paid
         vm.prank(caller);
-        poorVault.convertAndAddLiquidity(0);
+        poorVault.convertAndAddLiquidity(1);
 
         // Verify operation completed
         assertEq(poorVault.totalPendingETH(), 0, "Conversion completed");
@@ -395,7 +397,7 @@ contract M04_GriefingAttackTests is Test {
         // Set gas price to test reward scaling with work
         vm.txGasPrice(1 gwei);
         vm.prank(caller);
-        vault.convertAndAddLiquidity(0);
+        vault.convertAndAddLiquidity(1);
 
         uint256 balanceAfter = caller.balance;
         uint256 rewardReceived = balanceAfter - balanceBefore;

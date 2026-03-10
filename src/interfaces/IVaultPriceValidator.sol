@@ -25,4 +25,12 @@ interface IVaultPriceValidator {
         address poolManager,
         bytes32 poolId
     ) external view returns (uint256 proportionToSwap);
+
+    /// @notice Quote the expected ETH output for selling `tokenAmount` alignment tokens.
+    /// @dev Uses TWAP price where available. Returns 0 if no reliable price source exists,
+    ///      in which case callers should apply no slippage bound rather than reverting.
+    /// @param token Alignment token address
+    /// @param tokenAmount Amount of tokens to sell
+    /// @return ethAmount Expected ETH output at TWAP price (no slippage deduction applied)
+    function quoteEthForTokens(address token, uint256 tokenAmount) external view returns (uint256 ethAmount);
 }

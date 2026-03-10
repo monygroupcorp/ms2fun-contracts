@@ -74,6 +74,7 @@ contract UniAlignmentVaultTest is Test {
         vaultImpl = new TestableUniAlignmentVault();
         vault = TestableUniAlignmentVault(payable(LibClone.clone(address(vaultImpl))));
         vault.initialize(
+            owner,
             mockWETH,
             mockPoolManager,
             address(alignmentToken),
@@ -128,6 +129,7 @@ contract UniAlignmentVaultTest is Test {
 
     function _initVault(TestableUniAlignmentVault v) internal {
         v.initialize(
+            address(this),
             mockWETH, mockPoolManager, address(alignmentToken),
             address(mockZRouter), 3000, 60,
             IVaultPriceValidator(address(mockValidator)),
@@ -138,7 +140,7 @@ contract UniAlignmentVaultTest is Test {
     function test_Initialize_RevertsOnInvalidWETH() public {
         TestableUniAlignmentVault v = _freshClone();
         vm.expectRevert(UniAlignmentVault.InvalidAddress.selector);
-        v.initialize(address(0), mockPoolManager,
+        v.initialize(address(this), address(0), mockPoolManager,
             address(alignmentToken),
             address(mockZRouter), 3000, 60,
             IVaultPriceValidator(address(mockValidator)),
@@ -148,7 +150,7 @@ contract UniAlignmentVaultTest is Test {
     function test_Initialize_RevertsOnInvalidPoolManager() public {
         TestableUniAlignmentVault v = _freshClone();
         vm.expectRevert(UniAlignmentVault.InvalidAddress.selector);
-        v.initialize(mockWETH, address(0),
+        v.initialize(address(this), mockWETH, address(0),
             address(alignmentToken),
             address(mockZRouter), 3000, 60,
             IVaultPriceValidator(address(mockValidator)),
@@ -158,7 +160,7 @@ contract UniAlignmentVaultTest is Test {
     function test_Initialize_RevertsOnInvalidAlignmentToken() public {
         TestableUniAlignmentVault v = _freshClone();
         vm.expectRevert(UniAlignmentVault.InvalidAddress.selector);
-        v.initialize(mockWETH, mockPoolManager,
+        v.initialize(address(this), mockWETH, mockPoolManager,
             address(0),
             address(mockZRouter), 3000, 60,
             IVaultPriceValidator(address(mockValidator)),
@@ -349,7 +351,7 @@ contract UniAlignmentVaultTest is Test {
 
         // Conversion
         vm.prank(dave);
-        uint256 lpValue = vault.convertAndAddLiquidity(0);
+        uint256 lpValue = vault.convertAndAddLiquidity(1);
 
         assertTrue(lpValue > 0, "LP value should be positive");
     }
@@ -365,7 +367,7 @@ contract UniAlignmentVaultTest is Test {
         assertTrue(s2);
 
         vm.prank(dave);
-        vault.convertAndAddLiquidity(0);
+        vault.convertAndAddLiquidity(1);
 
         uint256 aliceShares = vault.benefactorShares(alice);
         uint256 bobShares = vault.benefactorShares(bob);
@@ -384,7 +386,7 @@ contract UniAlignmentVaultTest is Test {
         assertTrue(s1);
 
         vm.prank(dave);
-        vault.convertAndAddLiquidity(0);
+        vault.convertAndAddLiquidity(1);
 
         assertEq(vault.pendingETH(alice), 0, "Pending ETH should be cleared");
         assertEq(vault.totalPendingETH(), 0, "Total pending ETH should be cleared");
@@ -400,7 +402,7 @@ contract UniAlignmentVaultTest is Test {
         assertTrue(s2);
 
         vm.prank(dave);
-        vault.convertAndAddLiquidity(0);
+        vault.convertAndAddLiquidity(1);
 
         // Array should be empty - trying to access should revert
         vm.expectRevert();
@@ -415,7 +417,7 @@ contract UniAlignmentVaultTest is Test {
         uint256 daveBalanceBefore = dave.balance;
 
         vm.prank(dave);
-        vault.convertAndAddLiquidity(0);
+        vault.convertAndAddLiquidity(1);
 
         uint256 daveBalanceAfter = dave.balance;
         // M-04 fix: Reward is now gas-based + standard reward (not percentage)
@@ -433,7 +435,7 @@ contract UniAlignmentVaultTest is Test {
         uint256 lpUnitsBefore = vault.totalLPUnits();
 
         vm.prank(dave);
-        vault.convertAndAddLiquidity(0);
+        vault.convertAndAddLiquidity(1);
 
         uint256 lpUnitsAfter = vault.totalLPUnits();
 
@@ -449,13 +451,13 @@ contract UniAlignmentVaultTest is Test {
         emit LiquidityAdded(0, 0, 0, 0, 0);
 
         vm.prank(dave);
-        vault.convertAndAddLiquidity(0);
+        vault.convertAndAddLiquidity(1);
     }
 
     function test_ConvertAndAddLiquidity_RevertsWhenNoPendingETH() public {
         vm.prank(dave);
         vm.expectRevert(UniAlignmentVault.NoPendingETH.selector);
-        vault.convertAndAddLiquidity(0);
+        vault.convertAndAddLiquidity(1);
     }
 
     function test_ConvertAndAddLiquidity_RevertsWhenNoAlignmentTokenSet() public {
@@ -479,7 +481,7 @@ contract UniAlignmentVaultTest is Test {
 
         vm.prank(dave);
         vm.expectRevert(UniAlignmentVault.PoolKeyNotSet.selector);
-        newVault.convertAndAddLiquidity(0);
+        newVault.convertAndAddLiquidity(1);
     }
 
     function test_ConvertAndAddLiquidity_MultipleRoundsAccumulateShares() public {
@@ -489,7 +491,7 @@ contract UniAlignmentVaultTest is Test {
         assertTrue(s1);
 
         vm.prank(dave);
-        vault.convertAndAddLiquidity(0);
+        vault.convertAndAddLiquidity(1);
 
         uint256 aliceSharesRound1 = vault.benefactorShares(alice);
 
@@ -499,7 +501,7 @@ contract UniAlignmentVaultTest is Test {
         assertTrue(s2);
 
         vm.prank(dave);
-        vault.convertAndAddLiquidity(0);
+        vault.convertAndAddLiquidity(1);
 
         uint256 aliceSharesRound2 = vault.benefactorShares(alice);
 
@@ -581,7 +583,7 @@ contract UniAlignmentVaultTest is Test {
         assertTrue(s1);
 
         vm.prank(dave);
-        vault.convertAndAddLiquidity(0);
+        vault.convertAndAddLiquidity(1);
 
         // Owner deposits fees
         vm.prank(owner);
@@ -613,7 +615,7 @@ contract UniAlignmentVaultTest is Test {
         assertTrue(s2);
 
         vm.prank(dave);
-        vault.convertAndAddLiquidity(0);
+        vault.convertAndAddLiquidity(1);
 
         // Owner deposits 30 ether in fees
         vm.prank(owner);
@@ -645,7 +647,7 @@ contract UniAlignmentVaultTest is Test {
         assertTrue(s1);
 
         vm.prank(dave);
-        vault.convertAndAddLiquidity(0);
+        vault.convertAndAddLiquidity(1);
 
         // First fee deposit and claim
         vm.prank(owner);
@@ -670,7 +672,7 @@ contract UniAlignmentVaultTest is Test {
         assertTrue(s1);
 
         vm.prank(dave);
-        vault.convertAndAddLiquidity(0);
+        vault.convertAndAddLiquidity(1);
 
         vm.prank(owner);
         vault.depositFees{value: 10 ether}();
@@ -696,7 +698,7 @@ contract UniAlignmentVaultTest is Test {
         assertTrue(s1);
 
         vm.prank(dave);
-        vault.convertAndAddLiquidity(0);
+        vault.convertAndAddLiquidity(1);
 
         vm.prank(alice);
         vm.expectRevert(UniAlignmentVault.NoFeesToClaim.selector);
@@ -709,7 +711,7 @@ contract UniAlignmentVaultTest is Test {
         assertTrue(s1);
 
         vm.prank(dave);
-        vault.convertAndAddLiquidity(0);
+        vault.convertAndAddLiquidity(1);
 
         vm.prank(owner);
         vault.depositFees{value: 10 ether}();
@@ -735,7 +737,7 @@ contract UniAlignmentVaultTest is Test {
         assertTrue(s2);
 
         vm.prank(dave);
-        vault.convertAndAddLiquidity(0);
+        vault.convertAndAddLiquidity(1);
 
         // First fee deposit
         vm.prank(owner);
@@ -777,7 +779,7 @@ contract UniAlignmentVaultTest is Test {
         assertTrue(s1);
 
         vm.prank(dave);
-        vault.convertAndAddLiquidity(0);
+        vault.convertAndAddLiquidity(1);
 
         uint256 shares = vault.getBenefactorShares(alice);
         assertTrue(shares > 0, "Alice should have shares");
@@ -789,7 +791,7 @@ contract UniAlignmentVaultTest is Test {
         assertTrue(s1);
 
         vm.prank(dave);
-        vault.convertAndAddLiquidity(0);
+        vault.convertAndAddLiquidity(1);
 
         vm.prank(owner);
         vault.depositFees{value: 10 ether}();
@@ -804,7 +806,7 @@ contract UniAlignmentVaultTest is Test {
         assertTrue(s1);
 
         vm.prank(dave);
-        vault.convertAndAddLiquidity(0);
+        vault.convertAndAddLiquidity(1);
 
         // First fee deposit and claim
         vm.prank(owner);
@@ -828,7 +830,7 @@ contract UniAlignmentVaultTest is Test {
         assertTrue(s1);
 
         vm.prank(dave);
-        vault.convertAndAddLiquidity(0);
+        vault.convertAndAddLiquidity(1);
 
         vm.prank(owner);
         vault.depositFees{value: 10 ether}();
@@ -988,7 +990,7 @@ contract UniAlignmentVaultTest is Test {
         assertTrue(s1);
 
         vm.prank(dave);
-        vault.convertAndAddLiquidity(0);
+        vault.convertAndAddLiquidity(1);
         // Should succeed without reentrancy issues
     }
 
@@ -998,7 +1000,7 @@ contract UniAlignmentVaultTest is Test {
         assertTrue(s1);
 
         vm.prank(dave);
-        vault.convertAndAddLiquidity(0);
+        vault.convertAndAddLiquidity(1);
 
         vm.prank(owner);
         vault.depositFees{value: 10 ether}();
@@ -1018,7 +1020,7 @@ contract UniAlignmentVaultTest is Test {
 
         // 2. Conversion happens
         vm.prank(dave);
-        vault.convertAndAddLiquidity(0);
+        vault.convertAndAddLiquidity(1);
 
         // 3. Fees accumulate
         vm.prank(owner);
@@ -1044,7 +1046,7 @@ contract UniAlignmentVaultTest is Test {
         assertTrue(s2);
 
         vm.prank(dave);
-        vault.convertAndAddLiquidity(0);
+        vault.convertAndAddLiquidity(1);
 
         // Track alice and bob shares after round 1
         uint256 aliceSharesR1 = vault.benefactorShares(alice);
@@ -1066,7 +1068,7 @@ contract UniAlignmentVaultTest is Test {
         assertTrue(s3);
 
         vm.prank(dave);
-        vault.convertAndAddLiquidity(0);
+        vault.convertAndAddLiquidity(1);
 
         // Now Alice and Bob have shares from R1, Charlie has shares from R2
         uint256 aliceSharesR2 = vault.benefactorShares(alice);
@@ -1135,7 +1137,7 @@ contract UniAlignmentVaultTest is Test {
 
         // Convert
         vm.prank(dave);
-        vault.convertAndAddLiquidity(0);
+        vault.convertAndAddLiquidity(1);
 
         // All should have shares
         for (uint160 i = 1; i <= 10; i++) {
@@ -1240,7 +1242,7 @@ contract UniAlignmentVaultTest is Test {
         (bool s, ) = address(vault).call{value: 10 ether}("");
         assertTrue(s);
         vm.prank(dave);
-        vault.convertAndAddLiquidity(0);
+        vault.convertAndAddLiquidity(1);
 
         // Owner deposits fees (simulating LP yield — goes to accumulatedFees only)
         vm.prank(owner);
@@ -1326,7 +1328,7 @@ contract UniAlignmentVaultTest is Test {
         (bool s, ) = address(vault).call{value: 10 ether}("");
         assertTrue(s);
         vm.prank(dave);
-        vault.convertAndAddLiquidity(0);
+        vault.convertAndAddLiquidity(1);
 
         // Deposit fees (simulating yield)
         vm.prank(owner);

@@ -13,6 +13,8 @@ contract MockDeployer is ILiquidityDeployerModule {
         receivedEth = msg.value;
         require(msg.value == p.ethReserve, "ETH mismatch");
     }
+    function metadataURI() external view override returns (string memory) { return ""; }
+    function setMetadataURI(string calldata) external override {}
 }
 
 contract ILiquidityDeployerModuleTest is Test {

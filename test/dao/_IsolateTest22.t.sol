@@ -34,6 +34,7 @@ contract GrandCentralTest is Test {
             MIN_RETENTION
         );
         vm.deal(address(mockSafe), 100 ether);
+        vm.warp(block.timestamp + 1);
     }
 
     // ========== Initialization Tests ==========

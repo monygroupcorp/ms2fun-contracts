@@ -28,6 +28,8 @@ contract MockVaultForNamespace {
 /// @dev Minimal mock liquidity deployer
 contract MockLiquidityDeployerNS is ILiquidityDeployerModule {
     function deployLiquidity(ILiquidityDeployerModule.DeployParams calldata) external payable override {}
+    function metadataURI() external view override returns (string memory) { return ""; }
+    function setMetadataURI(string calldata) external override {}
 }
 
 /**
@@ -85,7 +87,7 @@ contract NamespaceCollisionTest is Test {
         // Deploy LaunchManager and CurveParamsComputer
         LaunchManager launchManager = new LaunchManager(owner);
         CurveParamsComputer curveComputer = new CurveParamsComputer(owner);
-        PasswordTierGatingModule tierGatingModule = new PasswordTierGatingModule();
+        PasswordTierGatingModule tierGatingModule = new PasswordTierGatingModule(address(registry));
 
         // Deploy ComponentRegistry
         ComponentRegistry compRegImpl = new ComponentRegistry();

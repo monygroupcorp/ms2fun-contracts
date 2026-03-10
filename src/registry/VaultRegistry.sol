@@ -71,6 +71,7 @@ contract VaultRegistry is Ownable {
     event HookDeactivated(address indexed hook);
     event VaultFeeUpdated(uint256 newFee);
     event HookFeeUpdated(uint256 newFee);
+    event FeesWithdrawn(address indexed recipient, uint256 amount);
 
     // Constructor
     constructor() {
@@ -226,6 +227,16 @@ contract VaultRegistry is Ownable {
         if (newFee == 0) revert FeeMustBePositive();
         hookRegistrationFee = newFee;
         emit HookFeeUpdated(newFee);
+    }
+
+    /**
+     * @notice Withdraw accumulated registration fees (owner only)
+     */
+    function withdrawFees(address payable recipient) external onlyOwner {
+        if (recipient == address(0)) revert InvalidAddress();
+        uint256 amount = address(this).balance;
+        SafeTransferLib.safeTransferETH(recipient, amount);
+        emit FeesWithdrawn(recipient, amount);
     }
 
 }

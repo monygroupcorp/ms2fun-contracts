@@ -89,6 +89,7 @@ contract ZAMMAlignmentVault is IAlignmentVault, Ownable, ReentrancyGuard {
     error InsufficientOutput();
     error TransferFailed();
     error ExceedsMaxBps();
+    error TreasuryNotSet();
 
     // ── Events ────────────────────────────────────────────────────────────
     event LiquidityAdded(uint256 ethSwapped, uint256 tokenReceived, uint256 lpMinted, uint256 callerReward);
@@ -149,6 +150,7 @@ contract ZAMMAlignmentVault is IAlignmentVault, Ownable, ReentrancyGuard {
         address _protocolTreasury
     ) external {
         if (_initialized) revert VaultAlreadyInitialized();
+        if (_protocolTreasury == address(0)) revert TreasuryNotSet();
         _initialized = true;
 
         zamm = _zamm;
@@ -414,12 +416,14 @@ contract ZAMMAlignmentVault is IAlignmentVault, Ownable, ReentrancyGuard {
     }
 
     function setProtocolTreasury(address treasury_) external onlyOwner {
+        if (treasury_ == address(0)) revert TreasuryNotSet();
         address old = protocolTreasury;
         protocolTreasury = treasury_;
         emit ProtocolTreasuryUpdated(old, treasury_);
     }
 
     function withdrawProtocolFees() external {
+        if (protocolTreasury == address(0)) revert TreasuryNotSet();
         uint256 amount = accumulatedProtocolFees;
         accumulatedProtocolFees = 0;
         (bool ok,) = protocolTreasury.call{value: amount}("");

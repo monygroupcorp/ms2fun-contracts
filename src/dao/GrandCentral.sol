@@ -41,6 +41,7 @@ contract GrandCentral is IGrandCentral, ReentrancyGuard {
     error VotingPeriodTooShort();
     error GracePeriodTooShort();
     error InsufficientSponsorShares();
+    error ClaimsTransferFailed();
 
     // ============ Share Accounting ============
 
@@ -260,14 +261,20 @@ contract GrandCentral is IGrandCentral, ReentrancyGuard {
 
     // ============ Claims Settlement ============
 
-    // slither-disable-next-line calls-loop,costly-loop,unused-return
+    // slither-disable-next-line calls-loop,costly-loop
     function _settleClaims(address member) internal {
         uint256 weight = shares[member] + loot[member];
         if (weight > 0 && rewardPerShare > 0) {
             uint256 pending = (weight * rewardPerShare / PRECISION) - rewardDebt[member]; // round down: favors pool
             if (pending > 0) {
+                rewardDebt[member] = weight * rewardPerShare / PRECISION; // CEI: update before external call
                 claimsPoolBalance -= pending;
-                IAvatar(safe).execTransactionFromModule(member, pending, "", Operation.Call);
+                bool ok = IAvatar(safe).execTransactionFromModule(member, pending, "", Operation.Call);
+                if (!ok) {
+                    claimsPoolBalance += pending;
+                    rewardDebt[member] = (weight * rewardPerShare / PRECISION) - pending;
+                    revert ClaimsTransferFailed();
+                }
             }
         }
     }
@@ -433,7 +440,10 @@ contract GrandCentral is IGrandCentral, ReentrancyGuard {
         Proposal storage prop = proposals[id];
         if (state(id) != ProposalState.Voting) revert NotVoting();
 
-        uint256 balance = getSharesAt(msg.sender, prop.votingStarts);
+        // Snapshot at (votingStarts - 1) to exclude shares minted in the same block as
+        // proposal creation. This prevents a colluding manager from minting shares to a
+        // fresh address and having those shares count in the same-block vote.
+        uint256 balance = getSharesAt(msg.sender, prop.votingStarts - 1);
         if (balance == 0) revert NotMember();
         if (memberVoted[msg.sender][id]) revert AlreadyVoted();
 

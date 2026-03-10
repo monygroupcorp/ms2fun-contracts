@@ -45,6 +45,7 @@ contract UniVaultInvariantTest is StdInvariant, Test {
         TestableUniAlignmentVault impl = new TestableUniAlignmentVault();
         vault = TestableUniAlignmentVault(payable(LibClone.clone(address(impl))));
         vault.initialize(
+            address(this),
             address(0x1111111111111111111111111111111111111111), // mockWETH
             address(0x2222222222222222222222222222222222222222), // mockPoolManager
             address(alignmentToken),

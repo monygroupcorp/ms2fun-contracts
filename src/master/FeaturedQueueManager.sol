@@ -48,6 +48,7 @@ contract FeaturedQueueManager is SafeOwnableUUPS, ReentrancyGuard {
     error DiscountTooHigh();
     error TreasuryNotSet();
     error NothingToWithdraw();
+    error SlotStillActive();
 
     // ── Data ───────────────────────────────────────────────────────────────
 
@@ -64,7 +65,8 @@ contract FeaturedQueueManager is SafeOwnableUUPS, ReentrancyGuard {
 
     mapping(address => FeaturedSlot) public slots;
     address[] private _featuredList;
-    mapping(address => bool) private _inList;
+    mapping(address => bool)    private _inList;
+    mapping(address => uint256) private _featuredListIndex;
 
     uint256 public dailyRate       = 0.001 ether;   // duration cost per day
     uint256 public dailyDecayRate  = 0.0001 ether;  // linear rank decay per day
@@ -379,9 +381,51 @@ contract FeaturedQueueManager is SafeOwnableUUPS, ReentrancyGuard {
 
     function _addToList(address instance) internal {
         if (!_inList[instance]) {
+            // Prune one expired entry to bound list growth before inserting.
+            // Active slots are capped at maxFeaturedSize, so any excess entry is guaranteed expired.
+            if (_featuredList.length >= maxFeaturedSize) _pruneOneExpired();
+            _featuredListIndex[instance] = _featuredList.length;
             _featuredList.push(instance);
             _inList[instance] = true;
         }
+    }
+
+    // slither-disable-next-line timestamp
+    function _pruneOneExpired() internal {
+        uint256 len = _featuredList.length;
+        for (uint256 i = 0; i < len; i++) {
+            address inst = _featuredList[i];
+            if (block.timestamp >= slots[inst].expiresAt) {
+                address last = _featuredList[len - 1];
+                _featuredList[i]       = last;
+                _featuredListIndex[last] = i;
+                _featuredList.pop();
+                _inList[inst] = false;
+                delete _featuredListIndex[inst];
+                return;
+            }
+        }
+    }
+
+    /**
+     * @notice Prune a single expired entry from the featured list. Callable by anyone.
+     *         Uses swap-and-pop to keep the list compact and prevent gas-griefing DoS.
+     * @param instance The expired instance to remove
+     */
+    // slither-disable-next-line timestamp
+    function pruneExpired(address instance) external {
+        if (block.timestamp < slots[instance].expiresAt) revert SlotStillActive();
+        if (!_inList[instance]) return;
+
+        uint256 idx  = _featuredListIndex[instance];
+        address last = _featuredList[_featuredList.length - 1];
+
+        _featuredList[idx]       = last;
+        _featuredListIndex[last] = idx;
+        _featuredList.pop();
+
+        _inList[instance] = false;
+        delete _featuredListIndex[instance];
     }
 
     // slither-disable-next-line unused-return

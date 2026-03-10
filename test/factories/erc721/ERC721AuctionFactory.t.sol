@@ -61,6 +61,7 @@ contract ERC721AuctionFactoryTest is Test {
             UniAlignmentVault _impl = new UniAlignmentVault();
             vault = UniAlignmentVault(payable(LibClone.clone(address(_impl))));
             vault.initialize(
+                owner,
                 address(0x2222222222222222222222222222222222222222),
                 address(0x4444444444444444444444444444444444444444),
                 address(token),
@@ -700,4 +701,44 @@ contract ERC721AuctionFactoryTest is Test {
             "settlement split does not sum to highBid"
         );
     }
+
+    // ┌─────────────────────────┐
+    // │  Non-Receiver Safety    │
+    // └─────────────────────────┘
+
+    /// @notice Validates finding [85]: _safeMint must be used so a contract winner without
+    ///         IERC721Receiver causes settleAuction to revert rather than permanently locking the NFT.
+    function test_SettleAuction_ContractBidderWithoutERC721Receiver_Reverts() public {
+        ERC721AuctionInstance inst = _createDefaultInstance();
+
+        // Queue a piece
+        vm.prank(artist);
+        inst.queuePiece{value: 0.1 ether}("ipfs://piece1");
+
+        // Deploy a contract that can receive ETH (for bid refunds) but does NOT implement IERC721Receiver
+        NonReceiverBidder bidder = new NonReceiverBidder();
+        vm.deal(address(bidder), 10 ether);
+
+        // Contract places the winning bid
+        bidder.bid(address(inst), 1, 0.2 ether);
+
+        ERC721AuctionInstance.Auction memory auction = inst.getAuction(1);
+        assertEq(auction.highBidder, address(bidder));
+
+        vm.warp(auction.endTime);
+
+        // settleAuction must revert because the winner cannot receive ERC721 tokens
+        vm.expectRevert();
+        inst.settleAuction(1);
+    }
+}
+
+/// @dev A contract that can receive ETH but intentionally omits IERC721Receiver,
+///      modeling a multisig or vault contract that forgot to implement the callback.
+contract NonReceiverBidder {
+    function bid(address instance, uint24 tokenId, uint256 amount) external {
+        ERC721AuctionInstance(payable(instance)).createBid{value: amount}(tokenId, bytes(""));
+    }
+
+    receive() external payable {}
 }

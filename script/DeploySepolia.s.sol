@@ -109,35 +109,47 @@ contract DeploySepolia is Script {
         }
         masterRegistry = address(masterRegistryProxy);
 
-        // 3. ProtocolTreasuryV1 via CREATE3
+        // 3. ProtocolTreasuryV1 via CREATE3 (atomic deploy+init)
         treasuryImpl = new ProtocolTreasuryV1();
         treasury = ProtocolTreasuryV1(payable(
-            _deployCloneCreate3(address(treasuryImpl), vm.envOr("TREASURY_SALT", bytes32(uint256(2))))
+            _deployProxyCreate3(
+                address(treasuryImpl),
+                vm.envOr("TREASURY_SALT", bytes32(uint256(2))),
+                abi.encodeWithSignature("initialize(address)", deployer)
+            )
         ));
-        treasury.initialize(deployer);
         treasury.setV4PoolManager(poolManager);
         treasury.setWETH(weth);
 
-        // 4. FeaturedQueueManager via CREATE3
+        // 4. FeaturedQueueManager via CREATE3 (atomic deploy+init)
         queueManagerImpl = new FeaturedQueueManager();
         queueManager = FeaturedQueueManager(payable(
-            _deployCloneCreate3(address(queueManagerImpl), vm.envOr("QUEUE_MANAGER_SALT", bytes32(uint256(3))))
+            _deployProxyCreate3(
+                address(queueManagerImpl),
+                vm.envOr("QUEUE_MANAGER_SALT", bytes32(uint256(3))),
+                abi.encodeWithSignature("initialize(address,address)", masterRegistry, deployer)
+            )
         ));
-        queueManager.initialize(masterRegistry, deployer);
 
-        // 5. GlobalMessageRegistry via CREATE3
+        // 5. GlobalMessageRegistry via CREATE3 (atomic deploy+init)
         globalMessageRegistryImpl = new GlobalMessageRegistry();
         globalMessageRegistry = GlobalMessageRegistry(
-            _deployCloneCreate3(address(globalMessageRegistryImpl), vm.envOr("GLOBAL_MSG_REGISTRY_SALT", bytes32(uint256(4))))
+            _deployProxyCreate3(
+                address(globalMessageRegistryImpl),
+                vm.envOr("GLOBAL_MSG_REGISTRY_SALT", bytes32(uint256(4))),
+                abi.encodeWithSignature("initialize(address,address)", deployer, masterRegistry)
+            )
         );
-        globalMessageRegistry.initialize(deployer, masterRegistry);
 
-        // 6. AlignmentRegistryV1 via CREATE3
+        // 6. AlignmentRegistryV1 via CREATE3 (atomic deploy+init)
         alignmentRegistryImpl = new AlignmentRegistryV1();
         alignmentRegistry = AlignmentRegistryV1(
-            _deployCloneCreate3(address(alignmentRegistryImpl), vm.envOr("ALIGNMENT_REGISTRY_SALT", bytes32(uint256(5))))
+            _deployProxyCreate3(
+                address(alignmentRegistryImpl),
+                vm.envOr("ALIGNMENT_REGISTRY_SALT", bytes32(uint256(5))),
+                abi.encodeWithSignature("initialize(address)", deployer)
+            )
         );
-        alignmentRegistry.initialize(deployer);
         MasterRegistryV1(masterRegistry).setAlignmentRegistry(address(alignmentRegistry));
 
         // ============ Phase 2: DAO Layer ============
@@ -193,25 +205,30 @@ contract DeploySepolia is Script {
 
         // ============ Phase 4: Vault ============
 
-        // 12. UniAlignmentVault (peripherals + clone pattern)
+        // 12. UniAlignmentVault (atomic deploy+init via ERC1967 proxy)
         UniswapVaultPriceValidator priceValidator = new UniswapVaultPriceValidator(
-            weth, v2Factory, v3Factory, poolManager, 1000
+            weth, v2Factory, v3Factory, poolManager, 1000, 1800
         );
         UniAlignmentVault vaultImpl = new UniAlignmentVault();
         vault = UniAlignmentVault(payable(
-            _deployCloneCreate3(address(vaultImpl), vm.envOr("VAULT_SALT", bytes32(uint256(7))))
+            _deployProxyCreate3(
+                address(vaultImpl),
+                vm.envOr("VAULT_SALT", bytes32(uint256(7))),
+                abi.encodeWithSignature(
+                    "initialize(address,address,address,address,address,uint24,int24,address,address,uint256)",
+                    deployer,
+                    weth,
+                    poolManager,
+                    address(testToken),
+                    SEPOLIA_ZROUTER,
+                    ZROUTER_FEE,
+                    ZROUTER_TICK_SPACING,
+                    address(priceValidator),
+                    address(alignmentRegistry),
+                    alignmentTargetId
+                )
+            )
         ));
-        vault.initialize(
-            weth,
-            poolManager,
-            address(testToken),
-            SEPOLIA_ZROUTER,
-            ZROUTER_FEE,
-            ZROUTER_TICK_SPACING,
-            IVaultPriceValidator(address(priceValidator)),
-            IAlignmentRegistry(address(alignmentRegistry)),
-            alignmentTargetId
-        );
 
         // 13. Register vault
         MasterRegistryV1(masterRegistry).registerVault(
@@ -270,9 +287,12 @@ contract DeploySepolia is Script {
         // Deploy ComponentRegistry (UUPS proxy via CREATE3)
         ComponentRegistry compRegImpl = new ComponentRegistry();
         componentRegistry = ComponentRegistry(
-            _deployCloneCreate3(address(compRegImpl), vm.envOr("COMPONENT_REGISTRY_SALT", bytes32(uint256(6))))
+            _deployProxyCreate3(
+                address(compRegImpl),
+                vm.envOr("COMPONENT_REGISTRY_SALT", bytes32(uint256(6))),
+                abi.encodeWithSignature("initialize(address)", deployer)
+            )
         );
-        componentRegistry.initialize(deployer);
 
         erc404Factory = new ERC404Factory(
             ERC404Factory.CoreConfig({
@@ -305,6 +325,24 @@ contract DeploySepolia is Script {
 
     }
 
+    /// @dev Deploy an ERC1967 proxy via CREATE3 and atomically initialize it.
+    ///      Uses the same MasterRegistry proxy pattern so deploy+init happen in one tx,
+    ///      eliminating the front-running window on initialize().
+    ///      Requires the implementation's initializer to accept an explicit owner address
+    ///      (not msg.sender), which is the case for all registry/manager contracts.
+    function _deployProxyCreate3(address impl, bytes32 salt, bytes memory initData) private returns (address) {
+        bytes memory proxyInitCode = abi.encodePacked(
+            type(MasterRegistry).creationCode,
+            abi.encode(impl, initData)
+        );
+        return ICreateX(CREATEX).deployCreate3(salt, proxyInitCode);
+    }
+
+    /// @dev Deploy a minimal EIP-1167 clone via CREATE3 WITHOUT initialization.
+    ///      Only use this for contracts whose initializer uses msg.sender for ownership
+    ///      (e.g. UniAlignmentVault, where the caller intentionally becomes owner).
+    ///      The separate initialize() call is still a distinct transaction — callers
+    ///      should be aware of the front-running window on testnets.
     function _deployCloneCreate3(address impl, bytes32 salt) private returns (address) {
         bytes memory proxyCreationCode = abi.encodePacked(
             hex"3d602d80600a3d3981f3363d3d373d3d3d363d73",

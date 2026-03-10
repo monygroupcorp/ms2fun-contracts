@@ -2,12 +2,14 @@
 pragma solidity ^0.8.20;
 
 import {IGatingModule} from "./IGatingModule.sol";
+import {IMasterRegistry} from "../master/interfaces/IMasterRegistry.sol";
+import {Ownable} from "solady/auth/Ownable.sol";
 
 /// @title PasswordTierGatingModule
 /// @notice Singleton gating module for password-protected tier minting.
 /// State is keyed by the calling instance address (msg.sender).
-/// Any ERC404 bonding instance can use this module.
-contract PasswordTierGatingModule is IGatingModule {
+/// Only registered factories may configure instances.
+contract PasswordTierGatingModule is IGatingModule, Ownable {
     // ── Types ──────────────────────────────────────────────────────────────────
 
     enum TierType { VOLUME_CAP, TIME_BASED }
@@ -21,12 +23,24 @@ contract PasswordTierGatingModule is IGatingModule {
 
     // ── Errors ─────────────────────────────────────────────────────────────────
 
-    error AlreadyConfigured();
     error InvalidPassword();
     error VolumeCapExceeded();
     error TierTimeLocked();
     error InvalidPasswordHash();
     error TierConfigMismatch();
+
+    // ── Immutables ─────────────────────────────────────────────────────────────
+
+    IMasterRegistry public immutable masterRegistry;
+
+    // ── Metadata ───────────────────────────────────────────────────────────────
+
+    string private _metadataURI;
+
+    constructor(address _masterRegistry) {
+        masterRegistry = IMasterRegistry(_masterRegistry);
+        _initializeOwner(msg.sender);
+    }
 
     // ── State (keyed by instance = msg.sender) ─────────────────────────────────
 
@@ -39,14 +53,26 @@ contract PasswordTierGatingModule is IGatingModule {
 
     // ── Configuration ──────────────────────────────────────────────────────────
 
-    /// @notice Called by factory right after deploying an instance. One-time per instance.
-    /// @dev canMint data encoding: abi.encode(bytes32 passwordHash, uint256 openTime)
+    /// @notice Configure or update tier config for an instance.
+    /// @dev Initial configuration (before first deploy) may only be called by a registered factory.
+    ///      Subsequent updates may only be called by the instance owner.
+    ///      canMint data encoding: abi.encode(bytes32 passwordHash, uint256 openTime)
     function configureFor(address instance, TierConfig calldata config) external {
-        if (configured[instance]) revert AlreadyConfigured();
+        if (!configured[instance]) {
+            if (!masterRegistry.isFactoryRegistered(msg.sender)) revert Unauthorized();
+        } else {
+            if (msg.sender != Ownable(instance).owner()) revert Unauthorized();
+        }
         if (config.tierType == TierType.VOLUME_CAP
             ? config.volumeCaps.length != config.passwordHashes.length
             : config.tierUnlockTimes.length != config.passwordHashes.length
         ) revert TierConfigMismatch();
+
+        // Clear stale password-hash entries from the previous config (if updating).
+        TierConfig storage prev = _configs[instance];
+        for (uint256 i = 0; i < prev.passwordHashes.length; i++) {
+            delete _tierByPasswordHash[instance][prev.passwordHashes[i]];
+        }
 
         configured[instance] = true;
         _configs[instance] = config;
@@ -101,5 +127,16 @@ contract PasswordTierGatingModule is IGatingModule {
 
     function userTierUnlocked(address instance, address user) external view returns (uint256) {
         return _userTierUnlocked[instance][user];
+    }
+
+    // ── IComponentModule ───────────────────────────────────────────────────────
+
+    function metadataURI() external view override returns (string memory) {
+        return _metadataURI;
+    }
+
+    function setMetadataURI(string calldata uri) external override onlyOwner {
+        _metadataURI = uri;
+        emit MetadataURIUpdated(uri);
     }
 }

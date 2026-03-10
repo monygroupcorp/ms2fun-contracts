@@ -158,7 +158,10 @@ contract ERC404Factory is OwnableRoles, ReentrancyGuard, IFactory {
         // slither-disable-next-line uninitialized-local
         address gatingModuleAddr;
         if (tiers.passwordHashes.length > 0) {
-            tierGatingModule.configureFor(address(0), tiers);
+            bytes32 senderBoundSalt = keccak256(abi.encodePacked(msg.sender, identity.salt));
+            bytes32 guardedSalt = keccak256(abi.encodePacked(uint256(uint160(address(this))), senderBoundSalt));
+            address predictedInstance = ICreateX(CREATEX).computeCreate3Address(guardedSalt, CREATEX);
+            tierGatingModule.configureFor(predictedInstance, tiers);
             gatingModuleAddr = address(tierGatingModule);
         }
         return _createInstanceCore(identity, metadataURI, liquidityDeployer, gatingModuleAddr, freeMint);
@@ -202,13 +205,16 @@ contract ERC404Factory is OwnableRoles, ReentrancyGuard, IFactory {
             emit VaultCapabilityWarning(identity.vault, keccak256("YIELD_GENERATION"));
         }
 
-        // Deploy EIP-1167 minimal proxy via CREATE3 for deterministic vanity address
+        // Deploy EIP-1167 minimal proxy via CREATE3 for deterministic vanity address.
+        // Bind salt to msg.sender to prevent front-running: an attacker cannot occupy
+        // a CREATE3 address derived from another caller's (sender, salt) pair.
         bytes memory proxyCreationCode = abi.encodePacked(
             hex"3d602d80600a3d3981f3363d3d373d3d3d363d73",
             implementation,
             hex"5af43d82803e903d91602b57fd5bf3"
         );
-        instance = ICreateX(CREATEX).deployCreate3(identity.salt, proxyCreationCode);
+        bytes32 senderBoundSalt = keccak256(abi.encodePacked(msg.sender, identity.salt));
+        instance = ICreateX(CREATEX).deployCreate3(senderBoundSalt, proxyCreationCode);
         _initializeInstance(instance, identity, liquidityDeployer, gatingModule, freeMint, agentCreated);
         _finalizeInstance(instance, identity, metadataURI);
     }
@@ -231,7 +237,7 @@ contract ERC404Factory is OwnableRoles, ReentrancyGuard, IFactory {
         ERC404BondingInstance.BondingParams memory bonding = ERC404BondingInstance.BondingParams({
             maxSupply: identity.nftCount * unit,          // full supply (includes free mint tranche)
             unit: unit,
-            liquidityReservePercent: preset.liquidityReserveBps / 100,
+            liquidityReserveBps: preset.liquidityReserveBps,
             curve: ICurveComputer(preset.curveComputer).computeCurveParams(
                 curveNftCount,                             // paid bonding portion
                 preset.targetETH,
@@ -322,9 +328,11 @@ contract ERC404Factory is OwnableRoles, ReentrancyGuard, IFactory {
         emit BondingFeeUpdated(_bps);
     }
 
-    /// @notice Preview the deterministic address for a given salt
-    function computeInstanceAddress(bytes32 salt) external view returns (address) {
-        bytes32 guardedSalt = keccak256(abi.encodePacked(uint256(uint160(address(this))), salt));
+    /// @notice Preview the deterministic address for a given (creator, salt) pair.
+    /// @param creator The address that will call createInstance / createInstanceWithTiers.
+    function computeInstanceAddress(address creator, bytes32 salt) external view returns (address) {
+        bytes32 senderBoundSalt = keccak256(abi.encodePacked(creator, salt));
+        bytes32 guardedSalt = keccak256(abi.encodePacked(uint256(uint160(address(this))), senderBoundSalt));
         return ICreateX(CREATEX).computeCreate3Address(guardedSalt, CREATEX);
     }
 }

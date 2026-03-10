@@ -3,6 +3,7 @@ pragma solidity ^0.8.20;
 
 import {ReentrancyGuard} from "solady/utils/ReentrancyGuard.sol";
 import {Ownable} from "solady/auth/Ownable.sol";
+import {SafeTransferLib} from "solady/utils/SafeTransferLib.sol";
 import {Currency, CurrencyLibrary} from "v4-core/types/Currency.sol";
 import {IPoolManager} from "v4-core/interfaces/IPoolManager.sol";
 import {IUnlockCallback} from "v4-core/interfaces/callback/IUnlockCallback.sol";
@@ -14,7 +15,6 @@ import {StateLibrary} from "v4-core/libraries/StateLibrary.sol";
 import {CurrencySettler} from "../../libraries/v4/CurrencySettler.sol";
 import {LiquidityAmounts} from "../../libraries/v4/LiquidityAmounts.sol";
 import {TickMath} from "v4-core/libraries/TickMath.sol";
-import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IAlignmentVault} from "../../interfaces/IAlignmentVault.sol";
 import {IVaultPriceValidator} from "../../interfaces/IVaultPriceValidator.sol";
 import {IAlignmentRegistry} from "../../master/interfaces/IAlignmentRegistry.sol";
@@ -79,6 +79,7 @@ contract UniAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback, IAlignm
     error DeviationTooHigh();
     error ExceedsMaxBps();
     error TreasuryNotSet();
+    error AmountMismatch();
 
     // ========== Data Structures ==========
 
@@ -206,6 +207,7 @@ contract UniAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback, IAlignm
     /// @param _alignmentTargetId ID of the alignment target this vault serves
     // slither-disable-next-line events-maths
     function initialize(
+        address _initialOwner,
         address _weth,
         address _poolManager,
         address _alignmentToken,
@@ -220,7 +222,7 @@ contract UniAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback, IAlignm
         if (_initialized) revert AlreadyInitialized();
         _initialized = true;
 
-        _initializeOwner(msg.sender); // factory becomes owner
+        _initializeOwner(_initialOwner);
 
         if (_weth == address(0)) revert InvalidAddress();
         if (_poolManager == address(0)) revert InvalidAddress();
@@ -278,6 +280,7 @@ contract UniAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback, IAlignm
         address benefactor
     ) external payable override nonReentrant {
         if (amount == 0) revert AmountMustBePositive();
+        if (msg.value != amount) revert AmountMismatch();
         if (benefactor == address(0)) revert InvalidAddress();
         _trackBenefactorContribution(benefactor, amount);
         emit ContributionReceived(benefactor, amount);
@@ -315,6 +318,7 @@ contract UniAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback, IAlignm
     function convertAndAddLiquidity(
         uint256 minOutTarget
     ) external nonReentrant returns (uint256 lpPositionValue) {
+        if (minOutTarget == 0) revert AmountMustBePositive();
         if (totalPendingETH == 0) revert NoPendingETH();
         if (alignmentToken == address(0)) revert NoAlignmentTarget();
         if (Currency.unwrap(v4PoolKey.currency0) == address(0) && Currency.unwrap(v4PoolKey.currency1) == address(0)) revert PoolKeyNotSet();
@@ -478,7 +482,19 @@ contract UniAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback, IAlignm
     // slither-disable-next-line unused-return
     function _convertVaultFeesToEth(uint256 tokenAmount) internal returns (uint256 ethReceived) {
         if (tokenAmount == 0) return 0;
-        IERC20(alignmentToken).approve(zRouter, tokenAmount);
+
+        // Derive a TWAP-based minimum output to guard against sandwich attacks.
+        // If the validator has no price data (new pool / no history), minEthOut stays 0
+        // and the swap proceeds unguarded — acceptable as a rare edge case.
+        uint256 minEthOut = 0;
+        if (address(priceValidator) != address(0)) {
+            uint256 ethEstimate = priceValidator.quoteEthForTokens(alignmentToken, tokenAmount);
+            if (ethEstimate > 0) {
+                minEthOut = ethEstimate * (10000 - maxPriceDeviationBps) / 10000;
+            }
+        }
+
+        SafeTransferLib.safeApproveWithRetry(alignmentToken, zRouter, tokenAmount);
         (, ethReceived) = IzRouterV4(zRouter).swapV4(
             address(this),
             false,
@@ -487,7 +503,7 @@ contract UniAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback, IAlignm
             alignmentToken,
             address(0),
             tokenAmount,
-            0,
+            minEthOut,
             type(uint256).max
         );
     }
@@ -589,10 +605,10 @@ contract UniAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback, IAlignm
         Currency currency1 = v4PoolKey.currency1;
 
         if (!currency0.isAddressZero()) {
-            IERC20(Currency.unwrap(currency0)).approve(address(poolManager), amount0);
+            SafeTransferLib.safeApproveWithRetry(Currency.unwrap(currency0), address(poolManager), amount0);
         }
         if (!currency1.isAddressZero()) {
-            IERC20(Currency.unwrap(currency1)).approve(address(poolManager), amount1);
+            SafeTransferLib.safeApproveWithRetry(Currency.unwrap(currency1), address(poolManager), amount1);
         }
 
         PoolId poolId = v4PoolKey.toId();

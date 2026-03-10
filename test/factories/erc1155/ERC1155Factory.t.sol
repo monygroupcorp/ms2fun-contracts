@@ -86,6 +86,7 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
             UniAlignmentVault _impl = new UniAlignmentVault();
             vault = UniAlignmentVault(payable(LibClone.clone(address(_impl))));
             vault.initialize(
+                owner,
                 address(0x2222222222222222222222222222222222222222),  // WETH
                 address(0x4444444444444444444444444444444444444444),  // V4 pool manager
                 address(token),                                       // alignment target

@@ -112,6 +112,7 @@ interface IMasterRegistry {
     function deactivateFactory(address factoryAddress) external;
 
     // Factory Authorization
+    function isFactoryRegistered(address factory) external view returns (bool);
     function isInstanceFromApprovedFactory(address instance) external view returns (bool);
 
     // Instance Registration Check

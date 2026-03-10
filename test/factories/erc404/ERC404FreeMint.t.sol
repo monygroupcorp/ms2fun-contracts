@@ -24,6 +24,8 @@ contract MockVaultFM {
 
 contract MockDeployerFM is ILiquidityDeployerModule {
     function deployLiquidity(ILiquidityDeployerModule.DeployParams calldata) external payable override {}
+    function metadataURI() external view override returns (string memory) { return ""; }
+    function setMetadataURI(string calldata) external override {}
 }
 
 contract ERC404FreeMintTest is Test {
@@ -61,7 +63,7 @@ contract ERC404FreeMintTest is Test {
         mockVault    = new MockVaultFM();
         launchMgr    = new LaunchManager(protocol);
         curveComp    = new CurveParamsComputer(protocol);
-        tierGatingModule = new PasswordTierGatingModule();
+        tierGatingModule = new PasswordTierGatingModule(address(mockRegistry));
         mockDeployer = new MockDeployerFM();
 
         ComponentRegistry impl = new ComponentRegistry();

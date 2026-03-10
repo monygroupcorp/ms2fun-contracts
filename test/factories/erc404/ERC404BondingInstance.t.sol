@@ -18,6 +18,8 @@ contract MockGatingModule is IGatingModule {
         return (true, false);
     }
     function onMint(address, uint256) external override {}
+    function metadataURI() external view override returns (string memory) { return ""; }
+    function setMetadataURI(string calldata) external override {}
 }
 
 contract PermanentGatingModule is IGatingModule {
@@ -27,6 +29,8 @@ contract PermanentGatingModule is IGatingModule {
         return (true, true);
     }
     function onMint(address, uint256) external override {}
+    function metadataURI() external view override returns (string memory) { return ""; }
+    function setMetadataURI(string calldata) external override {}
 }
 
 contract MockLiquidityDeployer is ILiquidityDeployerModule {
@@ -34,6 +38,8 @@ contract MockLiquidityDeployer is ILiquidityDeployerModule {
     function deployLiquidity(ILiquidityDeployerModule.DeployParams calldata) external payable override {
         called = true;
     }
+    function metadataURI() external view override returns (string memory) { return ""; }
+    function setMetadataURI(string calldata) external override {}
 }
 
 /**
@@ -49,7 +55,7 @@ contract ERC404BondingInstanceTest is Test {
 
     // Test parameters
     uint256 constant MAX_SUPPLY = 10_000_000 * 1e18;
-    uint256 constant LIQUIDITY_RESERVE_PERCENT = 10;
+    uint256 constant LIQUIDITY_RESERVE_BPS = 1000;
 
     BondingCurveMath.Params curveParams;
 
@@ -91,7 +97,7 @@ contract ERC404BondingInstanceTest is Test {
         return ERC404BondingInstance.BondingParams({
             maxSupply: MAX_SUPPLY,
             unit: 1_000_000 ether,
-            liquidityReservePercent: LIQUIDITY_RESERVE_PERCENT,
+            liquidityReserveBps: LIQUIDITY_RESERVE_BPS,
             curve: curveParams
         });
     }
@@ -119,7 +125,7 @@ contract ERC404BondingInstanceTest is Test {
 
     function test_Deployment() public {
         assertEq(instance.maxSupply(), MAX_SUPPLY);
-        assertEq(instance.liquidityReserve(), MAX_SUPPLY * LIQUIDITY_RESERVE_PERCENT / 100);
+        assertEq(instance.liquidityReserve(), MAX_SUPPLY * LIQUIDITY_RESERVE_BPS / 10000);
         assertFalse(instance.graduated());
         assertFalse(instance.gatingActive()); // no gating module set in setUp
     }

@@ -111,6 +111,10 @@ contract MockMasterRegistry is IMasterRegistry {
 
     function deactivateFactory(address) external override {}
 
+    function isFactoryRegistered(address) external view override returns (bool) {
+        return true; // Always return true in mock for testing
+    }
+
     function isInstanceFromApprovedFactory(address) external view override returns (bool) {
         return true; // Always return true in mock for testing
     }

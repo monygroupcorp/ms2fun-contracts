@@ -7,6 +7,7 @@ import {IAlignmentVault} from "../../interfaces/IAlignmentVault.sol";
 import {Currency} from "v4-core/types/Currency.sol";
 import {ILiquidityDeployerModule} from "../../interfaces/ILiquidityDeployerModule.sol";
 import {RevenueSplitLib} from "../../shared/libraries/RevenueSplitLib.sol";
+import {Ownable} from "solady/auth/Ownable.sol";
 
 interface IZAMM {
     struct PoolKey {
@@ -33,7 +34,7 @@ interface IZAMM {
  * @notice Singleton called by ERC404BondingInstance at graduation.
  *         Receives ETH + tokens, deploys ZAMM liquidity, pays graduation fees.
  */
-contract ZAMMLiquidityDeployerModule is ILiquidityDeployerModule {
+contract ZAMMLiquidityDeployerModule is ILiquidityDeployerModule, Ownable {
     error ETHMismatch();
     error NoETHForPool();
     error NoTokensForPool();
@@ -41,10 +42,13 @@ contract ZAMMLiquidityDeployerModule is ILiquidityDeployerModule {
     address public immutable zamm;
     uint256 public immutable feeOrHook;
 
+    string private _metadataURI;
+
     // slither-disable-next-line missing-zero-check
     constructor(address _zamm, uint256 _feeOrHook) {
         zamm = _zamm;
         feeOrHook = _feeOrHook;
+        _initializeOwner(msg.sender);
     }
 
     struct PoolResult {
@@ -120,4 +124,15 @@ contract ZAMMLiquidityDeployerModule is ILiquidityDeployerModule {
     }
 
     receive() external payable {}
+
+    // ── IComponentModule ───────────────────────────────────────────────────────
+
+    function metadataURI() external view override returns (string memory) {
+        return _metadataURI;
+    }
+
+    function setMetadataURI(string calldata uri) external override onlyOwner {
+        _metadataURI = uri;
+        emit MetadataURIUpdated(uri);
+    }
 }

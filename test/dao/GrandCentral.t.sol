@@ -35,6 +35,8 @@ contract GrandCentralTest is Test {
             MIN_RETENTION
         );
         vm.deal(address(mockSafe), 100 ether);
+        // Advance time so initial shares are in the past; snapshot voting uses votingStarts - 1.
+        vm.warp(block.timestamp + 1);
     }
 
     // ========== Initialization Tests ==========
