@@ -4,7 +4,7 @@ pragma solidity ^0.8.24;
 import { Ownable } from "solady/auth/Ownable.sol";
 import { ReentrancyGuard } from "solady/utils/ReentrancyGuard.sol";
 import { SafeTransferLib } from "solady/utils/SafeTransferLib.sol";
-import { EditionPricing } from "./libraries/EditionPricing.sol";
+import {IDynamicPricingModule} from "./interfaces/IDynamicPricingModule.sol";
 import { IAlignmentVault } from "../../interfaces/IAlignmentVault.sol";
 import {IMasterRegistry} from "../../master/interfaces/IMasterRegistry.sol";
 import { IGlobalMessageRegistry } from "../../registry/interfaces/IGlobalMessageRegistry.sol";
@@ -36,10 +36,9 @@ error EditionLimitReached();
 error NoFeesToClaim();
 error NoPendingVaultCut();
 error LengthMismatch();
-error InvalidEditionRange();
 error GatingCheckFailed();
 error ERC1155RejectedTokens();
-error ERC1155TransferToNonReceiver();
+error NoDynamicPricingModule();
 error OnlyFactory();
 error AlreadyInitialized();
 import { Currency } from "v4-core/types/Currency.sol";
@@ -53,7 +52,6 @@ import { IInstanceLifecycle, TYPE_ERC1155, STATE_MINTING } from "../../interface
  */
 // slither-disable-next-line missing-inheritance
 contract ERC1155Instance is Ownable, ReentrancyGuard, IInstanceLifecycle {
-    using EditionPricing for uint256;
 
     // ┌─────────────────────────┐
     // │         Types           │
@@ -63,6 +61,11 @@ contract ERC1155Instance is Ownable, ReentrancyGuard, IInstanceLifecycle {
         UNLIMITED,      // Unlimited supply, fixed price
         LIMITED_FIXED,  // Limited supply, fixed price
         LIMITED_DYNAMIC // Limited supply, exponential price increase
+    }
+
+    struct ComponentAddresses {
+        address gatingModule;
+        address dynamicPricingModule;
     }
 
     struct Edition {
@@ -94,7 +97,6 @@ contract ERC1155Instance is Ownable, ReentrancyGuard, IInstanceLifecycle {
 
     // Customization
     string public styleUri;
-    mapping(uint256 => string) public editionStyleUri;
 
     mapping(uint256 => Edition) public editions;
     mapping(address => mapping(uint256 => uint256)) public balanceOf;
@@ -102,6 +104,8 @@ contract ERC1155Instance is Ownable, ReentrancyGuard, IInstanceLifecycle {
 
     // slither-disable-next-line immutable-states
     IGatingModule public gatingModule;
+    // slither-disable-next-line immutable-states
+    IDynamicPricingModule public dynamicPricingModule;
 
     // Free mint
     uint256 public freeMintAllocation;
@@ -168,7 +172,6 @@ contract ERC1155Instance is Ownable, ReentrancyGuard, IInstanceLifecycle {
 
     event EditionMetadataUpdated(uint256 indexed editionId, string metadataURI);
     event FreeMintClaimed(address indexed user, uint256 indexed editionId);
-    event AgentDelegationChanged(bool enabled);
 
     // ┌─────────────────────────┐
     // │      Constructor        │
@@ -185,7 +188,7 @@ contract ERC1155Instance is Ownable, ReentrancyGuard, IInstanceLifecycle {
         // slither-disable-next-line missing-zero-check
         address _protocolTreasury,
         address _masterRegistry,
-        address _gatingModule,
+        ComponentAddresses memory _components,
         bool _agentCreated
     ) {
         if (bytes(_name).length == 0) revert InvalidName();
@@ -204,8 +207,11 @@ contract ERC1155Instance is Ownable, ReentrancyGuard, IInstanceLifecycle {
         protocolTreasury = _protocolTreasury;
         styleUri = _styleUri;
         nextEditionId = 1;
-        if (_gatingModule != address(0)) {
-            gatingModule = IGatingModule(_gatingModule);
+        if (_components.gatingModule != address(0)) {
+            gatingModule = IGatingModule(_components.gatingModule);
+        }
+        if (_components.dynamicPricingModule != address(0)) {
+            dynamicPricingModule = IDynamicPricingModule(_components.dynamicPricingModule);
         }
         emit StateChanged(STATE_MINTING);
         agentDelegationEnabled = _agentCreated;
@@ -233,7 +239,6 @@ contract ERC1155Instance is Ownable, ReentrancyGuard, IInstanceLifecycle {
     function setAgentDelegation(bool enabled) external {
         if (msg.sender != owner()) revert Unauthorized();
         agentDelegationEnabled = enabled;
-        emit AgentDelegationChanged(enabled);
     }
 
     /// @notice Claim one free token of a specified edition at zero ETH cost.
@@ -305,6 +310,7 @@ contract ERC1155Instance is Ownable, ReentrancyGuard, IInstanceLifecycle {
         }
 
         if (pricingModel == PricingModel.LIMITED_DYNAMIC) {
+            if (address(dynamicPricingModule) == address(0)) revert NoDynamicPricingModule();
             if (priceIncreaseRate == 0) revert DynamicPricingRequiresIncreaseRate();
         }
 
@@ -364,7 +370,7 @@ contract ERC1155Instance is Ownable, ReentrancyGuard, IInstanceLifecycle {
             return edition.basePrice;
         } else {
             // LIMITED_DYNAMIC
-            return EditionPricing.calculateDynamicPrice(
+            return dynamicPricingModule.calculatePrice(
                 edition.basePrice,
                 edition.priceIncreaseRate,
                 edition.minted
@@ -387,7 +393,7 @@ contract ERC1155Instance is Ownable, ReentrancyGuard, IInstanceLifecycle {
             return edition.basePrice * amount;
         } else {
             // LIMITED_DYNAMIC
-            return EditionPricing.calculateBatchCost(
+            return dynamicPricingModule.calculateBatchCost(
                 edition.basePrice,
                 edition.priceIncreaseRate,
                 edition.minted,
@@ -516,14 +522,6 @@ contract ERC1155Instance is Ownable, ReentrancyGuard, IInstanceLifecycle {
     }
 
     /**
-     * @notice Get total proceeds collected
-     * @return Total proceeds in wei
-     */
-    function getTotalProceeds() external view returns (uint256) {
-        return totalProceeds;
-    }
-
-    /**
      * @notice Claim accumulated vault fees on behalf of this project and distribute to creator
      * @dev Only callable by the project creator
      *      This instance was registered as the benefactor when tithes were sent to the vault
@@ -619,123 +617,9 @@ contract ERC1155Instance is Ownable, ReentrancyGuard, IInstanceLifecycle {
         emit ApprovalForAll(msg.sender, operator, approved);
     }
 
-    /**
-     * @notice Get balance of multiple tokens for an account
-     */
-    function balanceOfBatch(address account, uint256[] memory ids) external view returns (uint256[] memory balances) {
-        balances = new uint256[](ids.length);
-        for (uint256 i = 0; i < ids.length; i++) {
-            balances[i] = balanceOf[account][ids[i]];
-        }
-    }
-
     // ┌─────────────────────────┐
     // │   Metadata Functions    │
     // └─────────────────────────┘
-
-    /// @notice Returns data needed for project card display
-    /// @dev Implements IInstance interface for QueryAggregator compatibility
-    ///      Iterates all editions to compute aggregate values
-    /// @return floorPrice Lowest base price across all editions
-    /// @return totalMinted Sum of minted counts across all editions
-    /// @return maxSupply Sum of limited supplies (0 if any edition is unlimited)
-    /// @return isActive True if any edition has remaining supply
-    /// @return extraData Reserved for future use (empty for now)
-    function getCardData() external view returns (
-        uint256 floorPrice,
-        uint256 totalMinted,
-        uint256 maxSupply,
-        bool isActive,
-        bytes memory extraData
-    ) {
-        uint256 editionCount = nextEditionId - 1;
-
-        // Handle no editions case
-        if (editionCount == 0) {
-            return (0, 0, 0, false, "");
-        }
-
-        floorPrice = type(uint256).max;
-        totalMinted = 0;
-        maxSupply = 0;
-        isActive = false;
-        bool hasUnlimited = false;
-
-        for (uint256 i = 1; i <= editionCount; i++) {
-            Edition storage ed = editions[i];
-
-            // Track lowest price
-            if (ed.basePrice < floorPrice) {
-                floorPrice = ed.basePrice;
-            }
-
-            // Sum minted
-            totalMinted += ed.minted;
-
-            // Track supply
-            if (ed.supply == 0) {
-                hasUnlimited = true;
-            } else {
-                maxSupply += ed.supply;
-                if (ed.minted < ed.supply) {
-                    isActive = true;
-                }
-            }
-        }
-
-        // Handle unlimited editions
-        if (hasUnlimited) {
-            maxSupply = 0; // 0 signals unlimited
-            isActive = true;
-        }
-
-        // Handle edge case where floorPrice wasn't set
-        if (floorPrice == type(uint256).max) {
-            floorPrice = 0;
-        }
-
-        extraData = "";
-    }
-
-    /**
-     * @notice Get edition metadata
-     * @param editionId Edition ID
-     * @return id Edition ID
-     * @return pieceTitle Title of the piece
-     * @return basePrice Base price
-     * @return currentPrice Current price for next mint
-     * @return supply Supply limit (0 = unlimited)
-     * @return minted Number minted
-     * @return metadataURI Metadata URI
-     * @return pricingModel Pricing model
-     * @return priceIncreaseRate Price increase rate (for dynamic)
-     */
-    function getEditionMetadata(uint256 editionId) external view returns (
-        uint256 id,
-        string memory pieceTitle,
-        uint256 basePrice,
-        uint256 currentPrice,
-        uint256 supply,
-        uint256 minted,
-        string memory metadataURI,
-        PricingModel pricingModel,
-        uint256 priceIncreaseRate
-    ) {
-        Edition storage edition = editions[editionId];
-        if (edition.id == 0) revert EditionNotFound();
-        
-        return (
-            edition.id,
-            edition.pieceTitle,
-            edition.basePrice,
-            getCurrentPrice(editionId),
-            edition.supply,
-            edition.minted,
-            edition.metadataURI,
-            edition.pricingModel,
-            edition.priceIncreaseRate
-        );
-    }
 
     /**
      * @notice Get all edition IDs
@@ -758,189 +642,6 @@ contract ERC1155Instance is Ownable, ReentrancyGuard, IInstanceLifecycle {
     }
 
     /**
-     * @notice Get batch of edition metadata
-     * @param startId Starting edition ID (1-indexed)
-     * @param endId Ending edition ID (inclusive, 1-indexed)
-     * @return ids Array of edition IDs
-     * @return pieceTitles Array of piece titles
-     * @return basePrices Array of base prices
-     * @return currentPrices Array of current prices
-     * @return supplies Array of supplies
-     * @return mintedCounts Array of minted counts
-     * @return metadataURIs Array of metadata URIs
-     * @return pricingModels Array of pricing models
-     * @return priceIncreaseRates Array of price increase rates
-     */
-    function getEditionsBatch(
-        uint256 startId,
-        uint256 endId
-    ) external view returns (
-        uint256[] memory ids,
-        string[] memory pieceTitles,
-        uint256[] memory basePrices,
-        uint256[] memory currentPrices,
-        uint256[] memory supplies,
-        uint256[] memory mintedCounts,
-        string[] memory metadataURIs,
-        PricingModel[] memory pricingModels,
-        uint256[] memory priceIncreaseRates
-    ) {
-        if (startId == 0 || startId > nextEditionId - 1) revert InvalidEditionRange();
-        if (endId < startId || endId > nextEditionId - 1) revert InvalidEditionRange();
-        
-        uint256 size = endId - startId + 1;
-        ids = new uint256[](size);
-        pieceTitles = new string[](size);
-        basePrices = new uint256[](size);
-        currentPrices = new uint256[](size);
-        supplies = new uint256[](size);
-        mintedCounts = new uint256[](size);
-        metadataURIs = new string[](size);
-        pricingModels = new PricingModel[](size);
-        priceIncreaseRates = new uint256[](size);
-        
-        for (uint256 i = 0; i < size; i++) {
-            uint256 editionId = startId + i;
-            Edition storage edition = editions[editionId];
-            
-            ids[i] = edition.id;
-            pieceTitles[i] = edition.pieceTitle;
-            basePrices[i] = edition.basePrice;
-            currentPrices[i] = getCurrentPrice(editionId);
-            supplies[i] = edition.supply;
-            mintedCounts[i] = edition.minted;
-            metadataURIs[i] = edition.metadataURI;
-            pricingModels[i] = edition.pricingModel;
-            priceIncreaseRates[i] = edition.priceIncreaseRate;
-        }
-    }
-
-    /**
-     * @notice Get instance metadata
-     * @return instanceName Collection name
-     * @return instanceCreator Creator address
-     * @return instanceFactory Factory address
-     * @return instanceVault Vault address
-     * @return totalEditions Total number of editions
-     * @return totalProceeds Total proceeds collected
-     * @return contractBalance Current contract balance
-     * @return instanceStyleUri Style URI for customization
-     */
-    function getInstanceMetadata() external view returns (
-        string memory instanceName,
-        address instanceCreator,
-        address instanceFactory,
-        address instanceVault,
-        uint256 totalEditions,
-        // slither-disable-next-line shadowing-local
-        uint256 totalProceeds,
-        uint256 contractBalance,
-        string memory instanceStyleUri
-    ) {
-        return (
-            name,
-            creator,
-            factory,
-            address(vault),
-            nextEditionId - 1,
-            totalProceeds,
-            address(this).balance,
-            styleUri
-        );
-    }
-
-    /**
-     * @notice Get pricing information for an edition
-     * @param editionId Edition ID
-     * @return basePrice Base price
-     * @return currentPrice Current price for next mint
-     * @return pricingModel Pricing model
-     * @return priceIncreaseRate Price increase rate (for dynamic)
-     * @return minted Number minted
-     * @return supply Supply limit (0 = unlimited)
-     * @return available Available mints remaining (type(uint256).max if unlimited)
-     */
-    function getPricingInfo(uint256 editionId) external view returns (
-        uint256 basePrice,
-        uint256 currentPrice,
-        PricingModel pricingModel,
-        uint256 priceIncreaseRate,
-        uint256 minted,
-        uint256 supply,
-        uint256 available
-    ) {
-        Edition storage edition = editions[editionId];
-        if (edition.id == 0) revert EditionNotFound();
-        
-        basePrice = edition.basePrice;
-        currentPrice = getCurrentPrice(editionId);
-        pricingModel = edition.pricingModel;
-        priceIncreaseRate = edition.priceIncreaseRate;
-        minted = edition.minted;
-        supply = edition.supply;
-        available = supply == 0 ? type(uint256).max : (supply > minted ? supply - minted : 0);
-    }
-
-    /**
-     * @notice Get mint statistics for an edition
-     * @param editionId Edition ID
-     * @return minted Number minted
-     * @return supply Supply limit (0 = unlimited)
-     * @return available Available mints remaining
-     * @return isSoldOut Whether edition is sold out
-     */
-    function getMintStats(uint256 editionId) external view returns (
-        uint256 minted,
-        uint256 supply,
-        uint256 available,
-        bool isSoldOut
-    ) {
-        Edition storage edition = editions[editionId];
-        if (edition.id == 0) revert EditionNotFound();
-        
-        minted = edition.minted;
-        supply = edition.supply;
-        
-        if (supply == 0) {
-            // Unlimited
-            available = type(uint256).max;
-            isSoldOut = false;
-        } else {
-            available = supply > minted ? supply - minted : 0;
-            isSoldOut = minted >= supply;
-        }
-    }
-
-    /**
-     * @notice Check if edition exists
-     * @param editionId Edition ID
-     * @return exists Whether edition exists
-     */
-    function editionExists(uint256 editionId) external view returns (bool exists) {
-        return editions[editionId].id != 0;
-    }
-
-    /**
-     * @notice Get project/collection name
-     * @return projectName The name of the project/collection
-     * @dev This is the same as the public `name` variable, provided for clarity
-     */
-    function getProjectName() external view returns (string memory projectName) {
-        return name;
-    }
-
-    /**
-     * @notice Get piece title for an edition
-     * @param editionId Edition ID
-     * @return pieceTitle The title of the piece
-     */
-    function getPieceTitle(uint256 editionId) external view returns (string memory pieceTitle) {
-        Edition storage edition = editions[editionId];
-        if (edition.id == 0) revert EditionNotFound();
-        return edition.pieceTitle;
-    }
-
-    /**
      * @notice Get full edition details
      * @param editionId Edition ID
      * @return Edition struct containing all edition details
@@ -951,38 +652,15 @@ contract ERC1155Instance is Ownable, ReentrancyGuard, IInstanceLifecycle {
         return edition;
     }
 
+
     // ┌─────────────────────────┐
     // │   Style Management      │
     // └─────────────────────────┘
 
-    /**
-     * @notice Set project-level styling (creator only)
-     * @param uri Style URI (ipfs://, ar://, https://, or inline:css:... / inline:js:...)
-     */
+    /// @notice Set project-level style URI (creator only)
     function setStyle(string memory uri) external {
         if (msg.sender != owner()) revert Unauthorized();
         styleUri = uri;
-    }
-
-    /**
-     * @notice Set edition-level styling (creator only)
-     * @param editionId Edition ID
-     * @param uri Style URI (overrides project-level)
-     */
-    function setEditionStyle(uint256 editionId, string memory uri) external {
-        if (msg.sender != owner()) revert Unauthorized();
-        if (editions[editionId].id == 0) revert EditionNotFound();
-        editionStyleUri[editionId] = uri;
-    }
-
-    /**
-     * @notice Get style URI for edition (returns edition style if set, else project style)
-     * @param editionId Edition ID
-     * @return uri Style URI
-     */
-    function getStyle(uint256 editionId) external view returns (string memory uri) {
-        string memory editionStyle = editionStyleUri[editionId];
-        return bytes(editionStyle).length > 0 ? editionStyle : styleUri;
     }
 
     // ┌─────────────────────────────────────┐
@@ -1007,14 +685,11 @@ contract ERC1155Instance is Ownable, ReentrancyGuard, IInstanceLifecycle {
         bytes memory data
     ) private {
         if (to.code.length > 0) {
-            try IERC1155Receiver(to).onERC1155Received(operator, from, id, amount, data) returns (bytes4 response) {
-                if (response != IERC1155Receiver.onERC1155Received.selector) {
-                    revert ERC1155RejectedTokens();
-                }
-            } catch Error(string memory) {
+            (bool ok, bytes memory ret) = to.call(
+                abi.encodeCall(IERC1155Receiver.onERC1155Received, (operator, from, id, amount, data))
+            );
+            if (!ok || ret.length < 32 || abi.decode(ret, (bytes4)) != IERC1155Receiver.onERC1155Received.selector) {
                 revert ERC1155RejectedTokens();
-            } catch {
-                revert ERC1155TransferToNonReceiver();
             }
         }
     }
@@ -1037,14 +712,11 @@ contract ERC1155Instance is Ownable, ReentrancyGuard, IInstanceLifecycle {
         bytes memory data
     ) private {
         if (to.code.length > 0) {
-            try IERC1155Receiver(to).onERC1155BatchReceived(operator, from, ids, amounts, data) returns (bytes4 response) {
-                if (response != IERC1155Receiver.onERC1155BatchReceived.selector) {
-                    revert ERC1155RejectedTokens();
-                }
-            } catch Error(string memory) {
+            (bool ok, bytes memory ret) = to.call(
+                abi.encodeCall(IERC1155Receiver.onERC1155BatchReceived, (operator, from, ids, amounts, data))
+            );
+            if (!ok || ret.length < 32 || abi.decode(ret, (bytes4)) != IERC1155Receiver.onERC1155BatchReceived.selector) {
                 revert ERC1155RejectedTokens();
-            } catch {
-                revert ERC1155TransferToNonReceiver();
             }
         }
     }

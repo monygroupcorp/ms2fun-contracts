@@ -15,6 +15,7 @@ import {FeatureUtils} from "../../master/libraries/FeatureUtils.sol";
 import {FreeMintParams} from "../../interfaces/IFactoryTypes.sol";
 import {GatingScope} from "../../gating/IGatingModule.sol";
 import {ICreateX, CREATEX} from "../../shared/CreateXConstants.sol";
+import {IDynamicPricingModule} from "./interfaces/IDynamicPricingModule.sol";
 
 /**
  * @title ERC1155Factory
@@ -37,6 +38,7 @@ contract ERC1155Factory is Ownable, ReentrancyGuard, IFactory {
     IComponentRegistry public immutable componentRegistry;
     // slither-disable-next-line immutable-states
     address public instanceTemplate;
+    address public dynamicPricingModule;
 
     // Protocol revenue
     address public protocolTreasury;
@@ -200,19 +202,18 @@ contract ERC1155Factory is Ownable, ReentrancyGuard, IFactory {
             agentCreated = true;
         }
 
-        // Soft capability checks — emit warnings, never revert
-        try IAlignmentVault(payable(vault)).supportsCapability(keccak256("YIELD_GENERATION")) returns (bool supported) {
-            if (!supported) {
-                emit VaultCapabilityWarning(vault, keccak256("YIELD_GENERATION"));
-            }
-        } catch {
-            emit VaultCapabilityWarning(vault, keccak256("YIELD_GENERATION"));
-        }
+        // Soft capability check — emit warning if vault lacks yield generation, never revert
+        { bytes32 _cap = keccak256("YIELD_GENERATION");
+          try IAlignmentVault(payable(vault)).supportsCapability(_cap) returns (bool supported) {
+              if (!supported) emit VaultCapabilityWarning(vault, _cap);
+          } catch { emit VaultCapabilityWarning(vault, _cap); } }
 
         // Check namespace availability before deploying (saves gas on collision)
         if (masterRegistry.isNameTaken(name)) revert NameAlreadyTaken();
 
-        instance = _deployAndRegister(salt, name, metadataURI, creator, vault, styleUri, gatingModule, agentCreated);
+        instance = _deployAndRegister(salt, name, metadataURI, creator, vault, styleUri,
+            ERC1155Instance.ComponentAddresses({ gatingModule: gatingModule, dynamicPricingModule: dynamicPricingModule }),
+            agentCreated);
         // Wire free mint tranche (no-op when allocation == 0)
         ERC1155Instance(instance).initializeFreeMint(freeMint.allocation, freeMint.scope);
 
@@ -241,7 +242,7 @@ contract ERC1155Factory is Ownable, ReentrancyGuard, IFactory {
         address creator,
         address vault,
         string memory styleUri,
-        address gatingModule,
+        ERC1155Instance.ComponentAddresses memory components,
         bool agentCreated
     ) private returns (address instance) {
         bytes memory initCode = abi.encodePacked(
@@ -249,7 +250,7 @@ contract ERC1155Factory is Ownable, ReentrancyGuard, IFactory {
             abi.encode(
                 name, metadataURI, creator, address(this), vault, styleUri,
                 globalMessageRegistry, protocolTreasury, address(masterRegistry),
-                gatingModule, agentCreated
+                components, agentCreated
             )
         );
         instance = ICreateX(CREATEX).deployCreate3(salt, initCode);
@@ -315,6 +316,16 @@ contract ERC1155Factory is Ownable, ReentrancyGuard, IFactory {
      */
     function setFeaturedQueueManager(address _featuredQueueManager) external onlyOwner {
         featuredQueueManager = FeaturedQueueManager(payable(_featuredQueueManager));
+    }
+
+    /// @notice Set the default dynamic pricing module for new instances.
+    ///         address(0) disables dynamic pricing for new deployments.
+    /// @dev Module must be approved in ComponentRegistry under tag keccak256("dynamic_pricing").
+    function setDynamicPricingModule(address module) external onlyOwner {
+        if (module != address(0)) {
+            if (!componentRegistry.isApprovedComponent(module)) revert UnapprovedComponent();
+        }
+        dynamicPricingModule = module;
     }
 
     function setProtocolTreasury(address _treasury) external onlyOwner {
