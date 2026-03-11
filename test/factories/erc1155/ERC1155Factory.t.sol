@@ -3,7 +3,8 @@ pragma solidity ^0.8.24;
 
 import {Test, console, console2} from "forge-std/Test.sol";
 import {ERC1155Factory} from "../../../src/factories/erc1155/ERC1155Factory.sol";
-import {ERC1155Instance, ExceedsSupply, EditionNotOpen, GatingCheckFailed} from "../../../src/factories/erc1155/ERC1155Instance.sol";
+import {ERC1155Instance, ExceedsSupply, EditionNotOpen, GatingCheckFailed, NoDynamicPricingModule} from "../../../src/factories/erc1155/ERC1155Instance.sol";
+import {DynamicPricingModule} from "../../../src/factories/erc1155/DynamicPricingModule.sol";
 import {UniAlignmentVault} from "../../../src/vaults/uni/UniAlignmentVault.sol";
 import {MockEXECToken} from "../../mocks/MockEXECToken.sol";
 import {MockMasterRegistry} from "../../mocks/MockMasterRegistry.sol";
@@ -48,6 +49,7 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
     UniAlignmentVault public vault;
     MockEXECToken public token;
     ComponentRegistry public componentRegistry;
+    DynamicPricingModule public dynamicPricingModule;
     MockAlignmentRegistry public mockAlignmentRegistry;
     MockMasterRegistry public mockRegistry;
 
@@ -125,6 +127,20 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
 
         // Deploy factory
         factory = new ERC1155Factory(address(mockRegistry), mockInstanceTemplate, address(globalRegistry), address(componentRegistry));
+
+        // Deploy and wire up the dynamic pricing module
+        vm.startPrank(registryOwner);
+        dynamicPricingModule = new DynamicPricingModule();
+        componentRegistry.approveComponent(
+            address(dynamicPricingModule),
+            keccak256("dynamic_pricing"),
+            "ExponentialPricing"
+        );
+        vm.stopPrank();
+
+        vm.startPrank(owner);
+        factory.setDynamicPricingModule(address(dynamicPricingModule));
+        vm.stopPrank();
 
         // Authorize creator and artist as agents for addEdition calls
         mockRegistry.setAgent(creator, true);
@@ -660,28 +676,19 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
         );
         
         ERC1155Instance instanceContract = ERC1155Instance(instance);
-        
-        (
-            uint256 id,
-            string memory pieceTitle,
-            uint256 basePrice,
-            uint256 currentPrice,
-            uint256 supply,
-            uint256 minted,
-            string memory metadataURI,
-            ERC1155Instance.PricingModel pricingModel,
-            uint256 priceIncreaseRate
-        ) = instanceContract.getEditionMetadata(1);
-        
-        assertEq(id, 1);
-        assertEq(pieceTitle, "Test Piece");
-        assertEq(basePrice, 0.1 ether);
+
+        ERC1155Instance.Edition memory ed = instanceContract.getEdition(1);
+        uint256 currentPrice = instanceContract.getCurrentPrice(1);
+
+        assertEq(ed.id, 1);
+        assertEq(ed.pieceTitle, "Test Piece");
+        assertEq(ed.basePrice, 0.1 ether);
         assertEq(currentPrice, 0.1 ether);
-        assertEq(supply, 100);
-        assertEq(minted, 0);
-        assertEq(metadataURI, "ipfs://test-piece");
-        assertEq(uint256(pricingModel), uint256(ERC1155Instance.PricingModel.LIMITED_FIXED));
-        assertEq(priceIncreaseRate, 0);
+        assertEq(ed.supply, 100);
+        assertEq(ed.minted, 0);
+        assertEq(ed.metadataURI, "ipfs://test-piece");
+        assertEq(uint256(ed.pricingModel), uint256(ERC1155Instance.PricingModel.LIMITED_FIXED));
+        assertEq(ed.priceIncreaseRate, 0);
         
         vm.stopPrank();
     }
@@ -738,25 +745,17 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
         );
         
         ERC1155Instance instanceContract = ERC1155Instance(instance);
-        
-        (
-            uint256[] memory ids,
-            string[] memory pieceTitles,
-            uint256[] memory basePrices,
-            uint256[] memory currentPrices,
-            uint256[] memory supplies,
-            uint256[] memory mintedCounts,
-            string[] memory metadataURIs,
-            ERC1155Instance.PricingModel[] memory pricingModels,
-            uint256[] memory priceIncreaseRates
-        ) = instanceContract.getEditionsBatch(1, 2);
-        
-        assertEq(ids.length, 2);
-        assertEq(pieceTitles[0], "Piece 1");
-        assertEq(pieceTitles[1], "Piece 2");
-        assertEq(basePrices[0], 0.1 ether);
-        assertEq(basePrices[1], 0.2 ether);
-        
+
+        ERC1155Instance.Edition memory ed1 = instanceContract.getEdition(1);
+        ERC1155Instance.Edition memory ed2 = instanceContract.getEdition(2);
+
+        assertEq(ed1.id, 1);
+        assertEq(ed1.pieceTitle, "Piece 1");
+        assertEq(ed1.basePrice, 0.1 ether);
+        assertEq(ed2.id, 2);
+        assertEq(ed2.pieceTitle, "Piece 2");
+        assertEq(ed2.basePrice, 0.2 ether);
+
         vm.stopPrank();
     }
 
@@ -773,25 +772,14 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
         );
         
         ERC1155Instance instanceContract = ERC1155Instance(instance);
-        
-        (
-            string memory instanceName,
-            address instanceCreator,
-            address instanceFactory,
-            address instanceVault,
-            uint256 totalEditions,
-            uint256 totalProceeds,
-            uint256 contractBalance,
-            string memory instanceStyleUri
-        ) = instanceContract.getInstanceMetadata();
-        
-        assertEq(instanceName, "Test Collection");
-        assertEq(instanceCreator, creator);
-        assertEq(instanceFactory, address(factory));
-        assertEq(instanceVault, address(vault));
-        assertEq(totalEditions, 0);
-        assertEq(totalProceeds, 0);
-        
+
+        assertEq(instanceContract.name(), "Test Collection");
+        assertEq(instanceContract.creator(), creator);
+        assertEq(instanceContract.factory(), address(factory));
+        assertEq(address(instanceContract.vault()), address(vault));
+        assertEq(instanceContract.getEditionCount(), 0);
+        assertEq(instanceContract.totalProceeds(), 0);
+
         vm.stopPrank();
     }
 
@@ -820,24 +808,18 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
         );
         
         ERC1155Instance instanceContract = ERC1155Instance(instance);
-        
-        (
-            uint256 basePrice,
-            uint256 currentPrice,
-            ERC1155Instance.PricingModel pricingModel,
-            uint256 priceIncreaseRate,
-            uint256 minted,
-            uint256 supply,
-            uint256 available
-        ) = instanceContract.getPricingInfo(1);
-        
-        assertEq(basePrice, 0.1 ether);
+
+        ERC1155Instance.Edition memory ed = instanceContract.getEdition(1);
+        uint256 currentPrice = instanceContract.getCurrentPrice(1);
+        uint256 available = ed.supply > ed.minted ? ed.supply - ed.minted : 0;
+
+        assertEq(ed.basePrice, 0.1 ether);
         assertEq(currentPrice, 0.1 ether);
-        assertEq(uint256(pricingModel), uint256(ERC1155Instance.PricingModel.LIMITED_FIXED));
-        assertEq(supply, 100);
-        assertEq(minted, 0);
+        assertEq(uint256(ed.pricingModel), uint256(ERC1155Instance.PricingModel.LIMITED_FIXED));
+        assertEq(ed.supply, 100);
+        assertEq(ed.minted, 0);
         assertEq(available, 100);
-        
+
         vm.stopPrank();
     }
 
@@ -872,15 +854,12 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
         instanceContract.mint{value: 0.5 ether}(1, 5, bytes32(0), bytes(""), 0);
         vm.stopPrank();
 
-        (
-            uint256 minted,
-            uint256 supply,
-            uint256 available,
-            bool isSoldOut
-        ) = instanceContract.getMintStats(1);
-        
-        assertEq(minted, 5);
-        assertEq(supply, 10);
+        ERC1155Instance.Edition memory ed = instanceContract.getEdition(1);
+        uint256 available = ed.supply > ed.minted ? ed.supply - ed.minted : 0;
+        bool isSoldOut = ed.minted >= ed.supply;
+
+        assertEq(ed.minted, 5);
+        assertEq(ed.supply, 10);
         assertEq(available, 5);
         assertFalse(isSoldOut);
     }
@@ -1001,8 +980,8 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
 
         ERC1155Instance instanceContract = ERC1155Instance(instance);
 
-        assertTrue(instanceContract.editionExists(1));
-        assertFalse(instanceContract.editionExists(999));
+        assertTrue(1 < instanceContract.nextEditionId());   // edition 1 was added
+        assertFalse(999 < instanceContract.nextEditionId()); // edition 999 was never added
 
         vm.stopPrank();
     }
@@ -1393,6 +1372,44 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
         // Verify openTime stored on edition
         ERC1155Instance.Edition memory ed = ERC1155Instance(instance).getEdition(editionId);
         assertEq(ed.openTime, futureOpen);
+    }
+
+    function test_addEdition_limitedDynamic_revertsWithoutModule() public {
+        // Deploy a fresh factory with no dynamic pricing module set
+        ERC1155Factory bareFactory = new ERC1155Factory(
+            address(mockRegistry),
+            mockInstanceTemplate,
+            address(globalRegistry),
+            address(componentRegistry)
+        );
+        vm.deal(creator, 1 ether);
+        vm.startPrank(creator);
+        address instance = bareFactory.createInstance{value: 0}(
+            _nextSalt(), "Test", "ipfs://test", creator, address(vault), ""
+        );
+        ERC1155Instance(instance).setAgentDelegation(true);
+
+        vm.expectRevert(NoDynamicPricingModule.selector);
+        bareFactory.addEdition(
+            instance, "Dynamic Piece", 0.1 ether, 100, "ipfs://piece",
+            ERC1155Instance.PricingModel.LIMITED_DYNAMIC, 100, 0
+        );
+        vm.stopPrank();
+    }
+
+    function test_setDynamicPricingModule_revertsUnapproved() public {
+        address unapproved = address(0xDEAD);
+        vm.startPrank(owner);
+        vm.expectRevert(ERC1155Factory.UnapprovedComponent.selector);
+        factory.setDynamicPricingModule(unapproved);
+        vm.stopPrank();
+    }
+
+    function test_setDynamicPricingModule_acceptsZeroAddress() public {
+        vm.startPrank(owner);
+        factory.setDynamicPricingModule(address(0));
+        assertEq(factory.dynamicPricingModule(), address(0));
+        vm.stopPrank();
     }
 }
 

@@ -45,7 +45,7 @@ contract ERC1155EditionInvariantTest is StdInvariant, Test {
             mockGlobalMsgRegistry,
             protocolTreasury,
             mockMasterRegistry,
-            address(0), // no gating
+            ERC1155Instance.ComponentAddresses({ gatingModule: address(0), dynamicPricingModule: address(0) }),
             false
         );
 
