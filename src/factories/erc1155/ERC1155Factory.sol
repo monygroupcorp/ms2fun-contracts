@@ -15,7 +15,6 @@ import {FeatureUtils} from "../../master/libraries/FeatureUtils.sol";
 import {FreeMintParams} from "../../interfaces/IFactoryTypes.sol";
 import {GatingScope} from "../../gating/IGatingModule.sol";
 import {ICreateX, CREATEX} from "../../shared/CreateXConstants.sol";
-import {IDynamicPricingModule} from "./interfaces/IDynamicPricingModule.sol";
 
 /**
  * @title ERC1155Factory
