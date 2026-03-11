@@ -37,6 +37,25 @@ interface IERC1155Balance {
     function getAllEditionIds() external view returns (uint256[] memory);
 }
 
+/// @notice Minimal ERC1155 edition data interface for batch reads
+interface IERC1155EditionReader {
+    enum PricingModel { UNLIMITED, LIMITED_FIXED, LIMITED_DYNAMIC }
+    struct Edition {
+        uint256 id;
+        string pieceTitle;
+        uint256 basePrice;
+        uint256 supply;
+        uint256 minted;
+        string metadataURI;
+        PricingModel pricingModel;
+        uint256 priceIncreaseRate;
+        uint256 openTime;
+    }
+    function getEdition(uint256 editionId) external view returns (Edition memory);
+    function getCurrentPrice(uint256 editionId) external view returns (uint256);
+    function nextEditionId() external view returns (uint256);
+}
+
 /// @notice Interface for ERC404 staking queries
 interface IERC404Staking {
     function stakingEnabled() external view returns (bool);
@@ -340,6 +359,7 @@ contract QueryAggregator is SafeOwnableUUPS {
 
     // slither-disable-next-line calls-loop
     function _hydrateCardData(ProjectCard memory card) private view {
+        // ERC404 and future types implement IInstance.getCardData() directly
         try IInstance(card.instance).getCardData() returns (
             uint256 price, uint256 supply, uint256 max, bool active, bytes memory extra
         ) {
@@ -348,6 +368,39 @@ contract QueryAggregator is SafeOwnableUUPS {
             card.maxSupply = max;
             card.isActive = active;
             card.extraData = extra;
+        } catch {
+            // ERC1155 instances: compute card data from edition storage directly
+            _hydrateERC1155CardData(card);
+        }
+    }
+
+    // slither-disable-next-line calls-loop
+    function _hydrateERC1155CardData(ProjectCard memory card) private view {
+        try IERC1155EditionReader(card.instance).nextEditionId() returns (uint256 nextId) {
+            uint256 count = nextId - 1;
+            if (count == 0) return;
+            uint256 floorPrice = type(uint256).max;
+            uint256 totalMinted;
+            uint256 maxSupply;
+            bool isActive;
+            bool hasUnlimited;
+            for (uint256 i = 1; i <= count; i++) {
+                try IERC1155EditionReader(card.instance).getEdition(i) returns (IERC1155EditionReader.Edition memory ed) {
+                    if (ed.basePrice < floorPrice) floorPrice = ed.basePrice;
+                    totalMinted += ed.minted;
+                    if (ed.supply == 0) {
+                        hasUnlimited = true;
+                    } else {
+                        maxSupply += ed.supply;
+                        if (ed.minted < ed.supply) isActive = true;
+                    }
+                } catch {}
+            }
+            if (hasUnlimited) { maxSupply = 0; isActive = true; }
+            card.currentPrice = floorPrice == type(uint256).max ? 0 : floorPrice;
+            card.totalSupply = totalMinted;
+            card.maxSupply = maxSupply;
+            card.isActive = isActive;
         } catch {}
     }
 
@@ -484,6 +537,50 @@ contract QueryAggregator is SafeOwnableUUPS {
         positions = new VaultPosition[](positionCount);
         for (uint256 i = 0; i < positionCount; i++) {
             positions[i] = tempPositions[i];
+        }
+    }
+
+    // ============ ERC1155 Edition Queries ============
+
+    struct EditionView {
+        uint256 id;
+        string pieceTitle;
+        uint256 basePrice;
+        uint256 currentPrice;
+        uint256 supply;
+        uint256 minted;
+        string metadataURI;
+        IERC1155EditionReader.PricingModel pricingModel;
+        uint256 priceIncreaseRate;
+    }
+
+    /// @notice Batch-fetch edition data for an ERC1155 instance (replaces instance-level getEditionsBatch)
+    /// @param instance The ERC1155Instance address
+    /// @param startId First edition ID (1-indexed, inclusive)
+    /// @param endId Last edition ID (inclusive)
+    function getERC1155EditionsBatch(address instance, uint256 startId, uint256 endId)
+        external view returns (EditionView[] memory result)
+    {
+        IERC1155EditionReader reader = IERC1155EditionReader(instance);
+        uint256 maxEditionId = reader.nextEditionId() - 1;
+        require(startId >= 1 && startId <= maxEditionId, "invalid startId");
+        require(endId >= startId && endId <= maxEditionId, "invalid endId");
+
+        result = new EditionView[](endId - startId + 1);
+        for (uint256 i = 0; i < result.length; i++) {
+            uint256 editionId = startId + i;
+            IERC1155EditionReader.Edition memory ed = reader.getEdition(editionId);
+            result[i] = EditionView({
+                id: ed.id,
+                pieceTitle: ed.pieceTitle,
+                basePrice: ed.basePrice,
+                currentPrice: reader.getCurrentPrice(editionId),
+                supply: ed.supply,
+                minted: ed.minted,
+                metadataURI: ed.metadataURI,
+                pricingModel: IERC1155EditionReader.PricingModel(uint8(ed.pricingModel)),
+                priceIncreaseRate: ed.priceIncreaseRate
+            });
         }
     }
 

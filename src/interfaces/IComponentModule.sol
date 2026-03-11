@@ -11,8 +11,13 @@ interface IComponentModule {
     ///         Accepted formats: data:application/json,... or ipfs://...
     ///         Returns empty string if not set — frontends fall back to componentName.
     ///         Expected JSON schema:
-    ///         { "name": string, "subtitle": string, "description": string, "badge": string|null }
+    ///         { "name": string, "subtitle": string, "description": string, "badge": string|null, "configType": string|null }
     ///         All fields optional — frontends fall back gracefully on missing keys.
+    ///         configType: opaque string consumed by the frontend creation wizard. If present and non-null,
+    ///         the wizard renders the matching configuration form before advancing. If absent or null,
+    ///         the component is self-contained and the wizard auto-advances on selection.
+    ///         Known values: "password-tier-gating", "merkle-allowlist-gating".
+    ///         Unknown values are treated as absent (no config form, auto-advance).
     function metadataURI() external view returns (string memory);
 
     /// @notice Update the metadata URI. Callable only by the module owner.
