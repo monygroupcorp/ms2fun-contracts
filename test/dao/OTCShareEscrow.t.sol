@@ -45,4 +45,61 @@ contract OTCShareEscrowTest is Test {
         vm.expectRevert(OTCShareEscrow.InvalidAddress.selector);
         new OTCShareEscrow(address(0));
     }
+
+    // ============ createOffer (ETH) ============
+
+    function test_CreateOffer_ETH() public {
+        uint40 expiration = uint40(block.timestamp + 14 days);
+        vm.deal(alice, 1 ether);
+        vm.prank(alice);
+        escrow.createOffer{value: 1 ether}(address(0), 0, 50, expiration);
+
+        (uint256 amount, uint256 sharesReq, uint40 exp) = escrow.offers(alice, address(0));
+        assertEq(amount, 1 ether);
+        assertEq(sharesReq, 50);
+        assertEq(exp, expiration);
+        assertEq(address(escrow).balance, 1 ether);
+    }
+
+    function test_CreateOffer_ETH_EmitsEvent() public {
+        uint40 expiration = uint40(block.timestamp + 14 days);
+        vm.expectEmit(true, true, false, true);
+        emit OTCShareEscrow.OfferCreated(alice, address(0), 1 ether, 50, expiration);
+        vm.deal(alice, 1 ether);
+        vm.prank(alice);
+        escrow.createOffer{value: 1 ether}(address(0), 0, 50, expiration);
+    }
+
+    function test_CreateOffer_RevertZeroShares() public {
+        uint40 expiration = uint40(block.timestamp + 14 days);
+        vm.deal(alice, 1 ether);
+        vm.expectRevert(OTCShareEscrow.InvalidAmount.selector);
+        vm.prank(alice);
+        escrow.createOffer{value: 1 ether}(address(0), 0, 0, expiration);
+    }
+
+    function test_CreateOffer_RevertZeroValue() public {
+        uint40 expiration = uint40(block.timestamp + 14 days);
+        vm.prank(alice);
+        vm.expectRevert(OTCShareEscrow.InvalidAmount.selector);
+        escrow.createOffer(address(0), 0, 50, expiration);
+    }
+
+    function test_CreateOffer_RevertExpirationTooSoon() public {
+        uint40 expiration = uint40(block.timestamp + 1 days);
+        vm.deal(alice, 1 ether);
+        vm.expectRevert(OTCShareEscrow.InvalidExpiration.selector);
+        vm.prank(alice);
+        escrow.createOffer{value: 1 ether}(address(0), 0, 50, expiration);
+    }
+
+    function test_CreateOffer_RevertDuplicate() public {
+        uint40 expiration = uint40(block.timestamp + 14 days);
+        vm.deal(alice, 2 ether);
+        vm.startPrank(alice);
+        escrow.createOffer{value: 1 ether}(address(0), 0, 50, expiration);
+        vm.expectRevert(OTCShareEscrow.OfferExists.selector);
+        escrow.createOffer{value: 1 ether}(address(0), 0, 50, expiration);
+        vm.stopPrank();
+    }
 }

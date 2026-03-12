@@ -73,4 +73,37 @@ contract OTCShareEscrow is ReentrancyGuard {
         dao = _dao;
         safe = IGrandCentral(_dao).safe();
     }
+
+    // ============ Mutative ============
+
+    function createOffer(
+        address token,
+        uint256 amount,
+        uint256 sharesRequested,
+        uint40 expiration
+    ) external payable nonReentrant {
+        if (sharesRequested == 0) revert InvalidAmount();
+        if (expiration < uint40(block.timestamp) + MIN_DURATION) revert InvalidExpiration();
+
+        // Handle deposit
+        if (token == address(0)) {
+            if (msg.value == 0) revert InvalidAmount();
+            amount = msg.value;
+        } else {
+            if (amount == 0) revert InvalidAmount();
+            if (msg.value != 0) revert InvalidAmount();
+            SafeTransferLib.safeTransferFrom(token, msg.sender, address(this), amount);
+        }
+
+        Offer storage offer = offers[msg.sender][token];
+        if (offer.amount != 0) revert OfferExists();
+
+        offer.amount = amount;
+        offer.sharesRequested = sharesRequested;
+        offer.expiration = expiration;
+
+        offerRefs.push(OfferRef({proposer: msg.sender, token: token}));
+
+        emit OfferCreated(msg.sender, token, amount, sharesRequested, expiration);
+    }
 }
