@@ -102,4 +102,39 @@ contract OTCShareEscrowTest is Test {
         escrow.createOffer{value: 1 ether}(address(0), 0, 50, expiration);
         vm.stopPrank();
     }
+
+    // ============ createOffer (ERC20) ============
+
+    function test_CreateOffer_ERC20() public {
+        uint40 expiration = uint40(block.timestamp + 14 days);
+        usdc.mint(alice, 50_000e18);
+        vm.startPrank(alice);
+        usdc.approve(address(escrow), 50_000e18);
+        escrow.createOffer(address(usdc), 50_000e18, 100, expiration);
+        vm.stopPrank();
+
+        (uint256 amount, uint256 sharesReq, uint40 exp) = escrow.offers(alice, address(usdc));
+        assertEq(amount, 50_000e18);
+        assertEq(sharesReq, 100);
+        assertEq(exp, expiration);
+        assertEq(usdc.balanceOf(address(escrow)), 50_000e18);
+    }
+
+    function test_CreateOffer_ERC20_RevertZeroAmount() public {
+        uint40 expiration = uint40(block.timestamp + 14 days);
+        vm.prank(alice);
+        vm.expectRevert(OTCShareEscrow.InvalidAmount.selector);
+        escrow.createOffer(address(usdc), 0, 100, expiration);
+    }
+
+    function test_CreateOffer_ERC20_RevertETHSent() public {
+        uint40 expiration = uint40(block.timestamp + 14 days);
+        usdc.mint(alice, 50_000e18);
+        vm.deal(alice, 1 ether);
+        vm.startPrank(alice);
+        usdc.approve(address(escrow), 50_000e18);
+        vm.expectRevert(OTCShareEscrow.InvalidAmount.selector);
+        escrow.createOffer{value: 1 ether}(address(usdc), 50_000e18, 100, expiration);
+        vm.stopPrank();
+    }
 }
