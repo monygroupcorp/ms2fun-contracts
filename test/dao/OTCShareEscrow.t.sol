@@ -137,4 +137,66 @@ contract OTCShareEscrowTest is Test {
         escrow.createOffer{value: 1 ether}(address(usdc), 50_000e18, 100, expiration);
         vm.stopPrank();
     }
+
+    // ============ cancelOffer ============
+
+    function test_CancelOffer_ETH() public {
+        uint40 expiration = uint40(block.timestamp + 14 days);
+        vm.deal(alice, 1 ether);
+        vm.prank(alice);
+        escrow.createOffer{value: 1 ether}(address(0), 0, 50, expiration);
+
+        uint256 balBefore = alice.balance;
+        vm.prank(alice);
+        escrow.cancelOffer(address(0));
+
+        (uint256 amount,,) = escrow.offers(alice, address(0));
+        assertEq(amount, 0);
+        assertEq(alice.balance, balBefore + 1 ether);
+    }
+
+    function test_CancelOffer_ERC20() public {
+        uint40 expiration = uint40(block.timestamp + 14 days);
+        usdc.mint(alice, 50_000e18);
+        vm.startPrank(alice);
+        usdc.approve(address(escrow), 50_000e18);
+        escrow.createOffer(address(usdc), 50_000e18, 100, expiration);
+        escrow.cancelOffer(address(usdc));
+        vm.stopPrank();
+
+        (uint256 amount,,) = escrow.offers(alice, address(usdc));
+        assertEq(amount, 0);
+        assertEq(usdc.balanceOf(alice), 50_000e18);
+    }
+
+    function test_CancelOffer_AfterExpiration() public {
+        uint40 expiration = uint40(block.timestamp + 14 days);
+        vm.deal(alice, 1 ether);
+        vm.prank(alice);
+        escrow.createOffer{value: 1 ether}(address(0), 0, 50, expiration);
+
+        vm.warp(expiration + 1);
+        vm.prank(alice);
+        escrow.cancelOffer(address(0));
+
+        assertEq(alice.balance, 1 ether);
+    }
+
+    function test_CancelOffer_EmitsEvent() public {
+        uint40 expiration = uint40(block.timestamp + 14 days);
+        vm.deal(alice, 1 ether);
+        vm.prank(alice);
+        escrow.createOffer{value: 1 ether}(address(0), 0, 50, expiration);
+
+        vm.expectEmit(true, true, false, true);
+        emit OTCShareEscrow.OfferCancelled(alice, address(0), 1 ether);
+        vm.prank(alice);
+        escrow.cancelOffer(address(0));
+    }
+
+    function test_CancelOffer_RevertNoOffer() public {
+        vm.prank(alice);
+        vm.expectRevert(OTCShareEscrow.NoOffer.selector);
+        escrow.cancelOffer(address(0));
+    }
 }

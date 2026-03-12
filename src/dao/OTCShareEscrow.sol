@@ -106,4 +106,19 @@ contract OTCShareEscrow is ReentrancyGuard {
 
         emit OfferCreated(msg.sender, token, amount, sharesRequested, expiration);
     }
+
+    function cancelOffer(address token) external nonReentrant {
+        Offer memory offer = offers[msg.sender][token];
+        if (offer.amount == 0) revert NoOffer();
+
+        delete offers[msg.sender][token];
+
+        if (token == address(0)) {
+            SafeTransferLib.safeTransferETH(msg.sender, offer.amount);
+        } else {
+            SafeTransferLib.safeTransfer(token, msg.sender, offer.amount);
+        }
+
+        emit OfferCancelled(msg.sender, token, offer.amount);
+    }
 }
