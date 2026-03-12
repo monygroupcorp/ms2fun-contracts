@@ -317,5 +317,307 @@ contract GrandCentralTest is Test {
         assertEq(uint8(dao.state(uint32(id))), uint8(IGrandCentral.ProposalState.Voting));
     }
 
+    // ========== Lock Functions ==========
 
+    function _setConductor(address addr, uint256 perm) internal {
+        address[] memory addrs = new address[](1);
+        addrs[0] = addr;
+        uint256[] memory perms = new uint256[](1);
+        perms[0] = perm;
+        vm.prank(address(dao));
+        dao.setConductors(addrs, perms);
+    }
+
+    function test_LockAdmin_SetsFlag() public {
+        assertFalse(dao.adminLock());
+        vm.prank(address(dao));
+        dao.lockAdmin();
+        assertTrue(dao.adminLock());
+    }
+
+    function test_LockAdmin_EmitsEvent() public {
+        vm.expectEmit(false, false, false, false);
+        emit IGrandCentral.AdminLocked();
+        vm.prank(address(dao));
+        dao.lockAdmin();
+    }
+
+    function test_LockAdmin_BlocksSetConductorsAdmin() public {
+        vm.prank(address(dao));
+        dao.lockAdmin();
+
+        address[] memory addrs = new address[](1);
+        addrs[0] = alice;
+        uint256[] memory perms = new uint256[](1);
+        perms[0] = 1; // admin
+
+        vm.expectRevert(GrandCentral.AdminLockActive.selector);
+        vm.prank(address(dao));
+        dao.setConductors(addrs, perms);
+    }
+
+    function test_LockAdmin_DoesNotBlockManagerOrGovernor() public {
+        vm.prank(address(dao));
+        dao.lockAdmin();
+
+        // Manager (2) should still work
+        _setConductor(alice, 2);
+        assertTrue(dao.isManager(alice));
+
+        // Governor (4) should still work
+        _setConductor(bob, 4);
+        assertTrue(dao.isGovernor(bob));
+    }
+
+    function test_LockAdmin_RevertIfNotDAO() public {
+        vm.expectRevert(GrandCentral.Unauthorized.selector);
+        vm.prank(alice);
+        dao.lockAdmin();
+    }
+
+    function test_LockAdmin_Idempotent() public {
+        vm.prank(address(dao));
+        dao.lockAdmin();
+        // Calling again doesn't revert
+        vm.prank(address(dao));
+        dao.lockAdmin();
+        assertTrue(dao.adminLock());
+    }
+
+    function test_LockManager_SetsFlag() public {
+        assertFalse(dao.managerLock());
+        vm.prank(address(dao));
+        dao.lockManager();
+        assertTrue(dao.managerLock());
+    }
+
+    function test_LockManager_EmitsEvent() public {
+        vm.expectEmit(false, false, false, false);
+        emit IGrandCentral.ManagerLocked();
+        vm.prank(address(dao));
+        dao.lockManager();
+    }
+
+    function test_LockManager_BlocksSetConductorsManager() public {
+        vm.prank(address(dao));
+        dao.lockManager();
+
+        address[] memory addrs = new address[](1);
+        addrs[0] = alice;
+        uint256[] memory perms = new uint256[](1);
+        perms[0] = 2; // manager
+
+        vm.expectRevert(GrandCentral.ManagerLockActive.selector);
+        vm.prank(address(dao));
+        dao.setConductors(addrs, perms);
+    }
+
+    function test_LockManager_BlocksBitmaskWithManagerBit() public {
+        vm.prank(address(dao));
+        dao.lockManager();
+
+        address[] memory addrs = new address[](1);
+        addrs[0] = alice;
+        uint256[] memory perms = new uint256[](1);
+        perms[0] = 3; // admin + manager bitmask
+
+        vm.expectRevert(GrandCentral.ManagerLockActive.selector);
+        vm.prank(address(dao));
+        dao.setConductors(addrs, perms);
+    }
+
+    function test_LockManager_RevertIfNotDAO() public {
+        vm.expectRevert(GrandCentral.Unauthorized.selector);
+        vm.prank(alice);
+        dao.lockManager();
+    }
+
+    function test_LockGovernor_SetsFlag() public {
+        assertFalse(dao.governorLock());
+        vm.prank(address(dao));
+        dao.lockGovernor();
+        assertTrue(dao.governorLock());
+    }
+
+    function test_LockGovernor_EmitsEvent() public {
+        vm.expectEmit(false, false, false, false);
+        emit IGrandCentral.GovernorLocked();
+        vm.prank(address(dao));
+        dao.lockGovernor();
+    }
+
+    function test_LockGovernor_BlocksSetConductorsGovernor() public {
+        vm.prank(address(dao));
+        dao.lockGovernor();
+
+        address[] memory addrs = new address[](1);
+        addrs[0] = alice;
+        uint256[] memory perms = new uint256[](1);
+        perms[0] = 4; // governor
+
+        vm.expectRevert(GrandCentral.GovernorLockActive.selector);
+        vm.prank(address(dao));
+        dao.setConductors(addrs, perms);
+    }
+
+    function test_LockGovernor_RevertIfNotDAO() public {
+        vm.expectRevert(GrandCentral.Unauthorized.selector);
+        vm.prank(alice);
+        dao.lockGovernor();
+    }
+
+    function test_AllThreeLocksIndependent() public {
+        vm.prank(address(dao));
+        dao.lockAdmin();
+        vm.prank(address(dao));
+        dao.lockGovernor();
+
+        // Manager still works
+        _setConductor(alice, 2);
+        assertTrue(dao.isManager(alice));
+
+        // Admin blocked
+        vm.expectRevert(GrandCentral.AdminLockActive.selector);
+        _setConductor(bob, 1);
+
+        // Governor blocked
+        vm.expectRevert(GrandCentral.GovernorLockActive.selector);
+        _setConductor(bob, 4);
+    }
+
+    // ========== Proposal State Machine ==========
+
+    function test_State_Unborn() public view {
+        assertEq(uint8(dao.state(999)), uint8(IGrandCentral.ProposalState.Unborn));
+    }
+
+    function test_State_Submitted_WhenUnsponsored() public {
+        // Give bob 0 shares so proposal won't auto-sponsor
+        // Submit from a non-member (no shares = below sponsor threshold)
+        (address[] memory t, uint256[] memory v, bytes[] memory c) = _buildSendETHProposal(alice, 1 ether);
+        vm.prank(bob); // bob has 0 shares, below sponsorThreshold of 1
+        uint256 id = dao.submitProposal(t, v, c, 0, "test");
+
+        assertEq(uint8(dao.state(uint32(id))), uint8(IGrandCentral.ProposalState.Submitted));
+    }
+
+    function test_State_Voting() public {
+        (address[] memory t, uint256[] memory v, bytes[] memory c) = _buildSendETHProposal(alice, 1 ether);
+        vm.prank(founder);
+        uint256 id = dao.submitProposal(t, v, c, 0, "test");
+
+        assertEq(uint8(dao.state(uint32(id))), uint8(IGrandCentral.ProposalState.Voting));
+    }
+
+    function test_State_Grace() public {
+        (address[] memory t, uint256[] memory v, bytes[] memory c) = _buildSendETHProposal(alice, 1 ether);
+        vm.prank(founder);
+        uint256 id = dao.submitProposal(t, v, c, 0, "test");
+
+        // Vote yes
+        vm.prank(founder);
+        dao.submitVote(uint32(id), true);
+
+        // Warp past voting period into grace
+        vm.warp(block.timestamp + VOTING_PERIOD + 1);
+        assertEq(uint8(dao.state(uint32(id))), uint8(IGrandCentral.ProposalState.Grace));
+    }
+
+    function test_State_Ready() public {
+        (address[] memory t, uint256[] memory v, bytes[] memory c) = _buildSendETHProposal(alice, 1 ether);
+        vm.prank(founder);
+        uint256 id = dao.submitProposal(t, v, c, 0, "test");
+
+        vm.prank(founder);
+        dao.submitVote(uint32(id), true);
+
+        // Warp past voting + grace
+        vm.warp(block.timestamp + VOTING_PERIOD + GRACE_PERIOD + 1);
+        assertEq(uint8(dao.state(uint32(id))), uint8(IGrandCentral.ProposalState.Ready));
+    }
+
+    function test_State_Processed() public {
+        (address[] memory t, uint256[] memory v, bytes[] memory c) = _buildSendETHProposal(alice, 1 ether);
+        vm.prank(founder);
+        uint256 id = dao.submitProposal(t, v, c, 0, "test");
+
+        vm.prank(founder);
+        dao.submitVote(uint32(id), true);
+
+        vm.warp(block.timestamp + VOTING_PERIOD + GRACE_PERIOD + 1);
+        dao.processProposal(uint32(id), t, v, c);
+
+        assertEq(uint8(dao.state(uint32(id))), uint8(IGrandCentral.ProposalState.Processed));
+    }
+
+    function test_State_Defeated() public {
+        (address[] memory t, uint256[] memory v, bytes[] memory c) = _buildSendETHProposal(alice, 1 ether);
+        vm.prank(founder);
+        uint256 id = dao.submitProposal(t, v, c, 0, "test");
+
+        // Vote no
+        vm.prank(founder);
+        dao.submitVote(uint32(id), false);
+
+        // Warp past voting + grace
+        vm.warp(block.timestamp + VOTING_PERIOD + GRACE_PERIOD + 1);
+        assertEq(uint8(dao.state(uint32(id))), uint8(IGrandCentral.ProposalState.Defeated));
+    }
+
+    function test_State_Cancelled() public {
+        (address[] memory t, uint256[] memory v, bytes[] memory c) = _buildSendETHProposal(alice, 1 ether);
+        vm.prank(founder);
+        uint256 id = dao.submitProposal(t, v, c, 0, "test");
+
+        vm.prank(founder);
+        dao.cancelProposal(uint32(id));
+
+        assertEq(uint8(dao.state(uint32(id))), uint8(IGrandCentral.ProposalState.Cancelled));
+    }
+
+    // ========== executeStipend Direct Tests ==========
+
+    function test_ExecuteStipend_RevertIfNotManager() public {
+        vm.expectRevert(GrandCentral.Unauthorized.selector);
+        vm.prank(alice);
+        dao.executeStipend(founder, 1 ether);
+    }
+
+    function test_ExecuteStipend_RevertIfZeroAddress() public {
+        _setConductor(alice, 2); // manager
+        vm.expectRevert(GrandCentral.InvalidAddress.selector);
+        vm.prank(alice);
+        dao.executeStipend(address(0), 1 ether);
+    }
+
+    function test_ExecuteStipend_RevertIfInsufficientGeneralFunds() public {
+        _setConductor(alice, 2); // manager
+
+        // Reserve all funds into ragequit pool
+        vm.prank(address(dao));
+        dao.fundRagequitPool(100 ether);
+
+        vm.expectRevert(GrandCentral.InsufficientGeneralFunds.selector);
+        vm.prank(alice);
+        dao.executeStipend(founder, 1 ether);
+    }
+
+    function test_ExecuteStipend_TransfersViaSafe() public {
+        _setConductor(alice, 2); // manager
+
+        uint256 founderBefore = founder.balance;
+        vm.prank(alice);
+        dao.executeStipend(founder, 5 ether);
+
+        assertEq(founder.balance, founderBefore + 5 ether);
+    }
+
+    function test_ExecuteStipend_EmitsEvent() public {
+        _setConductor(alice, 2); // manager
+
+        vm.expectEmit(true, false, true, true);
+        emit IGrandCentral.StipendExecuted(founder, 5 ether, alice);
+        vm.prank(alice);
+        dao.executeStipend(founder, 5 ether);
+    }
 }
