@@ -121,4 +121,30 @@ contract OTCShareEscrow is ReentrancyGuard {
 
         emit OfferCancelled(msg.sender, token, offer.amount);
     }
+
+    function claimOffer(address proposer, address token) external nonReentrant {
+        if (msg.sender != safe) revert Unauthorized();
+
+        Offer memory offer = offers[proposer][token];
+        if (offer.amount == 0) revert NoOffer();
+        if (block.timestamp > offer.expiration) revert OfferExpired();
+
+        delete offers[proposer][token];
+
+        // Transfer tribute to Safe
+        if (token == address(0)) {
+            SafeTransferLib.safeTransferETH(safe, offer.amount);
+        } else {
+            SafeTransferLib.safeTransfer(token, safe, offer.amount);
+        }
+
+        // Mint shares to proposer
+        address[] memory to = new address[](1);
+        to[0] = proposer;
+        uint256[] memory amounts = new uint256[](1);
+        amounts[0] = offer.sharesRequested;
+        IGrandCentral(dao).mintShares(to, amounts);
+
+        emit OfferClaimed(proposer, token, offer.amount, offer.sharesRequested);
+    }
 }
