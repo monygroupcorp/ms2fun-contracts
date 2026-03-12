@@ -338,4 +338,67 @@ contract OTCShareEscrowTest is Test {
 
         assertEq(escrow.offerRefCount(), 1);
     }
+
+    // ============ Edge Cases ============
+
+    function test_ClaimOffer_RevertsAfterProposerCancels() public {
+        uint40 expiration = uint40(block.timestamp + 14 days);
+        vm.deal(alice, 1 ether);
+        vm.prank(alice);
+        escrow.createOffer{value: 1 ether}(address(0), 0, 50, expiration);
+
+        // Proposer cancels before DAO executes claim
+        vm.prank(alice);
+        escrow.cancelOffer(address(0));
+
+        // DAO tries to claim — should revert
+        vm.expectRevert(OTCShareEscrow.NoOffer.selector);
+        vm.prank(address(mockSafe));
+        escrow.claimOffer(alice, address(0));
+    }
+
+    function test_MultipleOfferers_IndependentOffers() public {
+        uint40 expiration = uint40(block.timestamp + 14 days);
+
+        // Alice offers ETH
+        vm.deal(alice, 1 ether);
+        vm.prank(alice);
+        escrow.createOffer{value: 1 ether}(address(0), 0, 50, expiration);
+
+        // Bob offers ETH
+        vm.deal(bob, 2 ether);
+        vm.prank(bob);
+        escrow.createOffer{value: 2 ether}(address(0), 0, 80, expiration);
+
+        // Claim alice's, bob's unaffected
+        vm.prank(address(mockSafe));
+        escrow.claimOffer(alice, address(0));
+
+        (uint256 bobAmt,,) = escrow.offers(bob, address(0));
+        assertEq(bobAmt, 2 ether);
+        assertEq(dao.shares(alice), 50);
+        assertEq(dao.shares(bob), 0);
+    }
+
+    function test_SameProposer_DifferentTokens() public {
+        uint40 expiration = uint40(block.timestamp + 14 days);
+
+        // Alice offers ETH
+        vm.deal(alice, 1 ether);
+        vm.prank(alice);
+        escrow.createOffer{value: 1 ether}(address(0), 0, 50, expiration);
+
+        // Alice also offers USDC
+        usdc.mint(alice, 10_000e18);
+        vm.startPrank(alice);
+        usdc.approve(address(escrow), 10_000e18);
+        escrow.createOffer(address(usdc), 10_000e18, 30, expiration);
+        vm.stopPrank();
+
+        // Both exist
+        (uint256 ethAmt,,) = escrow.offers(alice, address(0));
+        (uint256 usdcAmt,,) = escrow.offers(alice, address(usdc));
+        assertEq(ethAmt, 1 ether);
+        assertEq(usdcAmt, 10_000e18);
+    }
 }
