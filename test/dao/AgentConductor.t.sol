@@ -55,6 +55,104 @@ contract AgentConductorTest is Test {
         assertTrue(dao.isManager(conductor));
         assertFalse(dao.isAdmin(conductor));
     }
+
+    function test_isAgentConductor_all_permissions() public {
+        // 1 + 2 + 4 + 8 = 15
+        address[] memory addrs = new address[](1);
+        addrs[0] = conductor;
+        uint256[] memory perms = new uint256[](1);
+        perms[0] = 15;
+
+        vm.prank(address(dao));
+        dao.setConductors(addrs, perms);
+
+        assertTrue(dao.isAdmin(conductor));
+        assertTrue(dao.isManager(conductor));
+        assertTrue(dao.isGovernor(conductor));
+        assertTrue(dao.isAgentConductor(conductor));
+    }
+
+    function test_revoke_agentConductor() public {
+        address[] memory addrs = new address[](1);
+        addrs[0] = conductor;
+        uint256[] memory perms = new uint256[](1);
+        perms[0] = 8;
+
+        vm.prank(address(dao));
+        dao.setConductors(addrs, perms);
+        assertTrue(dao.isAgentConductor(conductor));
+
+        // Revoke
+        perms[0] = 0;
+        vm.prank(address(dao));
+        dao.setConductors(addrs, perms);
+        assertFalse(dao.isAgentConductor(conductor));
+    }
+
+    function test_downgrade_removes_agentConductor() public {
+        address[] memory addrs = new address[](1);
+        addrs[0] = conductor;
+        uint256[] memory perms = new uint256[](1);
+        perms[0] = 10; // manager + agent
+
+        vm.prank(address(dao));
+        dao.setConductors(addrs, perms);
+        assertTrue(dao.isAgentConductor(conductor));
+        assertTrue(dao.isManager(conductor));
+
+        // Downgrade to manager only
+        perms[0] = 2;
+        vm.prank(address(dao));
+        dao.setConductors(addrs, perms);
+        assertFalse(dao.isAgentConductor(conductor));
+        assertTrue(dao.isManager(conductor));
+    }
+
+    function test_agentConductor_bit_unaffected_by_locks() public {
+        // Agent conductor bit (8) is not admin/manager/governor, so locks shouldn't block it
+        vm.prank(address(dao));
+        dao.lockAdmin();
+        vm.prank(address(dao));
+        dao.lockManager();
+        vm.prank(address(dao));
+        dao.lockGovernor();
+
+        // Setting agent conductor (bit 8 only) should still work
+        address[] memory addrs = new address[](1);
+        addrs[0] = conductor;
+        uint256[] memory perms = new uint256[](1);
+        perms[0] = 8;
+
+        vm.prank(address(dao));
+        dao.setConductors(addrs, perms);
+        assertTrue(dao.isAgentConductor(conductor));
+    }
+
+    function test_multiple_conductors_batch() public {
+        address cond2 = address(0x3);
+        address cond3 = address(0x4);
+
+        address[] memory addrs = new address[](3);
+        addrs[0] = conductor;
+        addrs[1] = cond2;
+        addrs[2] = cond3;
+        uint256[] memory perms = new uint256[](3);
+        perms[0] = 8;  // agent only
+        perms[1] = 10; // manager + agent
+        perms[2] = 2;  // manager only
+
+        vm.prank(address(dao));
+        dao.setConductors(addrs, perms);
+
+        assertTrue(dao.isAgentConductor(conductor));
+        assertFalse(dao.isManager(conductor));
+
+        assertTrue(dao.isAgentConductor(cond2));
+        assertTrue(dao.isManager(cond2));
+
+        assertFalse(dao.isAgentConductor(cond3));
+        assertTrue(dao.isManager(cond3));
+    }
 }
 
 contract MockSafe {
