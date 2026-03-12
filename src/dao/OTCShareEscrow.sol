@@ -147,4 +147,44 @@ contract OTCShareEscrow is ReentrancyGuard {
 
         emit OfferClaimed(proposer, token, offer.amount, offer.sharesRequested);
     }
+
+    // ============ Views ============
+
+    function getOffer(address proposer, address token) external view returns (Offer memory) {
+        return offers[proposer][token];
+    }
+
+    function offerRefCount() external view returns (uint256) {
+        return offerRefs.length;
+    }
+
+    function getActiveOffers() external view returns (ActiveOfferView[] memory result) {
+        uint256 len = offerRefs.length;
+
+        // First pass: count active
+        uint256 count;
+        for (uint256 i; i < len; ++i) {
+            Offer storage offer = offers[offerRefs[i].proposer][offerRefs[i].token];
+            if (offer.amount != 0 && block.timestamp <= offer.expiration) {
+                unchecked { ++count; }
+            }
+        }
+
+        result = new ActiveOfferView[](count);
+        uint256 idx;
+        for (uint256 i; i < len; ++i) {
+            OfferRef storage ref = offerRefs[i];
+            Offer storage offer = offers[ref.proposer][ref.token];
+            if (offer.amount != 0 && block.timestamp <= offer.expiration) {
+                result[idx] = ActiveOfferView({
+                    proposer: ref.proposer,
+                    token: ref.token,
+                    amount: offer.amount,
+                    sharesRequested: offer.sharesRequested,
+                    expiration: offer.expiration
+                });
+                unchecked { ++idx; }
+            }
+        }
+    }
 }

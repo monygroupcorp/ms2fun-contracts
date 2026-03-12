@@ -276,4 +276,66 @@ contract OTCShareEscrowTest is Test {
         vm.prank(address(mockSafe));
         escrow.claimOffer(alice, address(0));
     }
+
+    // ============ Views ============
+
+    function test_GetActiveOffers_Empty() public view {
+        OTCShareEscrow.ActiveOfferView[] memory active = escrow.getActiveOffers();
+        assertEq(active.length, 0);
+    }
+
+    function test_GetActiveOffers_FiltersExpiredAndCancelled() public {
+        uint40 exp1 = uint40(block.timestamp + 14 days);
+        uint40 exp2 = uint40(block.timestamp + 8 days);
+
+        // Alice offers ETH
+        vm.deal(alice, 1 ether);
+        vm.prank(alice);
+        escrow.createOffer{value: 1 ether}(address(0), 0, 50, exp1);
+
+        // Bob offers USDC
+        usdc.mint(bob, 10_000e18);
+        vm.startPrank(bob);
+        usdc.approve(address(escrow), 10_000e18);
+        escrow.createOffer(address(usdc), 10_000e18, 20, exp2);
+        vm.stopPrank();
+
+        // Both active
+        OTCShareEscrow.ActiveOfferView[] memory active = escrow.getActiveOffers();
+        assertEq(active.length, 2);
+
+        // Cancel alice's offer
+        vm.prank(alice);
+        escrow.cancelOffer(address(0));
+
+        active = escrow.getActiveOffers();
+        assertEq(active.length, 1);
+        assertEq(active[0].proposer, bob);
+
+        // Expire bob's offer
+        vm.warp(exp2 + 1);
+        active = escrow.getActiveOffers();
+        assertEq(active.length, 0);
+    }
+
+    function test_GetOffer() public {
+        uint40 expiration = uint40(block.timestamp + 14 days);
+        vm.deal(alice, 1 ether);
+        vm.prank(alice);
+        escrow.createOffer{value: 1 ether}(address(0), 0, 50, expiration);
+
+        OTCShareEscrow.Offer memory offer = escrow.getOffer(alice, address(0));
+        assertEq(offer.amount, 1 ether);
+        assertEq(offer.sharesRequested, 50);
+        assertEq(offer.expiration, expiration);
+    }
+
+    function test_OfferRefCount() public {
+        uint40 expiration = uint40(block.timestamp + 14 days);
+        vm.deal(alice, 1 ether);
+        vm.prank(alice);
+        escrow.createOffer{value: 1 ether}(address(0), 0, 50, expiration);
+
+        assertEq(escrow.offerRefCount(), 1);
+    }
 }
