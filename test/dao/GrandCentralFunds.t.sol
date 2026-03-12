@@ -343,4 +343,162 @@ contract GrandCentralFundsTest is Test {
         assertFalse(dao.isGovernor(alice));
     }
 
+    // ========== Ragequit Proportional Payout ==========
+
+    function test_Ragequit_ProportionalPayout() public {
+        // Give alice 100 shares (total 1100)
+        address[] memory to = new address[](1);
+        to[0] = alice;
+        uint256[] memory amounts = new uint256[](1);
+        amounts[0] = 100;
+        vm.prank(address(dao));
+        dao.mintShares(to, amounts);
+
+        vm.prank(address(dao));
+        dao.fundRagequitPool(11 ether);
+
+        // Alice ragequits 100 shares out of 1100 total weight
+        vm.prank(alice);
+        dao.ragequit(100, 0);
+
+        // 100/1100 * 11 = 1 ETH
+        assertEq(alice.balance, 1 ether);
+        assertEq(dao.shares(alice), 0);
+        assertEq(dao.ragequitPool(), 10 ether);
+    }
+
+    function test_Ragequit_WithLoot() public {
+        // Give alice 500 loot
+        address[] memory to = new address[](1);
+        to[0] = alice;
+        uint256[] memory amounts = new uint256[](1);
+        amounts[0] = 500;
+        vm.prank(address(dao));
+        dao.mintLoot(to, amounts);
+
+        vm.prank(address(dao));
+        dao.fundRagequitPool(15 ether);
+
+        // Alice ragequits 500 loot out of 1500 total weight
+        vm.prank(alice);
+        dao.ragequit(0, 500);
+
+        // 500/1500 * 15 = 5 ETH
+        assertEq(alice.balance, 5 ether);
+        assertEq(dao.loot(alice), 0);
+    }
+
+    function test_Ragequit_EmitsEvent() public {
+        vm.prank(address(dao));
+        dao.fundRagequitPool(10 ether);
+
+        uint256 expectedPayout = (100 * 10 ether) / 1000;
+        vm.expectEmit(true, false, false, true);
+        emit IGrandCentral.Ragequit(founder, 100, 0, expectedPayout);
+        vm.prank(founder);
+        dao.ragequit(100, 0);
+    }
+
+    function test_Ragequit_RevertIfZeroBurn() public {
+        vm.prank(founder);
+        vm.expectRevert(GrandCentral.ZeroBurn.selector);
+        dao.ragequit(0, 0);
+    }
+
+    function test_Ragequit_NoPayoutIfPoolEmpty() public {
+        // No ragequit pool funded
+        vm.prank(founder);
+        dao.ragequit(100, 0);
+
+        assertEq(founder.balance, 0);
+        assertEq(dao.shares(founder), 900);
+    }
+
+    // ========== generalFunds ==========
+
+    function test_GeneralFunds_ReflectsReserves() public {
+        assertEq(dao.generalFunds(), 100 ether);
+
+        vm.prank(address(dao));
+        dao.fundRagequitPool(30 ether);
+        assertEq(dao.generalFunds(), 70 ether);
+
+        vm.prank(address(dao));
+        dao.fundClaimsPool(20 ether);
+        assertEq(dao.generalFunds(), 50 ether);
+    }
+
+    function test_GeneralFunds_ZeroWhenFullyReserved() public {
+        vm.prank(address(dao));
+        dao.fundRagequitPool(100 ether);
+        assertEq(dao.generalFunds(), 0);
+    }
+
+    // ========== setGovernanceConfig Edge Cases ==========
+
+    function test_SetGovernanceConfig_ZeroVotingKeepsCurrent() public {
+        vm.prank(address(dao));
+        dao.setGovernanceConfig(0, 0, 10, 5, 50);
+
+        // Voting and grace should remain unchanged
+        assertEq(dao.votingPeriod(), VOTING_PERIOD);
+        assertEq(dao.gracePeriod(), GRACE_PERIOD);
+        // Others updated
+        assertEq(dao.quorumPercent(), 10);
+        assertEq(dao.sponsorThreshold(), 5);
+        assertEq(dao.minRetentionPercent(), 50);
+    }
+
+    function test_SetGovernanceConfig_RevertVotingTooShort() public {
+        vm.expectRevert(GrandCentral.VotingPeriodTooShort.selector);
+        vm.prank(address(dao));
+        dao.setGovernanceConfig(1 hours, 0, 0, 1, 66);
+    }
+
+    function test_SetGovernanceConfig_RevertGraceTooShort() public {
+        vm.expectRevert(GrandCentral.GracePeriodTooShort.selector);
+        vm.prank(address(dao));
+        dao.setGovernanceConfig(0, 1 hours, 0, 1, 66);
+    }
+
+    function test_SetGovernanceConfig_RevertIfNotDAOOrGovernor() public {
+        vm.expectRevert(GrandCentral.Unauthorized.selector);
+        vm.prank(alice);
+        dao.setGovernanceConfig(3 days, 1 days, 10, 5, 50);
+    }
+
+    function test_SetGovernanceConfig_EmitsEvent() public {
+        vm.expectEmit(false, false, false, true);
+        emit IGrandCentral.GovernanceConfigSet(3 days, 1 days, 10, 5, 50);
+        vm.prank(address(dao));
+        dao.setGovernanceConfig(3 days, 1 days, 10, 5, 50);
+    }
+
+    // ========== FundRagequitPool / FundClaimsPool Access Control ==========
+
+    function test_FundRagequitPool_RevertIfNotAuthorized() public {
+        vm.expectRevert(GrandCentral.Unauthorized.selector);
+        vm.prank(alice);
+        dao.fundRagequitPool(1 ether);
+    }
+
+    function test_FundClaimsPool_RevertIfNotAuthorized() public {
+        vm.expectRevert(GrandCentral.Unauthorized.selector);
+        vm.prank(alice);
+        dao.fundClaimsPool(1 ether);
+    }
+
+    function test_FundRagequitPool_EmitsEvent() public {
+        vm.expectEmit(false, false, false, true);
+        emit IGrandCentral.RagequitPoolFunded(20 ether, 20 ether);
+        vm.prank(address(dao));
+        dao.fundRagequitPool(20 ether);
+    }
+
+    function test_FundClaimsPool_EmitsEvent() public {
+        vm.expectEmit(false, false, false, true);
+        emit IGrandCentral.ClaimsPoolFunded(5 ether, 5 ether * 1e18 / 1000);
+        vm.prank(address(dao));
+        dao.fundClaimsPool(5 ether);
+    }
 }

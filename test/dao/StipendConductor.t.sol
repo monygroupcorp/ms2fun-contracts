@@ -82,4 +82,136 @@ contract StipendConductorTest is Test {
         stipend.execute();
         assertGt(mockSafe.executionCount(), 0);
     }
+
+    // ============ Constructor Validation ============
+
+    function test_Constructor_SetsImmutables() public view {
+        assertEq(stipend.dao(), address(dao));
+        assertEq(stipend.beneficiary(), founder);
+        assertEq(stipend.amount(), MONTHLY_AMOUNT);
+        assertEq(stipend.interval(), 30 days);
+    }
+
+    function test_Constructor_RevertIfZeroDAO() public {
+        vm.expectRevert(StipendConductor.InvalidAddress.selector);
+        new StipendConductor(address(0), founder, MONTHLY_AMOUNT, 30 days);
+    }
+
+    function test_Constructor_RevertIfZeroBeneficiary() public {
+        vm.expectRevert(StipendConductor.InvalidAddress.selector);
+        new StipendConductor(address(dao), address(0), MONTHLY_AMOUNT, 30 days);
+    }
+
+    function test_Constructor_RevertIfZeroAmount() public {
+        vm.expectRevert(StipendConductor.ZeroAmount.selector);
+        new StipendConductor(address(dao), founder, 0, 30 days);
+    }
+
+    function test_Constructor_RevertIfZeroInterval() public {
+        vm.expectRevert(StipendConductor.ZeroInterval.selector);
+        new StipendConductor(address(dao), founder, MONTHLY_AMOUNT, 0);
+    }
+
+    // ============ nextExecutionTime ============
+
+    function test_NextExecutionTime_ZeroBeforeFirstExecution() public view {
+        assertEq(stipend.nextExecutionTime(), 0);
+    }
+
+    function test_NextExecutionTime_AfterExecution() public {
+        uint256 execTime = block.timestamp;
+        stipend.execute();
+        assertEq(stipend.nextExecutionTime(), execTime + 30 days);
+    }
+
+    function test_NextExecutionTime_UpdatesAfterSecondExecution() public {
+        vm.warp(1000);
+        stipend.execute();
+        assertEq(stipend.nextExecutionTime(), 1000 + 30 days);
+
+        vm.warp(1000 + 30 days);
+        stipend.execute();
+        assertEq(stipend.nextExecutionTime(), 1000 + 60 days);
+    }
+
+    // ============ Events ============
+
+    function test_Execute_EmitsEvent() public {
+        vm.expectEmit(true, false, false, true);
+        emit StipendConductor.StipendExecuted(founder, MONTHLY_AMOUNT, block.timestamp);
+        stipend.execute();
+    }
+
+    function test_Revoke_EmitsEvent() public {
+        vm.expectEmit(false, false, false, true);
+        emit StipendConductor.StipendRevoked(block.timestamp);
+        vm.prank(address(dao));
+        stipend.revoke();
+    }
+
+    function test_UpdateAmount_EmitsEvent() public {
+        vm.expectEmit(false, false, false, true);
+        emit StipendConductor.StipendAmountUpdated(MONTHLY_AMOUNT, 10 ether);
+        vm.prank(address(dao));
+        stipend.updateAmount(10 ether);
+    }
+
+    function test_UpdateBeneficiary_EmitsEvent() public {
+        vm.expectEmit(true, true, false, false);
+        emit StipendConductor.BeneficiaryUpdated(founder, alice);
+        vm.prank(address(dao));
+        stipend.updateBeneficiary(alice);
+    }
+
+    // ============ Update Revert Cases ============
+
+    function test_UpdateAmount_RevertIfZero() public {
+        vm.expectRevert(StipendConductor.ZeroAmount.selector);
+        vm.prank(address(dao));
+        stipend.updateAmount(0);
+    }
+
+    function test_UpdateAmount_RevertIfNotDAO() public {
+        vm.expectRevert(StipendConductor.Unauthorized.selector);
+        vm.prank(alice);
+        stipend.updateAmount(10 ether);
+    }
+
+    function test_UpdateBeneficiary_RevertIfZeroAddress() public {
+        vm.expectRevert(StipendConductor.InvalidAddress.selector);
+        vm.prank(address(dao));
+        stipend.updateBeneficiary(address(0));
+    }
+
+    function test_UpdateBeneficiary_RevertIfNotDAO() public {
+        vm.expectRevert(StipendConductor.Unauthorized.selector);
+        vm.prank(alice);
+        stipend.updateBeneficiary(alice);
+    }
+
+    // ============ Edge Cases ============
+
+    function test_Execute_AtExactInterval() public {
+        stipend.execute();
+        // Warp to exactly lastExecuted + interval (should still revert — strict <)
+        vm.warp(block.timestamp + 30 days - 1);
+        vm.expectRevert(StipendConductor.TooEarly.selector);
+        stipend.execute();
+
+        // At exact boundary
+        vm.warp(block.timestamp + 1);
+        stipend.execute();
+        assertEq(founder.balance, MONTHLY_AMOUNT * 2);
+    }
+
+    function test_Revoke_PermanentlyBlocks() public {
+        vm.prank(address(dao));
+        stipend.revoke();
+        assertTrue(stipend.revoked());
+
+        // Even after time passes, still reverted
+        vm.warp(block.timestamp + 365 days);
+        vm.expectRevert(StipendConductor.Revoked.selector);
+        stipend.execute();
+    }
 }
