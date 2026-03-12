@@ -8,39 +8,27 @@ import {IMasterRegistry} from "../../master/interfaces/IMasterRegistry.sol";
 import {ERC721AuctionInstance} from "./ERC721AuctionInstance.sol";
 import {IAlignmentVault} from "../../interfaces/IAlignmentVault.sol";
 import {IFactory} from "../../interfaces/IFactory.sol";
-import {PromotionBadges} from "../../promotion/PromotionBadges.sol";
-import {FeaturedQueueManager} from "../../master/FeaturedQueueManager.sol";
 import {ICreateX, CREATEX} from "../../shared/CreateXConstants.sol";
 
 /**
  * @title ERC721AuctionFactory
- * @notice Factory contract for deploying ERC721 auction instances for 1/1 artists
+ * @notice Deploys and registers ERC721 auction instances for 1/1 artists.
+ *         Single responsibility: validate → deploy via CREATE3 → register.
+ *         Protocol fees flow directly to treasury — no custody.
  */
 contract ERC721AuctionFactory is Ownable, ReentrancyGuard, IFactory {
     error InvalidAddress();
-    error InsufficientPayment();
     error InvalidName();
     error VaultMustBeContract();
     error NameAlreadyTaken();
-    error TreasuryNotSet();
-    error NoProtocolFees();
     error NotAuthorizedAgent();
-    error NotRegisteredInstance();
 
     // slither-disable-next-line immutable-states
     IMasterRegistry public masterRegistry;
     address public immutable globalMessageRegistry;
-
-    // Protocol revenue
     address public protocolTreasury;
-    uint256 public accumulatedProtocolFees;
 
-    // Tiered creation
-    enum CreationTier { STANDARD, PREMIUM, LAUNCH }
-
-    /// @dev Packs all per-instance creation params to avoid stack-too-deep in _createInstanceInternal.
-    struct CreateArgs {
-        bytes32 salt;
+    struct CreateParams {
         string name;
         string metadataURI;
         address creator;
@@ -52,30 +40,14 @@ contract ERC721AuctionFactory is Ownable, ReentrancyGuard, IFactory {
         uint256 bidIncrement;
     }
 
-    struct TierConfig {
-        uint256 featuredDuration;
-        uint256 featuredRankBoost;   // ETH allocated to rank score (0 = duration only)
-        PromotionBadges.BadgeType badge;
-        uint256 badgeDuration;
-    }
-
-    mapping(CreationTier => TierConfig) public tierConfigs;
-    PromotionBadges public promotionBadges;
-    FeaturedQueueManager public featuredQueueManager;
-
     event InstanceCreated(
         address indexed instance,
         address indexed creator,
         string name,
         address indexed vault
     );
-
-    event VaultCapabilityWarning(address indexed vault, bytes32 indexed capability);
     event ProtocolTreasuryUpdated(address indexed oldTreasury, address indexed newTreasury);
-    event ProtocolFeesWithdrawn(address indexed treasury, uint256 amount);
-    event TierConfigUpdated(CreationTier tier);
-    event InstanceCreatedWithTier(address indexed instance, CreationTier tier);
-    event PieceQueuedByAgent(address indexed instance, address indexed agent, string tokenURI);
+    event VaultCapabilityWarning(address indexed vault, bytes32 indexed capability);
 
     constructor(
         address _masterRegistry,
@@ -87,173 +59,76 @@ contract ERC721AuctionFactory is Ownable, ReentrancyGuard, IFactory {
         globalMessageRegistry = _globalMessageRegistry;
     }
 
-    /**
-     * @notice Create a new ERC721 auction instance (defaults to STANDARD tier)
-     */
+    /// @notice Deploy a new ERC721 auction instance. Any ETH forwarded directly to treasury.
     function createInstance(
         bytes32 salt,
-        string memory _name,
-        string memory metadataURI,
-        address _creator,
-        address _vault,
-        string memory _symbol,
-        uint8 _lines,
-        uint40 _baseDuration,
-        uint40 _timeBuffer,
-        uint256 _bidIncrement
+        CreateParams calldata params
     ) external payable nonReentrant returns (address instance) {
-        return _createInstanceInternal(CreateArgs({
-            salt: salt, name: _name, metadataURI: metadataURI, creator: _creator, vault: _vault,
-            symbol: _symbol, lines: _lines, baseDuration: _baseDuration,
-            timeBuffer: _timeBuffer, bidIncrement: _bidIncrement
-        }), CreationTier.STANDARD);
-    }
+        // Forward fee directly to treasury — factory holds no ETH
+        if (msg.value > 0 && protocolTreasury != address(0)) {
+            SafeTransferLib.safeTransferETH(protocolTreasury, msg.value);
+        }
 
-    /**
-     * @notice Create a new ERC721 auction instance with a specific creation tier
-     */
-    function createInstance(
-        bytes32 salt,
-        string memory _name,
-        string memory metadataURI,
-        address _creator,
-        address _vault,
-        string memory _symbol,
-        uint8 _lines,
-        uint40 _baseDuration,
-        uint40 _timeBuffer,
-        uint256 _bidIncrement,
-        CreationTier creationTier
-    ) external payable nonReentrant returns (address instance) {
-        return _createInstanceInternal(CreateArgs({
-            salt: salt, name: _name, metadataURI: metadataURI, creator: _creator, vault: _vault,
-            symbol: _symbol, lines: _lines, baseDuration: _baseDuration,
-            timeBuffer: _timeBuffer, bidIncrement: _bidIncrement
-        }), creationTier);
-    }
+        if (bytes(params.name).length == 0) revert InvalidName();
+        if (params.creator == address(0)) revert InvalidAddress();
+        if (params.vault == address(0)) revert InvalidAddress();
+        if (params.vault.code.length == 0) revert VaultMustBeContract();
 
-    function _createInstanceInternal(CreateArgs memory args, CreationTier creationTier)
-        internal returns (address instance)
-    {
-        TierConfig memory config = tierConfigs[creationTier];
-        uint256 featuredCost = _computeFeaturedCost(config);
-        if (msg.value < featuredCost) revert InsufficientPayment();
-        accumulatedProtocolFees += msg.value - featuredCost;
-
-        if (bytes(args.name).length == 0) revert InvalidName();
-        if (args.creator == address(0)) revert InvalidAddress();
-        if (args.vault == address(0)) revert InvalidAddress();
-        if (args.vault.code.length == 0) revert VaultMustBeContract();
-
-        // Agent-on-behalf-of check
         bool agentCreated = false;
-        if (msg.sender != args.creator) {
+        if (msg.sender != params.creator) {
             if (!masterRegistry.isAgent(msg.sender)) revert NotAuthorizedAgent();
             agentCreated = true;
         }
 
-        // Soft capability checks
-        try IAlignmentVault(payable(args.vault)).supportsCapability(keccak256("YIELD_GENERATION")) returns (bool supported) {
-            if (!supported) {
-                emit VaultCapabilityWarning(args.vault, keccak256("YIELD_GENERATION"));
-            }
+        if (masterRegistry.isNameTaken(params.name)) revert NameAlreadyTaken();
+
+        // Soft vault capability check
+        try IAlignmentVault(payable(params.vault)).supportsCapability(keccak256("YIELD_GENERATION"))
+            returns (bool supported) {
+            if (!supported) emit VaultCapabilityWarning(params.vault, keccak256("YIELD_GENERATION"));
         } catch {
-            emit VaultCapabilityWarning(args.vault, keccak256("YIELD_GENERATION"));
+            emit VaultCapabilityWarning(params.vault, keccak256("YIELD_GENERATION"));
         }
 
-        if (masterRegistry.isNameTaken(args.name)) revert NameAlreadyTaken();
+        instance = _deployInstance(salt, params, agentCreated);
+        masterRegistry.registerInstance(
+            instance, address(this), params.creator, params.name, params.metadataURI, params.vault
+        );
 
-        instance = _deployInstance(args, agentCreated);
-        masterRegistry.registerInstance(instance, address(this), args.creator, args.name, args.metadataURI, args.vault);
-
-        _applyTierPerks(instance, args.creator, config, featuredCost);
-
-        emit InstanceCreated(instance, args.creator, args.name, args.vault);
-
-        if (creationTier != CreationTier.STANDARD) {
-            emit InstanceCreatedWithTier(instance, creationTier);
-        }
+        emit InstanceCreated(instance, params.creator, params.name, params.vault);
     }
 
-    function _computeFeaturedCost(TierConfig memory config)
-        private view returns (uint256 featuredCost)
-    {
-        if (config.featuredDuration > 0 && address(featuredQueueManager) != address(0)) {
-            featuredCost = featuredQueueManager.quoteDurationCost(config.featuredDuration) + config.featuredRankBoost;
-        }
-    }
-
-    function _deployInstance(CreateArgs memory args, bool agentCreated) private returns (address) {
+    function _deployInstance(
+        bytes32 salt,
+        CreateParams calldata params,
+        bool agentCreated
+    ) private returns (address instance) {
         bytes memory initCode = abi.encodePacked(
             type(ERC721AuctionInstance).creationCode,
             abi.encode(
                 ERC721AuctionInstance.ConstructorParams({
-                    vault: args.vault,
+                    vault: params.vault,
                     protocolTreasury: protocolTreasury,
-                    owner: args.creator,
-                    name: args.name,
-                    symbol: args.symbol,
-                    lines: args.lines,
-                    baseDuration: args.baseDuration,
-                    timeBuffer: args.timeBuffer,
-                    bidIncrement: args.bidIncrement,
+                    owner: params.creator,
+                    name: params.name,
+                    symbol: params.symbol,
+                    lines: params.lines,
+                    baseDuration: params.baseDuration,
+                    timeBuffer: params.timeBuffer,
+                    bidIncrement: params.bidIncrement,
                     globalMessageRegistry: globalMessageRegistry,
                     masterRegistry: address(masterRegistry),
                     factory: address(this)
                 })
             )
         );
-        address instance = ICreateX(CREATEX).deployCreate3(args.salt, initCode);
+        instance = ICreateX(CREATEX).deployCreate3(salt, initCode);
         if (agentCreated) {
             ERC721AuctionInstance(payable(instance)).setAgentDelegationFromFactory();
         }
-        return instance;
     }
 
-    // slither-disable-next-line arbitrary-send-eth
-    function _applyTierPerks(
-        address instance,
-        address creator_,
-        TierConfig memory config,
-        uint256 featuredCost
-    ) private {
-        if (config.featuredDuration > 0 && address(featuredQueueManager) != address(0) && featuredCost > 0) {
-            featuredQueueManager.rentFeaturedFor{value: featuredCost}(
-                instance, creator_, config.featuredDuration, config.featuredRankBoost
-            );
-        }
-        if (config.badge != PromotionBadges.BadgeType.NONE && address(promotionBadges) != address(0)) {
-            promotionBadges.assignBadgeFor(instance, config.badge, config.badgeDuration);
-        }
-    }
-
-    // ┌─────────────────────────┐
-    // │    Agent Proxy          │
-    // └─────────────────────────┘
-
-    /// @notice Queue a piece on behalf of the artist (agent only)
-    function queuePiece(address instance, string calldata tokenURI) external payable nonReentrant {
-        if (!masterRegistry.isAgent(msg.sender)) revert NotAuthorizedAgent();
-        ERC721AuctionInstance(payable(instance)).queuePiece{value: msg.value}(tokenURI);
-        emit PieceQueuedByAgent(instance, msg.sender, tokenURI);
-    }
-
-    // ┌─────────────────────────┐
-    // │     Admin Functions     │
-    // └─────────────────────────┘
-
-    function setTierConfig(CreationTier tier, TierConfig calldata config) external onlyOwner {
-        tierConfigs[tier] = config;
-        emit TierConfigUpdated(tier);
-    }
-
-    function setPromotionBadges(address _promotionBadges) external onlyOwner {
-        promotionBadges = PromotionBadges(_promotionBadges);
-    }
-
-    function setFeaturedQueueManager(address _featuredQueueManager) external onlyOwner {
-        featuredQueueManager = FeaturedQueueManager(payable(_featuredQueueManager));
-    }
+    // ── Admin ─────────────────────────────────────────────────────────────────
 
     function setProtocolTreasury(address _treasury) external onlyOwner {
         if (_treasury == address(0)) revert InvalidAddress();
@@ -262,14 +137,7 @@ contract ERC721AuctionFactory is Ownable, ReentrancyGuard, IFactory {
         emit ProtocolTreasuryUpdated(old, _treasury);
     }
 
-    function withdrawProtocolFees() external onlyOwner {
-        if (protocolTreasury == address(0)) revert TreasuryNotSet();
-        uint256 amount = accumulatedProtocolFees;
-        if (amount == 0) revert NoProtocolFees();
-        accumulatedProtocolFees = 0;
-        SafeTransferLib.safeTransferETH(protocolTreasury, amount);
-        emit ProtocolFeesWithdrawn(protocolTreasury, amount);
-    }
+    // ── IFactory ─────────────────────────────────────────────────────────────
 
     function protocol() external view returns (address) {
         return owner();
@@ -283,7 +151,9 @@ contract ERC721AuctionFactory is Ownable, ReentrancyGuard, IFactory {
         return new bytes32[](0);
     }
 
-    /// @notice Preview the deterministic address for a given salt
+    // ── Utilities ────────────────────────────────────────────────────────────
+
+    /// @notice Preview the deterministic address for a given salt.
     function computeInstanceAddress(bytes32 salt) external view returns (address) {
         bytes32 guardedSalt = keccak256(abi.encodePacked(uint256(uint160(address(this))), salt));
         return ICreateX(CREATEX).computeCreate3Address(guardedSalt, CREATEX);

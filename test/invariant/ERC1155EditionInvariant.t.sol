@@ -37,15 +37,17 @@ contract ERC1155EditionInvariantTest is StdInvariant, Test {
 
         instance = new ERC1155Instance(
             "Test Collection",
-            "",
-            owner,
+            owner, // creator
             owner, // factory = owner so owner can call factory-gated fns
             mockVault,
-            "",
-            mockGlobalMsgRegistry,
-            protocolTreasury,
-            mockMasterRegistry,
-            ERC1155Instance.ComponentAddresses({ gatingModule: address(0), dynamicPricingModule: address(0) }),
+            "", // styleUri
+            ERC1155Instance.InstanceInit({
+                globalMessageRegistry: mockGlobalMsgRegistry,
+                protocolTreasury: protocolTreasury,
+                masterRegistry: mockMasterRegistry,
+                gatingModule: address(0),
+                dynamicPricingModule: address(0)
+            }),
             false
         );
 

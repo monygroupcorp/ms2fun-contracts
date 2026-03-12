@@ -31,7 +31,7 @@ contract MasterRegistryQueueTest is Test {
     address alice     = makeAddr("alice");
     address bob       = makeAddr("bob");
     address charlie   = makeAddr("charlie");
-    address factory_  = makeAddr("factory");
+    address treasury  = makeAddr("treasury");
 
     // Three registered instances
     address inst1 = makeAddr("inst1");
@@ -47,10 +47,12 @@ contract MasterRegistryQueueTest is Test {
         queue = new FeaturedQueueManager();
         queue.initialize(address(registry), owner);
 
+        vm.prank(owner);
+        queue.setProtocolTreasury(treasury);
+
         vm.deal(alice,   100 ether);
         vm.deal(bob,     100 ether);
         vm.deal(charlie, 100 ether);
-        vm.deal(factory_, 100 ether);
     }
 
     // ── Helpers ────────────────────────────────────────────────────────────────
@@ -494,70 +496,64 @@ contract MasterRegistryQueueTest is Test {
         queue.rentFeatured{value: cost}(inst4, duration, 0);
     }
 
-    // ── rentFeaturedFor (factory bundle) ─────────────────────────────────────
+    // ── Treasury forwarding ───────────────────────────────────────────────────
 
-    function test_rentFeaturedFor_authorizedFactory_succeeds() public {
-        vm.prank(owner);
-        queue.setAuthorizedFactory(factory_, true, 1000); // 10% discount
-
+    function test_rentFeatured_forwardsFeeToTreasury() public {
         uint256 duration     = queue.minDuration();
         uint256 durationCost = queue.quoteDurationCost(duration);
-        uint256 discount     = durationCost * 1000 / 10000;
-        uint256 netCost      = durationCost - discount;
         uint256 rankBoost    = 0.005 ether;
+        uint256 total        = durationCost + rankBoost;
 
-        vm.prank(factory_);
-        queue.rentFeaturedFor{value: netCost + rankBoost}(inst1, alice, duration, rankBoost);
+        uint256 treasuryBefore = treasury.balance;
+        vm.deal(alice, alice.balance + total);
+        vm.prank(alice);
+        queue.rentFeatured{value: total}(inst1, duration, rankBoost);
 
-        (address renter,,, bool isActive) = queue.getRentalInfo(inst1);
-        assertEq(renter, alice);
-        assertTrue(isActive);
+        assertEq(treasury.balance, treasuryBefore + total);
+        assertEq(address(queue).balance, 0);
     }
 
-    function test_rentFeaturedFor_unauthorizedFactory_reverts() public {
-        // Pre-compute values before vm.expectRevert
-        uint256 duration = queue.minDuration();
-        uint256 cost     = queue.quoteDurationCost(duration);
+    function test_boostRank_forwardsFeeToTreasury() public {
+        _rentBasic(inst1, alice, 0);
+        uint256 boost = 0.01 ether;
 
-        vm.prank(factory_);
-        vm.expectRevert(Ownable.Unauthorized.selector);
-        queue.rentFeaturedFor{value: cost}(inst1, alice, duration, 0);
+        uint256 treasuryBefore = treasury.balance;
+        vm.deal(bob, bob.balance + boost);
+        vm.prank(bob);
+        queue.boostRank{value: boost}(inst1);
+
+        assertEq(treasury.balance, treasuryBefore + boost);
+        assertEq(address(queue).balance, 0);
     }
 
-    function test_rentFeaturedFor_zeroDiscount() public {
-        vm.prank(owner);
-        queue.setAuthorizedFactory(factory_, true, 0);
+    function test_renewDuration_forwardsFeeToTreasury() public {
+        _rentBasic(inst1, alice, 0);
+        uint256 additionalDuration = queue.minDuration();
+        uint256 cost               = queue.quoteDurationCost(additionalDuration);
 
-        uint256 duration = queue.minDuration();
-        uint256 cost     = queue.quoteDurationCost(duration);
+        uint256 treasuryBefore = treasury.balance;
+        vm.deal(bob, bob.balance + cost);
+        vm.prank(bob);
+        queue.renewDuration{value: cost}(inst1, additionalDuration);
 
-        vm.prank(factory_);
-        queue.rentFeaturedFor{value: cost}(inst1, alice, duration, 0);
+        assertEq(treasury.balance, treasuryBefore + cost);
+        assertEq(address(queue).balance, 0);
+    }
 
-        (,,, bool isActive) = queue.getRentalInfo(inst1);
-        assertTrue(isActive);
+    function test_rentFeatured_revert_treasuryNotSet() public {
+        FeaturedQueueManager q2 = new FeaturedQueueManager();
+        q2.initialize(address(registry), owner);
+        // No treasury set
+
+        uint256 duration = q2.minDuration();
+        uint256 cost     = q2.quoteDurationCost(duration);
+        vm.deal(alice, alice.balance + cost);
+        vm.prank(alice);
+        vm.expectRevert(FeaturedQueueManager.TreasuryNotSet.selector);
+        q2.rentFeatured{value: cost}(inst1, duration, 0);
     }
 
     // ── Admin functions ───────────────────────────────────────────────────────
-
-    function test_withdrawProtocolFees() public {
-        _rentBasic(inst1, alice, 0);
-
-        vm.prank(owner);
-        queue.setProtocolTreasury(makeAddr("treasury"));
-
-        address treasury    = queue.protocolTreasury();
-        uint256 contractBal = address(queue).balance;
-        assertGt(contractBal, 0);
-
-        uint256 treasuryBefore = treasury.balance;
-
-        vm.prank(owner);
-        queue.withdrawProtocolFees();
-
-        assertEq(treasury.balance, treasuryBefore + contractBal);
-        assertEq(address(queue).balance, 0);
-    }
 
     function test_setDailyRate_onlyOwner() public {
         vm.prank(owner);
@@ -569,23 +565,6 @@ contract MasterRegistryQueueTest is Test {
         vm.prank(alice);
         vm.expectRevert();
         queue.setDailyRate(0.002 ether);
-    }
-
-    function test_setAuthorizedFactory_maxDiscount() public {
-        vm.prank(owner);
-        vm.expectRevert(FeaturedQueueManager.DiscountTooHigh.selector);
-        queue.setAuthorizedFactory(factory_, true, 5001);
-    }
-
-    function test_setAuthorizedFactory_deauthorize() public {
-        vm.prank(owner);
-        queue.setAuthorizedFactory(factory_, true, 0);
-
-        vm.prank(owner);
-        queue.setAuthorizedFactory(factory_, false, 0);
-
-        assertFalse(queue.authorizedFactories(factory_));
-        assertEq(queue.factoryDiscountBps(factory_), 0);
     }
 
     function test_quoteDurationCost_matchesDailyRate() public view {

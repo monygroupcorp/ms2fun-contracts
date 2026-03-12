@@ -6,10 +6,7 @@ import {ReentrancyGuard} from "solady/utils/ReentrancyGuard.sol";
 import {SafeTransferLib} from "solady/utils/SafeTransferLib.sol";
 import {IMasterRegistry} from "../../master/interfaces/IMasterRegistry.sol";
 import {ERC1155Instance} from "./ERC1155Instance.sol";
-import {IAlignmentVault} from "../../interfaces/IAlignmentVault.sol";
 import {IFactory} from "../../interfaces/IFactory.sol";
-import {PromotionBadges} from "../../promotion/PromotionBadges.sol";
-import {FeaturedQueueManager} from "../../master/FeaturedQueueManager.sol";
 import {IComponentRegistry} from "../../registry/interfaces/IComponentRegistry.sol";
 import {FeatureUtils} from "../../master/libraries/FeatureUtils.sol";
 import {FreeMintParams} from "../../interfaces/IFactoryTypes.sol";
@@ -18,47 +15,38 @@ import {ICreateX, CREATEX} from "../../shared/CreateXConstants.sol";
 
 /**
  * @title ERC1155Factory
- * @notice Factory contract for deploying ERC1155 token instances for open edition artists
+ * @notice Deploys and registers ERC1155 edition instances.
+ *         Single responsibility: validate → deploy via CREATE3 → register.
+ *         Protocol fees flow directly to treasury — no custody.
+ *         Promotion (featured placements, badges) is handled externally.
  */
 contract ERC1155Factory is Ownable, ReentrancyGuard, IFactory {
     error InvalidAddress();
     error UnapprovedComponent();
-    error InsufficientPayment();
     error InvalidName();
     error VaultMustBeContract();
     error NameAlreadyTaken();
-    error TreasuryNotSet();
-    error NoProtocolFees();
     error NotAuthorizedAgent();
 
-    // slither-disable-next-line immutable-states
     IMasterRegistry public masterRegistry;
     address public immutable globalMessageRegistry;
     IComponentRegistry public immutable componentRegistry;
-    // slither-disable-next-line immutable-states
-    address public instanceTemplate;
+    address public protocolTreasury;
     address public dynamicPricingModule;
 
-    // Protocol revenue
-    address public protocolTreasury;
-    uint256 public accumulatedProtocolFees;
-
-    // Pluggable component tags
     bytes32[] internal _features;
 
-    // Tiered creation
-    enum CreationTier { STANDARD, PREMIUM, LAUNCH }
-
-    struct TierConfig {
-        uint256 featuredDuration;    // 0 = no featured placement
-        uint256 featuredRankBoost;   // ETH allocated to rank score (0 = duration only)
-        PromotionBadges.BadgeType badge; // NONE = no badge
-        uint256 badgeDuration;       // 0 = no badge
+    /// @notice Parameters for instance creation. Defined here — not in shared IFactoryTypes —
+    ///         because CreateParams is specific to this factory type.
+    struct CreateParams {
+        string name;
+        string metadataURI;
+        address creator;
+        address vault;
+        string styleUri;
+        address gatingModule;    // address(0) = open
+        FreeMintParams freeMint;
     }
-
-    mapping(CreationTier => TierConfig) public tierConfigs;
-    PromotionBadges public promotionBadges;
-    FeaturedQueueManager public featuredQueueManager;
 
     event InstanceCreated(
         address indexed instance,
@@ -66,25 +54,10 @@ contract ERC1155Factory is Ownable, ReentrancyGuard, IFactory {
         string name,
         address indexed vault
     );
-
-    event VaultCapabilityWarning(address indexed vault, bytes32 indexed capability);
-
-    event EditionAdded(
-        address indexed instance,
-        uint256 indexed editionId,
-        string pieceTitle,
-        uint256 basePrice,
-        uint256 supply,
-        ERC1155Instance.PricingModel pricingModel
-    );
     event ProtocolTreasuryUpdated(address indexed oldTreasury, address indexed newTreasury);
-    event ProtocolFeesWithdrawn(address indexed treasury, uint256 amount);
-    event TierConfigUpdated(CreationTier tier);
-    event InstanceCreatedWithTier(address indexed instance, CreationTier tier);
+
     constructor(
         address _masterRegistry,
-        // slither-disable-next-line missing-zero-check
-        address _instanceTemplate,
         address _globalMessageRegistry,
         address _componentRegistry
     ) {
@@ -93,233 +66,77 @@ contract ERC1155Factory is Ownable, ReentrancyGuard, IFactory {
         masterRegistry = IMasterRegistry(_masterRegistry);
         globalMessageRegistry = _globalMessageRegistry;
         componentRegistry = IComponentRegistry(_componentRegistry);
-        instanceTemplate = _instanceTemplate;
         _features.push(FeatureUtils.GATING);
     }
 
-    /**
-     * @notice Create a new ERC1155 instance (backward-compatible, defaults to STANDARD tier)
-     */
+    /// @notice Deploy a new ERC1155 instance. Any ETH forwarded directly to treasury.
     function createInstance(
         bytes32 salt,
-        string memory name,
-        string memory metadataURI,
-        address creator,
-        address vault,
-        string memory styleUri
+        CreateParams calldata params
     ) external payable nonReentrant returns (address instance) {
-        return _createInstanceInternal(salt, name, metadataURI, creator, vault, styleUri, CreationTier.STANDARD, address(0),
-            FreeMintParams({ allocation: 0, scope: GatingScope.BOTH }));
-    }
-
-    /**
-     * @notice Create a new ERC1155 instance with a specific creation tier
-     */
-    function createInstance(
-        bytes32 salt,
-        string memory name,
-        string memory metadataURI,
-        address creator,
-        address vault,
-        string memory styleUri,
-        CreationTier creationTier
-    ) external payable nonReentrant returns (address instance) {
-        return _createInstanceInternal(salt, name, metadataURI, creator, vault, styleUri, creationTier, address(0),
-            FreeMintParams({ allocation: 0, scope: GatingScope.BOTH }));
-    }
-
-    /**
-     * @notice Create a new ERC1155 instance with a gating component.
-     * @param gatingModule address(0) = open; otherwise must be approved in ComponentRegistry.
-     */
-    function createInstance(
-        bytes32 salt,
-        string memory name,
-        string memory metadataURI,
-        address creator,
-        address vault,
-        string memory styleUri,
-        address gatingModule
-    ) external payable nonReentrant returns (address instance) {
-        if (gatingModule != address(0)) {
-            if (!componentRegistry.isApprovedComponent(gatingModule)) revert UnapprovedComponent();
-        }
-        return _createInstanceInternal(salt, name, metadataURI, creator, vault, styleUri, CreationTier.STANDARD, gatingModule,
-            FreeMintParams({ allocation: 0, scope: GatingScope.BOTH }));
-    }
-
-    /// @notice Create an instance with gating module and free mint configuration.
-    function createInstance(
-        bytes32 salt,
-        string memory name,
-        string memory metadataURI,
-        address creator,
-        address vault,
-        string memory styleUri,
-        address gatingModule,
-        FreeMintParams calldata freeMint
-    ) external payable nonReentrant returns (address instance) {
-        if (gatingModule != address(0)) {
-            if (!componentRegistry.isApprovedComponent(gatingModule)) revert UnapprovedComponent();
-        }
-        return _createInstanceInternal(salt, name, metadataURI, creator, vault, styleUri, CreationTier.STANDARD, gatingModule, freeMint);
-    }
-
-    function _createInstanceInternal(
-        bytes32 salt,
-        string memory name,
-        string memory metadataURI,
-        address creator,
-        address vault,
-        string memory styleUri,
-        CreationTier creationTier,
-        address gatingModule,
-        FreeMintParams memory freeMint
-    ) internal returns (address instance) {
-        TierConfig memory config = tierConfigs[creationTier];
-
-        // Compute featured cost upfront so it can be forwarded (not accumulated)
-        uint256 featuredCost = 0;
-        if (config.featuredDuration > 0 && address(featuredQueueManager) != address(0)) {
-            featuredCost = featuredQueueManager.quoteDurationCost(config.featuredDuration) + config.featuredRankBoost;
+        if (params.gatingModule != address(0)) {
+            if (!componentRegistry.isApprovedComponent(params.gatingModule)) revert UnapprovedComponent();
         }
 
-        if (msg.value < featuredCost) revert InsufficientPayment();
+        // Forward fee directly to treasury — factory holds no ETH
+        if (msg.value > 0 && protocolTreasury != address(0)) {
+            SafeTransferLib.safeTransferETH(protocolTreasury, msg.value);
+        }
 
-        // All non-featured payment goes to protocol
-        accumulatedProtocolFees += msg.value - featuredCost;
+        if (bytes(params.name).length == 0) revert InvalidName();
+        if (params.creator == address(0)) revert InvalidAddress();
+        if (params.vault == address(0)) revert InvalidAddress();
+        if (params.vault.code.length == 0) revert VaultMustBeContract();
 
-        if (bytes(name).length == 0) revert InvalidName();
-        if (creator == address(0)) revert InvalidAddress();
-        if (vault == address(0)) revert InvalidAddress();
-        if (vault.code.length == 0) revert VaultMustBeContract();
-
-        // Agent-on-behalf-of check
         bool agentCreated = false;
-        if (msg.sender != creator) {
+        if (msg.sender != params.creator) {
             if (!masterRegistry.isAgent(msg.sender)) revert NotAuthorizedAgent();
             agentCreated = true;
         }
 
-        // Soft capability check — emit warning if vault lacks yield generation, never revert
-        { bytes32 _cap = keccak256("YIELD_GENERATION");
-          try IAlignmentVault(payable(vault)).supportsCapability(_cap) returns (bool supported) {
-              if (!supported) emit VaultCapabilityWarning(vault, _cap);
-          } catch { emit VaultCapabilityWarning(vault, _cap); } }
+        if (masterRegistry.isNameTaken(params.name)) revert NameAlreadyTaken();
 
-        // Check namespace availability before deploying (saves gas on collision)
-        if (masterRegistry.isNameTaken(name)) revert NameAlreadyTaken();
+        instance = _deployAndRegister(salt, params, agentCreated);
+        ERC1155Instance(instance).initializeFreeMint(params.freeMint.allocation, params.freeMint.scope);
 
-        instance = _deployAndRegister(salt, name, metadataURI, creator, vault, styleUri,
-            ERC1155Instance.ComponentAddresses({ gatingModule: gatingModule, dynamicPricingModule: dynamicPricingModule }),
-            agentCreated);
-        // Wire free mint tranche (no-op when allocation == 0)
-        ERC1155Instance(instance).initializeFreeMint(freeMint.allocation, freeMint.scope);
-
-        // Apply tier perks AFTER successful deployment and registration
-        if (config.featuredDuration > 0 && address(featuredQueueManager) != address(0) && featuredCost > 0) {
-            featuredQueueManager.rentFeaturedFor{value: featuredCost}(
-                instance, creator, config.featuredDuration, config.featuredRankBoost
-            );
-        }
-
-        if (config.badge != PromotionBadges.BadgeType.NONE && address(promotionBadges) != address(0)) {
-            promotionBadges.assignBadgeFor(instance, config.badge, config.badgeDuration);
-        }
-
-        emit InstanceCreated(instance, creator, name, vault);
-
-        if (creationTier != CreationTier.STANDARD) {
-            emit InstanceCreatedWithTier(instance, creationTier);
-        }
+        emit InstanceCreated(instance, params.creator, params.name, params.vault);
     }
 
     function _deployAndRegister(
         bytes32 salt,
-        string memory name,
-        string memory metadataURI,
-        address creator,
-        address vault,
-        string memory styleUri,
-        ERC1155Instance.ComponentAddresses memory components,
+        CreateParams calldata params,
         bool agentCreated
     ) private returns (address instance) {
-        bytes memory initCode = abi.encodePacked(
-            type(ERC1155Instance).creationCode,
-            abi.encode(
-                name, metadataURI, creator, address(this), vault, styleUri,
-                globalMessageRegistry, protocolTreasury, address(masterRegistry),
-                components, agentCreated
-            )
-        );
-        instance = ICreateX(CREATEX).deployCreate3(salt, initCode);
+        instance = ICreateX(CREATEX).deployCreate3(salt, _buildInitCode(params, agentCreated));
         masterRegistry.registerInstance(
             instance,
             address(this),
-            creator,
-            name,
-            metadataURI,
-            vault
+            params.creator,
+            params.name,
+            params.metadataURI,
+            params.vault
         );
     }
 
-    /**
-     * @notice Add an edition to an instance
-     */
-    // slither-disable-next-line reentrancy-events
-    function addEdition(
-        address instance,
-        string memory pieceTitle,
-        uint256 basePrice,
-        uint256 supply,
-        string memory metadataURI,
-        ERC1155Instance.PricingModel pricingModel,
-        uint256 priceIncreaseRate,
-        uint256 openTime
-    ) external returns (uint256 editionId) {
-        if (!masterRegistry.isAgent(msg.sender)) revert NotAuthorizedAgent();
-        ERC1155Instance instanceContract = ERC1155Instance(instance);
-
-        instanceContract.addEdition(
-            pieceTitle,
-            basePrice,
-            supply,
-            metadataURI,
-            pricingModel,
-            priceIncreaseRate,
-            openTime
+    /// @dev Isolated so that the large abi.encode runs in a fresh stack frame.
+    function _buildInitCode(CreateParams calldata params, bool agentCreated) private view returns (bytes memory) {
+        ERC1155Instance.InstanceInit memory init = ERC1155Instance.InstanceInit({
+            globalMessageRegistry: globalMessageRegistry,
+            protocolTreasury: protocolTreasury,
+            masterRegistry: address(masterRegistry),
+            gatingModule: params.gatingModule,
+            dynamicPricingModule: dynamicPricingModule
+        });
+        return abi.encodePacked(
+            type(ERC1155Instance).creationCode,
+            abi.encode(params.name, params.creator, address(this), params.vault, params.styleUri, init, agentCreated)
         );
-
-        editionId = instanceContract.nextEditionId() - 1;
-
-        emit EditionAdded(instance, editionId, pieceTitle, basePrice, supply, pricingModel);
     }
 
-    /**
-     * @notice Set tier configuration (owner only)
-     */
-    function setTierConfig(CreationTier tier, TierConfig calldata config) external onlyOwner {
-        tierConfigs[tier] = config;
-        emit TierConfigUpdated(tier);
-    }
-
-    /**
-     * @notice Set PromotionBadges contract reference
-     */
-    function setPromotionBadges(address _promotionBadges) external onlyOwner {
-        promotionBadges = PromotionBadges(_promotionBadges);
-    }
-
-    /**
-     * @notice Set FeaturedQueueManager contract reference
-     */
-    function setFeaturedQueueManager(address _featuredQueueManager) external onlyOwner {
-        featuredQueueManager = FeaturedQueueManager(payable(_featuredQueueManager));
-    }
+    // ── Admin ─────────────────────────────────────────────────────────────────
 
     /// @notice Set the default dynamic pricing module for new instances.
     ///         address(0) disables dynamic pricing for new deployments.
-    /// @dev Module must be approved in ComponentRegistry under tag keccak256("dynamic_pricing").
     function setDynamicPricingModule(address module) external onlyOwner {
         if (module != address(0)) {
             if (!componentRegistry.isApprovedComponent(module)) revert UnapprovedComponent();
@@ -334,20 +151,21 @@ contract ERC1155Factory is Ownable, ReentrancyGuard, IFactory {
         emit ProtocolTreasuryUpdated(old, _treasury);
     }
 
-    function withdrawProtocolFees() external onlyOwner {
-        if (protocolTreasury == address(0)) revert TreasuryNotSet();
-        uint256 amount = accumulatedProtocolFees;
-        if (amount == 0) revert NoProtocolFees();
-        accumulatedProtocolFees = 0;
-        SafeTransferLib.safeTransferETH(protocolTreasury, amount);
-        emit ProtocolFeesWithdrawn(protocolTreasury, amount);
-    }
+    // ── IFactory ─────────────────────────────────────────────────────────────
 
     function protocol() external view returns (address) {
         return owner();
     }
 
+    /// @notice Returns supported component feature tags.
+    ///         DYNAMIC_PRICING included lazily when a module is set.
     function features() external view returns (bytes32[] memory) {
+        if (dynamicPricingModule != address(0)) {
+            bytes32[] memory f = new bytes32[](_features.length + 1);
+            for (uint256 i = 0; i < _features.length; i++) f[i] = _features[i];
+            f[_features.length] = FeatureUtils.DYNAMIC_PRICING;
+            return f;
+        }
         return _features;
     }
 
@@ -355,7 +173,9 @@ contract ERC1155Factory is Ownable, ReentrancyGuard, IFactory {
         return new bytes32[](0);
     }
 
-    /// @notice Preview the deterministic address for a given salt
+    // ── Utilities ────────────────────────────────────────────────────────────
+
+    /// @notice Preview the deterministic address for a given salt.
     function computeInstanceAddress(bytes32 salt) external view returns (address) {
         bytes32 guardedSalt = keccak256(abi.encodePacked(uint256(uint160(address(this))), salt));
         return ICreateX(CREATEX).computeCreate3Address(guardedSalt, CREATEX);

@@ -46,13 +46,26 @@ contract ERC721AuctionFactoryTest is Test {
         return bytes32(abi.encodePacked(address(factory), uint8(0x00), bytes11(uint88(_saltCounter))));
     }
 
+    function _params() internal view returns (ERC721AuctionFactory.CreateParams memory) {
+        return ERC721AuctionFactory.CreateParams({
+            name: "Artist Collection",
+            metadataURI: "ipfs://meta",
+            creator: artist,
+            vault: address(vault),
+            symbol: "ART",
+            lines: 1,
+            baseDuration: BASE_DURATION,
+            timeBuffer: TIME_BUFFER,
+            bidIncrement: BID_INCREMENT
+        });
+    }
+
     function setUp() public {
         vm.etch(CREATEX, CREATEX_BYTECODE);
         vm.startPrank(owner);
 
         token = new MockEXECToken(1000000e18);
 
-        // Deploy mock alignment registry
         mockAlignmentRegistry = new MockAlignmentRegistry();
         mockAlignmentRegistry.setTargetActive(TARGET_ID, true);
         mockAlignmentRegistry.setTokenInTarget(TARGET_ID, address(token), true);
@@ -105,23 +118,12 @@ contract ERC721AuctionFactoryTest is Test {
         vm.deal(artist, 1 ether);
         vm.prank(artist);
 
-        address instance = factory.createInstance{value: 0.01 ether}(
-            _nextSalt(),
-            "Test Auctions",
-            "ipfs://test",
-            artist,
-            address(vault),
-            "TART",
-            1,
-            BASE_DURATION,
-            TIME_BUFFER,
-            BID_INCREMENT
-        );
+        address instance = factory.createInstance{value: 0}(_nextSalt(), _params());
 
         assertTrue(instance != address(0));
         ERC721AuctionInstance inst = ERC721AuctionInstance(payable(instance));
-        assertEq(inst.name(), "Test Auctions");
-        assertEq(inst.symbol(), "TART");
+        assertEq(inst.name(), "Artist Collection");
+        assertEq(inst.symbol(), "ART");
         assertEq(address(inst.vault()), address(vault));
         assertEq(inst.protocolTreasury(), treasury);
         assertEq(inst.lines(), 1);
@@ -131,27 +133,40 @@ contract ERC721AuctionFactoryTest is Test {
         assertEq(inst.owner(), artist);
     }
 
-    function test_WithdrawProtocolFees() public {
-        // Create an instance to generate fees
+    function test_CreateInstance_FeeGoesDirectlyToTreasury() public {
         vm.deal(artist, 1 ether);
-        vm.prank(artist);
-        factory.createInstance{value: 0.01 ether}(
-            _nextSalt(),
-            "Test Auctions",
-            "ipfs://test",
-            artist,
-            address(vault),
-            "TART",
-            1,
-            BASE_DURATION,
-            TIME_BUFFER,
-            BID_INCREMENT
-        );
+        uint256 treasuryBefore = treasury.balance;
 
-        // Withdraw protocol fees
+        vm.prank(artist);
+        factory.createInstance{value: 0.01 ether}(_nextSalt(), _params());
+
+        assertEq(treasury.balance - treasuryBefore, 0.01 ether);
+        assertEq(address(factory).balance, 0);
+    }
+
+    function test_SetProtocolTreasury() public {
+        address newTreasury = address(0xBEEF);
         vm.prank(owner);
-        factory.withdrawProtocolFees();
-        assertEq(factory.accumulatedProtocolFees(), 0);
+        factory.setProtocolTreasury(newTreasury);
+        assertEq(factory.protocolTreasury(), newTreasury);
+    }
+
+    function test_SetProtocolTreasury_RevertNonOwner() public {
+        vm.prank(artist);
+        vm.expectRevert();
+        factory.setProtocolTreasury(address(0xBEEF));
+    }
+
+    function test_SetProtocolTreasury_RevertZeroAddress() public {
+        vm.prank(owner);
+        vm.expectRevert();
+        factory.setProtocolTreasury(address(0));
+    }
+
+    function test_computeInstanceAddress() public view {
+        bytes32 salt = bytes32(uint256(1));
+        address predicted = factory.computeInstanceAddress(salt);
+        assertTrue(predicted != address(0));
     }
 
     // ┌─────────────────────────┐
@@ -161,18 +176,7 @@ contract ERC721AuctionFactoryTest is Test {
     function _createDefaultInstance() internal returns (ERC721AuctionInstance) {
         vm.deal(artist, 100 ether);
         vm.prank(artist);
-        address instance = factory.createInstance{value: 0.01 ether}(
-            _nextSalt(),
-            "Artist Collection",
-            "ipfs://meta",
-            artist,
-            address(vault),
-            "ART",
-            1,
-            BASE_DURATION,
-            TIME_BUFFER,
-            BID_INCREMENT
-        );
+        address instance = factory.createInstance{value: 0}(_nextSalt(), _params());
         return ERC721AuctionInstance(payable(instance));
     }
 
@@ -186,7 +190,7 @@ contract ERC721AuctionFactoryTest is Test {
         assertEq(auction.tokenId, 1);
         assertEq(auction.minBid, 0.1 ether);
         assertEq(auction.highBidder, address(0));
-        assertTrue(auction.startTime > 0); // Should auto-start (first piece on line)
+        assertTrue(auction.startTime > 0);
         assertFalse(auction.settled);
     }
 
@@ -248,12 +252,10 @@ contract ERC721AuctionFactoryTest is Test {
         vm.prank(artist);
         inst.queuePiece{value: 0.1 ether}("ipfs://piece1");
 
-        // First bid
         vm.deal(bidder1, 1 ether);
         vm.prank(bidder1);
         inst.createBid{value: 0.1 ether}(1, bytes(""));
 
-        // Outbid
         uint256 bidder1BalBefore = bidder1.balance;
         vm.deal(bidder2, 1 ether);
         vm.prank(bidder2);
@@ -262,8 +264,6 @@ contract ERC721AuctionFactoryTest is Test {
         ERC721AuctionInstance.Auction memory auction = inst.getAuction(1);
         assertEq(auction.highBidder, bidder2);
         assertEq(auction.highBid, 0.15 ether);
-
-        // Bidder1 should have been refunded
         assertEq(bidder1.balance, bidder1BalBefore + 0.1 ether);
     }
 
@@ -280,7 +280,7 @@ contract ERC721AuctionFactoryTest is Test {
         vm.deal(bidder2, 1 ether);
         vm.prank(bidder2);
         vm.expectRevert(BidTooLow.selector);
-        inst.createBid{value: 0.105 ether}(1, bytes("")); // Less than 0.1 + 0.01 increment
+        inst.createBid{value: 0.105 ether}(1, bytes(""));
     }
 
     function test_Bidding_AntiSnipe() public {
@@ -292,7 +292,6 @@ contract ERC721AuctionFactoryTest is Test {
         ERC721AuctionInstance.Auction memory auction = inst.getAuction(1);
         uint40 originalEnd = auction.endTime;
 
-        // Warp to 2 minutes before end (within 5-minute buffer)
         vm.warp(originalEnd - 2 minutes);
 
         vm.deal(bidder1, 1 ether);
@@ -300,7 +299,6 @@ contract ERC721AuctionFactoryTest is Test {
         inst.createBid{value: 0.1 ether}(1, bytes(""));
 
         auction = inst.getAuction(1);
-        // End time should be extended by timeBuffer from current time
         assertEq(auction.endTime, uint40(block.timestamp) + TIME_BUFFER);
         assertTrue(auction.endTime > originalEnd);
     }
@@ -311,7 +309,6 @@ contract ERC721AuctionFactoryTest is Test {
         vm.prank(artist);
         inst.queuePiece{value: 0.1 ether}("ipfs://piece1");
 
-        // Warp past end time
         ERC721AuctionInstance.Auction memory auction = inst.getAuction(1);
         vm.warp(auction.endTime + 1);
 
@@ -331,12 +328,10 @@ contract ERC721AuctionFactoryTest is Test {
         vm.prank(artist);
         inst.queuePiece{value: 0.1 ether}("ipfs://piece1");
 
-        // Place bid
         vm.deal(bidder1, 1 ether);
         vm.prank(bidder1);
         inst.createBid{value: 1 ether}(1, bytes(""));
 
-        // Warp past end
         ERC721AuctionInstance.Auction memory auction = inst.getAuction(1);
         vm.warp(auction.endTime);
 
@@ -344,26 +339,18 @@ contract ERC721AuctionFactoryTest is Test {
         uint256 vaultBalBefore = address(vault).balance;
         uint256 treasuryBalBefore = treasury.balance;
 
-        // Settle
         inst.settleAuction(1);
 
-        // NFT minted to bidder1
         assertEq(inst.ownerOf(1), bidder1);
 
-        // 1% protocol, 19% vault, ~80% artist (deposit refunded + creator cut)
         uint256 protocolCut = 1 ether / 100;
         uint256 expectedVaultCut = (1 ether * 19) / 100;
         uint256 expectedCreatorCut = 1 ether - protocolCut - expectedVaultCut;
-        uint256 expectedCreatorPay = 0.1 ether + expectedCreatorCut; // deposit refund + creator cut
+        uint256 expectedCreatorPay = 0.1 ether + expectedCreatorCut;
         assertEq(artist.balance - artistBalBefore, expectedCreatorPay);
-
-        // 19% of winning bid to vault
         assertEq(address(vault).balance - vaultBalBefore, expectedVaultCut);
-
-        // 1% of winning bid to protocol treasury
         assertEq(treasury.balance - treasuryBalBefore, protocolCut);
 
-        // Auction marked as settled
         auction = inst.getAuction(1);
         assertTrue(auction.settled);
     }
@@ -405,20 +392,16 @@ contract ERC721AuctionFactoryTest is Test {
         vm.prank(artist);
         inst.queuePiece{value: 0.1 ether}("ipfs://piece1");
 
-        // Warp past end
         ERC721AuctionInstance.Auction memory auction = inst.getAuction(1);
         vm.warp(auction.endTime);
 
         uint256 treasuryBalBefore = treasury.balance;
 
-        // Reclaim
         vm.prank(artist);
         inst.reclaimUnsold(1);
 
-        // Deposit forfeited to treasury
         assertEq(treasury.balance - treasuryBalBefore, 0.1 ether);
 
-        // Auction settled
         auction = inst.getAuction(1);
         assertTrue(auction.settled);
     }
@@ -460,24 +443,24 @@ contract ERC721AuctionFactoryTest is Test {
     // └─────────────────────────┘
 
     function test_Lines_RoundRobin() public {
-        // Create instance with 3 lines
         vm.deal(artist, 100 ether);
         vm.prank(artist);
-        address instance = factory.createInstance{value: 0.01 ether}(
+        address instance = factory.createInstance{value: 0}(
             _nextSalt(),
-            "Multi Line",
-            "ipfs://meta",
-            artist,
-            address(vault),
-            "ML",
-            3,
-            BASE_DURATION,
-            TIME_BUFFER,
-            BID_INCREMENT
+            ERC721AuctionFactory.CreateParams({
+                name: "Multi Line",
+                metadataURI: "ipfs://meta",
+                creator: artist,
+                vault: address(vault),
+                symbol: "ML",
+                lines: 3,
+                baseDuration: BASE_DURATION,
+                timeBuffer: TIME_BUFFER,
+                bidIncrement: BID_INCREMENT
+            })
         );
         ERC721AuctionInstance inst = ERC721AuctionInstance(payable(instance));
 
-        // Queue 6 pieces
         vm.startPrank(artist);
         inst.queuePiece{value: 0.1 ether}("ipfs://1"); // tokenId 1 -> line 0
         inst.queuePiece{value: 0.1 ether}("ipfs://2"); // tokenId 2 -> line 1
@@ -487,12 +470,9 @@ contract ERC721AuctionFactoryTest is Test {
         inst.queuePiece{value: 0.1 ether}("ipfs://6"); // tokenId 6 -> line 2
         vm.stopPrank();
 
-        // Check active auctions per line
         assertEq(inst.getActiveAuction(0), 1);
         assertEq(inst.getActiveAuction(1), 2);
         assertEq(inst.getActiveAuction(2), 3);
-
-        // Queue lengths: 2 each (1 active + 1 pending)
         assertEq(inst.getQueueLength(0), 2);
         assertEq(inst.getQueueLength(1), 2);
         assertEq(inst.getQueueLength(2), 2);
@@ -501,16 +481,13 @@ contract ERC721AuctionFactoryTest is Test {
     function test_Lines_AutoAdvance() public {
         ERC721AuctionInstance inst = _createDefaultInstance();
 
-        // Queue 2 pieces on same line
         vm.startPrank(artist);
         inst.queuePiece{value: 0.1 ether}("ipfs://1");
         inst.queuePiece{value: 0.1 ether}("ipfs://2");
         vm.stopPrank();
 
-        // Piece 1 should be active, piece 2 queued
         assertEq(inst.getActiveAuction(0), 1);
 
-        // Bid and settle piece 1
         vm.deal(bidder1, 1 ether);
         vm.prank(bidder1);
         inst.createBid{value: 0.1 ether}(1, bytes(""));
@@ -519,7 +496,6 @@ contract ERC721AuctionFactoryTest is Test {
         vm.warp(auction.endTime);
         inst.settleAuction(1);
 
-        // Piece 2 should now be active
         assertEq(inst.getActiveAuction(0), 2);
         auction = inst.getAuction(2);
         assertTrue(auction.startTime > 0);
@@ -535,7 +511,6 @@ contract ERC721AuctionFactoryTest is Test {
         vm.prank(artist);
         inst.queuePiece{value: 0.1 ether}("ipfs://piece1");
 
-        // Bid and settle
         vm.deal(bidder1, 1 ether);
         vm.prank(bidder1);
         inst.createBid{value: 0.1 ether}(1, bytes(""));
@@ -554,22 +529,18 @@ contract ERC721AuctionFactoryTest is Test {
     function test_FullWorkflow_QueueBidSettle() public {
         ERC721AuctionInstance inst = _createDefaultInstance();
 
-        // Artist queues 3 pieces
         vm.startPrank(artist);
         inst.queuePiece{value: 0.1 ether}("ipfs://1");
         inst.queuePiece{value: 0.2 ether}("ipfs://2");
         inst.queuePiece{value: 0.3 ether}("ipfs://3");
         vm.stopPrank();
 
-        // Piece 1 is active, 2 and 3 are queued
         assertEq(inst.getActiveAuction(0), 1);
 
-        // Bid on piece 1
         vm.deal(bidder1, 10 ether);
         vm.prank(bidder1);
         inst.createBid{value: 0.5 ether}(1, bytes(""));
 
-        // Settle piece 1
         ERC721AuctionInstance.Auction memory auction = inst.getAuction(1);
         vm.warp(auction.endTime);
         inst.settleAuction(1);
@@ -577,7 +548,6 @@ contract ERC721AuctionFactoryTest is Test {
         assertEq(inst.ownerOf(1), bidder1);
         assertEq(inst.getActiveAuction(0), 2);
 
-        // Piece 2: no bids, reclaim
         auction = inst.getAuction(2);
         vm.warp(auction.endTime);
         vm.prank(artist);
@@ -585,7 +555,6 @@ contract ERC721AuctionFactoryTest is Test {
 
         assertEq(inst.getActiveAuction(0), 3);
 
-        // Piece 3: bid and settle
         vm.prank(bidder1);
         inst.createBid{value: 0.3 ether}(3, bytes(""));
 
@@ -594,7 +563,7 @@ contract ERC721AuctionFactoryTest is Test {
         inst.settleAuction(3);
 
         assertEq(inst.ownerOf(3), bidder1);
-        assertEq(inst.getActiveAuction(0), 0); // No more pieces
+        assertEq(inst.getActiveAuction(0), 0);
     }
 
     // ┌─────────────────────────┐
@@ -607,7 +576,6 @@ contract ERC721AuctionFactoryTest is Test {
         vm.prank(artist);
         inst.queuePiece{value: 0.1 ether}("ipfs://piece1");
 
-        // Bid with a message
         vm.deal(bidder1, 1 ether);
         vm.prank(bidder1);
         inst.createBid{value: 0.1 ether}(1, abi.encode(uint8(0), uint256(0), bytes32(0), bytes32(0), "gm love this piece"));
@@ -619,7 +587,6 @@ contract ERC721AuctionFactoryTest is Test {
 
     function test_GetGlobalMessageRegistry() public {
         ERC721AuctionInstance inst = _createDefaultInstance();
-        // globalMessageRegistry is now set at factory construction, passed to instances as immutable
         assertTrue(inst.getGlobalMessageRegistry() != address(0));
     }
 
@@ -634,7 +601,6 @@ contract ERC721AuctionFactoryTest is Test {
         vm.prank(artist);
         inst.queuePiece{value: minBid}("ipfs://fuzz1");
 
-        // Bound first bid to [minBid, 100 ether]
         uint256 firstBid = bound(firstBidRaw, minBid, 100 ether);
 
         vm.deal(bidder1, firstBid);
@@ -644,17 +610,14 @@ contract ERC721AuctionFactoryTest is Test {
         ERC721AuctionInstance.Auction memory auction = inst.getAuction(1);
         assertEq(auction.highBid, firstBid);
 
-        // Second bid must be >= highBid + bidIncrement
         uint256 threshold = firstBid + BID_INCREMENT;
 
-        // Bids below threshold must revert
         uint256 lowBid = bound(secondBidRaw, minBid, threshold - 1);
         vm.deal(bidder2, lowBid);
         vm.prank(bidder2);
         vm.expectRevert(BidTooLow.selector);
         inst.createBid{value: lowBid}(1, bytes(""));
 
-        // Bid at exactly threshold must succeed
         vm.deal(bidder2, threshold);
         vm.prank(bidder2);
         inst.createBid{value: threshold}(1, bytes(""));
@@ -665,7 +628,6 @@ contract ERC721AuctionFactoryTest is Test {
     }
 
     function testFuzz_SettlementSplitCorrect(uint256 highBidRaw) public {
-        // Bound to [0.01 ether, 10_000 ether] — realistic auction range
         uint256 highBid = bound(highBidRaw, 0.01 ether, 10_000 ether);
 
         ERC721AuctionInstance inst = _createDefaultInstance();
@@ -690,11 +652,8 @@ contract ERC721AuctionFactoryTest is Test {
         uint256 protocolReceived = treasury.balance - treasuryBalBefore;
         uint256 vaultReceived = address(vault).balance - vaultBalBefore;
         uint256 artistReceived = artist.balance - artistBalBefore;
-
-        // Artist receives deposit refund + creator cut, so subtract deposit to get creator cut
         uint256 creatorCut = artistReceived - deposit;
 
-        // protocolCut + vaultCut + creatorCut must equal the winning bid exactly
         assertEq(
             protocolReceived + vaultReceived + creatorCut,
             highBid,
@@ -706,20 +665,15 @@ contract ERC721AuctionFactoryTest is Test {
     // │  Non-Receiver Safety    │
     // └─────────────────────────┘
 
-    /// @notice Validates finding [85]: _safeMint must be used so a contract winner without
-    ///         IERC721Receiver causes settleAuction to revert rather than permanently locking the NFT.
     function test_SettleAuction_ContractBidderWithoutERC721Receiver_Reverts() public {
         ERC721AuctionInstance inst = _createDefaultInstance();
 
-        // Queue a piece
         vm.prank(artist);
         inst.queuePiece{value: 0.1 ether}("ipfs://piece1");
 
-        // Deploy a contract that can receive ETH (for bid refunds) but does NOT implement IERC721Receiver
         NonReceiverBidder bidder = new NonReceiverBidder();
         vm.deal(address(bidder), 10 ether);
 
-        // Contract places the winning bid
         bidder.bid(address(inst), 1, 0.2 ether);
 
         ERC721AuctionInstance.Auction memory auction = inst.getAuction(1);
@@ -727,14 +681,12 @@ contract ERC721AuctionFactoryTest is Test {
 
         vm.warp(auction.endTime);
 
-        // settleAuction must revert because the winner cannot receive ERC721 tokens
         vm.expectRevert();
         inst.settleAuction(1);
     }
 }
 
-/// @dev A contract that can receive ETH but intentionally omits IERC721Receiver,
-///      modeling a multisig or vault contract that forgot to implement the callback.
+/// @dev A contract that can receive ETH but intentionally omits IERC721Receiver.
 contract NonReceiverBidder {
     function bid(address instance, uint24 tokenId, uint256 amount) external {
         ERC721AuctionInstance(payable(instance)).createBid{value: amount}(tokenId, bytes(""));

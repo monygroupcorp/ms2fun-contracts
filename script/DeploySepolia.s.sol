@@ -248,7 +248,6 @@ contract DeploySepolia is Script {
         promotionBadges = new PromotionBadges(address(treasury));
         // ERC404 perks now go via LaunchManager (authorized to call PromotionBadges)
         promotionBadges.setAuthorizedFactory(address(launchManager), true);
-        promotionBadges.setAuthorizedFactory(address(erc1155Factory), true);
         promotionBadges.setAuthorizedFactory(address(erc721Factory), true);
 
         // ============ Phase 7: Wiring ============
@@ -256,17 +255,7 @@ contract DeploySepolia is Script {
         // 18. QueueManager treasury
         queueManager.setProtocolTreasury(address(treasury));
 
-        // 21. Factory wiring (promotionBadges + featuredQueueManager)
-        // ERC404: tier perks wired via LaunchManager
-        launchManager.setPromotionBadges(address(promotionBadges));
-        launchManager.setFeaturedQueueManager(address(queueManager));
-        // ERC1155 + ERC721 still wire directly
-        erc1155Factory.setPromotionBadges(address(promotionBadges));
-        erc1155Factory.setFeaturedQueueManager(address(queueManager));
-        erc721Factory.setPromotionBadges(address(promotionBadges));
-        erc721Factory.setFeaturedQueueManager(address(queueManager));
-
-        // 22-24. Register factories in MasterRegistry
+        // 21. Register factories in MasterRegistry
         MasterRegistryV1(masterRegistry).registerFactory(
             address(erc404Factory), "ERC404", "ERC404-Bonding", "ERC404 Bonding Factory", "https://sepolia.ms2.fun/factory/erc404", new bytes32[](0)
         );
@@ -303,7 +292,6 @@ contract DeploySepolia is Script {
             ERC404Factory.ModuleConfig({
                 globalMessageRegistry: address(globalMessageRegistry),
                 launchManager: address(launchManager),
-                tierGatingModule: address(0),
                 componentRegistry: address(componentRegistry)
             })
         );
@@ -313,7 +301,7 @@ contract DeploySepolia is Script {
 
         // Phase 5: ERC1155Factory
         erc1155Factory = new ERC1155Factory(
-            masterRegistry, address(0), address(globalMessageRegistry), address(0)
+            masterRegistry, address(globalMessageRegistry), address(componentRegistry)
         );
         erc1155Factory.setProtocolTreasury(address(treasury));
 

@@ -51,7 +51,7 @@ contract ERC1155FreeMintTest is Test {
         componentRegistry.initialize(protocol);
 
         factory = new ERC1155Factory(
-            address(mockRegistry), address(0), mockGMR, address(componentRegistry)
+            address(mockRegistry), mockGMR, address(componentRegistry)
         );
         vm.stopPrank();
     }
@@ -59,21 +59,25 @@ contract ERC1155FreeMintTest is Test {
     function _deploy(uint256 alloc, GatingScope scope) internal returns (ERC1155Instance) {
         vm.startPrank(creator);
         address inst = factory.createInstance(
-            _nextSalt(), "FreeMintEdition", "ipfs://meta", creator, address(mockVault), "",
-            address(0), FreeMintParams({ allocation: alloc, scope: scope })
+            _nextSalt(),
+            ERC1155Factory.CreateParams({
+                name: "FreeMintEdition",
+                metadataURI: "ipfs://meta",
+                creator: creator,
+                vault: address(mockVault),
+                styleUri: "",
+                gatingModule: address(0),
+                freeMint: FreeMintParams({allocation: alloc, scope: scope})
+            })
         );
         vm.stopPrank();
         return ERC1155Instance(inst);
     }
 
     function _addEdition(ERC1155Instance inst, uint256 supply) internal returns (uint256 editionId) {
-        // Creator enables delegation so agent can add editions via factory
         vm.prank(creator);
-        inst.setAgentDelegation(true);
-        mockRegistry.setAgent(protocol, true);
-        vm.prank(protocol);
-        factory.addEdition(
-            address(inst), "Piece 1", 0.01 ether, supply, "ipfs://edition",
+        inst.addEdition(
+            "Piece 1", 0.01 ether, supply, "ipfs://edition",
             ERC1155Instance.PricingModel.LIMITED_FIXED, 0, 0
         );
         return inst.nextEditionId() - 1;

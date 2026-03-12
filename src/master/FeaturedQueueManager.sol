@@ -16,14 +16,16 @@ import {SafeTransferLib} from "solady/utils/SafeTransferLib.sol";
  *     Pay durationCost + rankBoost. durationCost buys time in the featured set.
  *     rankBoost is added to the instance's cumulative rank score.
  *     Rank from previous slots carries forward (decayed). No refunds on being outranked.
+ *     All ETH forwarded directly to protocolTreasury.
  *
  *   boostRank(instance)
  *     Anyone can send ETH directly to an instance's rank score.
  *     Crystallises accumulated decay then adds the new amount.
+ *     All ETH forwarded directly to protocolTreasury.
  *
  *   renewDuration(instance, duration)
  *     Anyone can extend an active slot's expiry at the flat daily rate.
- *     Zero effect on rank.
+ *     Zero effect on rank. ETH forwarded directly to protocolTreasury.
  *
  * Rank decays linearly at dailyDecayRate per day, computed lazily at read time.
  * getFeaturedInstances returns active slots sorted by effective rank — position 1 first.
@@ -45,9 +47,7 @@ contract FeaturedQueueManager is SafeOwnableUUPS, ReentrancyGuard {
     error DurationTooLong();
     error InvalidBounds();
     error InvalidSize();
-    error DiscountTooHigh();
     error TreasuryNotSet();
-    error NothingToWithdraw();
     error SlotStillActive();
 
     // ── Data ───────────────────────────────────────────────────────────────
@@ -75,8 +75,6 @@ contract FeaturedQueueManager is SafeOwnableUUPS, ReentrancyGuard {
     uint256 public maxFeaturedSize = 100;
 
     address public protocolTreasury;
-    mapping(address => bool)    public authorizedFactories;
-    mapping(address => uint256) public factoryDiscountBps;  // duration discount, e.g. 1000 = 10%
 
     bool private _initialized;
 
@@ -103,10 +101,8 @@ contract FeaturedQueueManager is SafeOwnableUUPS, ReentrancyGuard {
         uint256 cost,
         uint256 newExpiresAt
     );
-    event ProtocolFeesWithdrawn(address indexed treasury, uint256 amount);
-    event MasterRegistrySet(address indexed registry);
     event ProtocolTreasuryUpdated(address indexed oldTreasury, address indexed newTreasury);
-    event AuthorizedFactoryUpdated(address indexed factory, bool authorized, uint256 discountBps);
+    event MasterRegistrySet(address indexed registry);
 
     // ── Constructor / Init ─────────────────────────────────────────────────
 
@@ -134,6 +130,7 @@ contract FeaturedQueueManager is SafeOwnableUUPS, ReentrancyGuard {
 
     /**
      * @notice Enter the featured set. Payment explicitly splits between duration and rank.
+     *         All ETH forwarded directly to protocolTreasury.
      * @param instance   Registered instance to feature
      * @param duration   How long to be visible (seconds); msg.value must cover durationCost
      * @param rankBoost  Additional ETH allocated to rank score; competes for position
@@ -144,12 +141,14 @@ contract FeaturedQueueManager is SafeOwnableUUPS, ReentrancyGuard {
         uint256 duration,
         uint256 rankBoost
     ) external payable nonReentrant {
+        if (protocolTreasury == address(0)) revert TreasuryNotSet();
         if (!_isInstanceRegistered(instance)) revert InstanceNotRegistered();
         if (block.timestamp < slots[instance].expiresAt) revert AlreadyFeatured();
         if (duration < minDuration || duration > maxDuration) revert InvalidDuration();
 
         uint256 durationCost = (dailyRate * duration) / 1 days; // round down: favors renter
-        if (msg.value < durationCost + rankBoost) revert InsufficientPayment();
+        uint256 totalDue     = durationCost + rankBoost;
+        if (msg.value < totalDue) revert InsufficientPayment();
         if (_activeCount() >= maxFeaturedSize) revert QueueFull();
 
         _addToList(instance);
@@ -164,8 +163,12 @@ contract FeaturedQueueManager is SafeOwnableUUPS, ReentrancyGuard {
             expiresAt:     block.timestamp + duration
         });
 
-        if (msg.value > durationCost + rankBoost) {
-            SafeTransferLib.safeTransferETH(msg.sender, msg.value - durationCost - rankBoost);
+        // Forward payment directly to treasury
+        SafeTransferLib.safeTransferETH(protocolTreasury, totalDue);
+
+        // Refund excess
+        if (msg.value > totalDue) {
+            SafeTransferLib.safeTransferETH(msg.sender, msg.value - totalDue);
         }
 
         emit FeaturedRented(instance, msg.sender, duration, durationCost, rankBoost, slots[instance].expiresAt);
@@ -174,10 +177,12 @@ contract FeaturedQueueManager is SafeOwnableUUPS, ReentrancyGuard {
     /**
      * @notice Add to an instance's rank score. Anyone can boost.
      *         Crystallises decay accrued since lastBoostTime, then adds the new amount.
+     *         All ETH forwarded directly to protocolTreasury.
      * @param instance  Active featured instance to boost
      */
     // slither-disable-next-line timestamp
     function boostRank(address instance) external payable nonReentrant {
+        if (protocolTreasury == address(0)) revert TreasuryNotSet();
         if (msg.value == 0) revert MustSendETH();
         if (block.timestamp >= slots[instance].expiresAt) revert SlotNotActive();
 
@@ -185,12 +190,15 @@ contract FeaturedQueueManager is SafeOwnableUUPS, ReentrancyGuard {
         slots[instance].rankScore     = newRank;
         slots[instance].lastBoostTime = block.timestamp;
 
+        SafeTransferLib.safeTransferETH(protocolTreasury, msg.value);
+
         emit RankBoosted(instance, msg.sender, msg.value, newRank);
     }
 
     /**
      * @notice Extend an active slot's duration. Anyone can renew — fans can keep
      *         their favourite project visible. Zero effect on rank.
+     *         ETH forwarded directly to protocolTreasury.
      * @param instance           Active featured instance
      * @param additionalDuration Extra seconds to add to expiresAt
      */
@@ -199,6 +207,7 @@ contract FeaturedQueueManager is SafeOwnableUUPS, ReentrancyGuard {
         address instance,
         uint256 additionalDuration
     ) external payable nonReentrant {
+        if (protocolTreasury == address(0)) revert TreasuryNotSet();
         if (block.timestamp >= slots[instance].expiresAt) revert SlotExpired();
         if (additionalDuration < minDuration) revert DurationTooShort();
         if (additionalDuration > maxDuration) revert DurationTooLong();
@@ -208,54 +217,13 @@ contract FeaturedQueueManager is SafeOwnableUUPS, ReentrancyGuard {
 
         slots[instance].expiresAt += additionalDuration;
 
+        SafeTransferLib.safeTransferETH(protocolTreasury, cost);
+
         if (msg.value > cost) {
             SafeTransferLib.safeTransferETH(msg.sender, msg.value - cost);
         }
 
         emit DurationRenewed(instance, msg.sender, additionalDuration, cost, slots[instance].expiresAt);
-    }
-
-    /**
-     * @notice Authorized factory entry point for bundle packages.
-     *         Applies a factory-specific duration discount (rank boost priced normally).
-     * @param instance   Instance being deployed
-     * @param renter     Address credited as renter (the deploying creator)
-     * @param duration   Featured duration
-     * @param rankBoost  Initial rank allocation
-     */
-    // slither-disable-next-line divide-before-multiply,timestamp
-    function rentFeaturedFor(
-        address instance,
-        address renter,
-        uint256 duration,
-        uint256 rankBoost
-    ) external payable nonReentrant {
-        if (!authorizedFactories[msg.sender]) revert Unauthorized();
-        if (!_isInstanceRegistered(instance)) revert InstanceNotRegistered();
-        if (block.timestamp < slots[instance].expiresAt) revert AlreadyFeatured();
-        if (duration < minDuration || duration > maxDuration) revert InvalidDuration();
-
-        uint256 discount     = factoryDiscountBps[msg.sender];
-        uint256 durationCost = ((dailyRate * duration) / 1 days) * (10000 - discount) / 10000; // round down twice: favors renter
-        if (msg.value < durationCost + rankBoost) revert InsufficientPayment();
-        if (_activeCount() >= maxFeaturedSize) revert QueueFull();
-
-        _addToList(instance);
-
-        uint256 newRank = _effectiveRank(slots[instance]) + rankBoost;
-
-        slots[instance] = FeaturedSlot({
-            renter:        renter,
-            rankScore:     newRank,
-            lastBoostTime: block.timestamp,
-            expiresAt:     block.timestamp + duration
-        });
-
-        if (msg.value > durationCost + rankBoost) {
-            SafeTransferLib.safeTransferETH(msg.sender, msg.value - durationCost - rankBoost);
-        }
-
-        emit FeaturedRented(instance, renter, duration, durationCost, rankBoost, slots[instance].expiresAt);
     }
 
     // ── Read Functions ─────────────────────────────────────────────────────
@@ -474,27 +442,4 @@ contract FeaturedQueueManager is SafeOwnableUUPS, ReentrancyGuard {
         if (_max == 0) revert InvalidSize();
         maxFeaturedSize = _max;
     }
-
-    /**
-     * @notice Authorize a factory for bundle placement with an optional duration discount.
-     * @param discountBps Basis points off the daily rate, max 5000 (50%)
-     */
-    function setAuthorizedFactory(address factory, bool authorized, uint256 discountBps) external onlyOwner {
-        if (discountBps > 5000) revert DiscountTooHigh();
-        authorizedFactories[factory]  = authorized;
-        factoryDiscountBps[factory]   = authorized ? discountBps : 0;
-        emit AuthorizedFactoryUpdated(factory, authorized, discountBps);
-    }
-
-    // slither-disable-next-line incorrect-equality
-    function withdrawProtocolFees() external onlyOwner {
-        if (protocolTreasury == address(0)) revert TreasuryNotSet();
-        uint256 balance = address(this).balance;
-        if (balance == 0) revert NothingToWithdraw();
-        SafeTransferLib.safeTransferETH(protocolTreasury, balance);
-        emit ProtocolFeesWithdrawn(protocolTreasury, balance);
-    }
-
-
-    receive() external payable {}
 }

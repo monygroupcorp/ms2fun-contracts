@@ -7,9 +7,8 @@ import {ERC404BondingInstance} from "../../../src/factories/erc404/ERC404Bonding
 import {LaunchManager} from "../../../src/factories/erc404/LaunchManager.sol";
 import {CurveParamsComputer} from "../../../src/factories/erc404/CurveParamsComputer.sol";
 import {MockMasterRegistry} from "../../mocks/MockMasterRegistry.sol";
-import {PromotionBadges} from "../../../src/promotion/PromotionBadges.sol";
 import {BondingCurveMath} from "../../../src/factories/erc404/libraries/BondingCurveMath.sol";
-import {IdentityParams, FreeMintParams} from "../../../src/interfaces/IFactoryTypes.sol";
+import {FreeMintParams} from "../../../src/interfaces/IFactoryTypes.sol";
 import {GatingScope} from "../../../src/gating/IGatingModule.sol";
 import {ComponentRegistry} from "../../../src/registry/ComponentRegistry.sol";
 import {PasswordTierGatingModule} from "../../../src/gating/PasswordTierGatingModule.sol";
@@ -47,7 +46,6 @@ contract ERC404FactoryTest is Test {
     MockVault public mockVault;
     ComponentRegistry public componentRegistry;
     MockLiquidityDeployer public mockDeployer;
-    PasswordTierGatingModule public tierGatingModule;
 
     uint256 internal _saltCounter;
 
@@ -83,7 +81,6 @@ contract ERC404FactoryTest is Test {
         mockVault = new MockVault();
         launchMgr = new LaunchManager(protocolAdmin);
         curveComp = new CurveParamsComputer(protocolAdmin);
-        tierGatingModule = new PasswordTierGatingModule(address(mockRegistry));
         mockDeployer = new MockLiquidityDeployer();
 
         ComponentRegistry compRegImpl = new ComponentRegistry();
@@ -114,7 +111,6 @@ contract ERC404FactoryTest is Test {
             ERC404Factory.ModuleConfig({
                 globalMessageRegistry: mockGMR,
                 launchManager: address(launchMgr),
-                tierGatingModule: address(tierGatingModule),
                 componentRegistry: address(componentRegistry)
             })
         );
@@ -130,17 +126,17 @@ contract ERC404FactoryTest is Test {
         string memory name_,
         string memory symbol_,
         address owner_
-    ) internal returns (IdentityParams memory) {
-        return IdentityParams({
+    ) internal returns (ERC404Factory.CreateParams memory) {
+        return ERC404Factory.CreateParams({
             salt: _nextSalt(),
             owner: owner_,
             nftCount: DEFAULT_NFT_COUNT,
             presetId: uint8(DEFAULT_PRESET_ID),
-            creationTier: 0,
             vault: address(mockVault),
             name: name_,
             symbol: symbol_,
-            styleUri: ""
+            styleUri: "",
+            stakingModule: address(0)
         });
     }
 
@@ -181,16 +177,16 @@ contract ERC404FactoryTest is Test {
         vm.startPrank(creator1);
         vm.expectRevert(ERC404Factory.VaultRequired.selector);
         factory.createInstance{value: INSTANCE_CREATION_FEE}(
-            IdentityParams({
+            ERC404Factory.CreateParams({
                 salt: _nextSalt(),
                 owner: creator1,
                 nftCount: DEFAULT_NFT_COUNT,
                 presetId: uint8(DEFAULT_PRESET_ID),
-                creationTier: 0,
                 vault: address(0),
                 name: "TestToken",
                 symbol: "TEST",
-                styleUri: ""
+                styleUri: "",
+                stakingModule: address(0)
             }),
             "ipfs://metadata",
             address(mockDeployer),
@@ -233,16 +229,16 @@ contract ERC404FactoryTest is Test {
         vm.startPrank(creator1);
         vm.expectRevert(ERC404Factory.InvalidNftCount.selector);
         factory.createInstance{value: INSTANCE_CREATION_FEE}(
-            IdentityParams({
+            ERC404Factory.CreateParams({
                 salt: _nextSalt(),
                 owner: creator1,
                 nftCount: 0,
                 presetId: uint8(DEFAULT_PRESET_ID),
-                creationTier: 0,
                 vault: address(mockVault),
                 name: "TestToken",
                 symbol: "TEST",
-                styleUri: ""
+                styleUri: "",
+                stakingModule: address(0)
             }),
             "ipfs://metadata",
             address(mockDeployer),
@@ -257,16 +253,16 @@ contract ERC404FactoryTest is Test {
         vm.startPrank(creator1);
         vm.expectRevert(ERC404Factory.InvalidOwner.selector);
         factory.createInstance{value: INSTANCE_CREATION_FEE}(
-            IdentityParams({
+            ERC404Factory.CreateParams({
                 salt: _nextSalt(),
                 owner: address(0),
                 nftCount: DEFAULT_NFT_COUNT,
                 presetId: uint8(DEFAULT_PRESET_ID),
-                creationTier: 0,
                 vault: address(mockVault),
                 name: "TestToken",
                 symbol: "TEST",
-                styleUri: ""
+                styleUri: "",
+                stakingModule: address(0)
             }),
             "ipfs://metadata",
             address(mockDeployer),
@@ -284,8 +280,8 @@ contract ERC404FactoryTest is Test {
         assertEq(address(factory.masterRegistry()), address(mockRegistry));
     }
 
-    function test_getFeatures() public view {
-        bytes32[] memory factoryFeatures = factory.getFeatures();
+    function test_features() public view {
+        bytes32[] memory factoryFeatures = factory.features();
         assertTrue(factoryFeatures.length > 0, "Factory should have features");
     }
 
@@ -408,9 +404,14 @@ contract ERC404FactoryTest is Test {
         vm.stopPrank();
     }
 
-    function test_WithdrawProtocolFees() public {
+    function test_CreateInstance_FeeGoesDirectlyToTreasury() public {
+        address treasury = address(0xBEEF);
+        vm.startPrank(protocolAdmin);
+        factory.setProtocolTreasury(treasury);
+        vm.stopPrank();
+
         vm.deal(creator1, 1 ether);
-        vm.startPrank(creator1);
+        vm.prank(creator1);
         factory.createInstance{value: INSTANCE_CREATION_FEE}(
             _identity("FeeToken", "FEE", creator1),
             "ipfs://metadata",
@@ -418,32 +419,9 @@ contract ERC404FactoryTest is Test {
             address(0),
             FreeMintParams({allocation: 0, scope: GatingScope.BOTH})
         );
-        vm.stopPrank();
 
-        address treasury = address(0xBEEF);
-        vm.startPrank(protocolAdmin);
-        factory.setProtocolTreasury(treasury);
-        assertEq(address(factory).balance, INSTANCE_CREATION_FEE);
-        uint256 expectedProtocolFees = INSTANCE_CREATION_FEE;
-        factory.withdrawProtocolFees();
-        assertEq(factory.accumulatedProtocolFees(), 0);
-        assertEq(treasury.balance, expectedProtocolFees);
-        vm.stopPrank();
-    }
-
-    function test_WithdrawProtocolFees_RevertNoTreasury() public {
-        vm.startPrank(protocolAdmin);
-        vm.expectRevert(ERC404Factory.TreasuryNotSet.selector);
-        factory.withdrawProtocolFees();
-        vm.stopPrank();
-    }
-
-    function test_WithdrawProtocolFees_RevertNoBalance() public {
-        vm.startPrank(protocolAdmin);
-        factory.setProtocolTreasury(address(0xBEEF));
-        vm.expectRevert(ERC404Factory.NoProtocolFees.selector);
-        factory.withdrawProtocolFees();
-        vm.stopPrank();
+        assertEq(treasury.balance, INSTANCE_CREATION_FEE);
+        assertEq(address(factory).balance, 0);
     }
 
     // ========================
@@ -473,164 +451,6 @@ contract ERC404FactoryTest is Test {
 
     function test_BondingFeeBps_DefaultValue() public view {
         assertEq(factory.bondingFeeBps(), 100);
-    }
-
-    // ========================
-    // Tiered Creation Tests (via LaunchManager)
-    // ========================
-
-    function test_setTierConfig() public {
-        vm.startPrank(protocolAdmin);
-        LaunchManager.TierConfig memory config = LaunchManager.TierConfig({
-            fee: 0.05 ether, featuredDuration: 7 days, featuredRankBoost: 10,
-            badge: PromotionBadges.BadgeType.NONE, badgeDuration: 0
-        });
-        launchMgr.setTierConfig(LaunchManager.CreationTier.PREMIUM, config);
-
-        (uint256 fee, uint256 featuredDuration, uint256 featuredRankBoost, PromotionBadges.BadgeType badge, uint256 badgeDuration) =
-            launchMgr.tierConfigs(LaunchManager.CreationTier.PREMIUM);
-        assertEq(fee, 0.05 ether);
-        assertEq(featuredDuration, 7 days);
-        assertEq(featuredRankBoost, 10);
-        assertEq(uint256(badge), uint256(PromotionBadges.BadgeType.NONE));
-        assertEq(badgeDuration, 0);
-        vm.stopPrank();
-    }
-
-    function test_setTierConfig_revertZeroFee() public {
-        vm.startPrank(protocolAdmin);
-        LaunchManager.TierConfig memory config = LaunchManager.TierConfig({
-            fee: 0, featuredDuration: 0, featuredRankBoost: 0,
-            badge: PromotionBadges.BadgeType.NONE, badgeDuration: 0
-        });
-        vm.expectRevert(abi.encodeWithSignature("FeeMustBePositive()"));
-        launchMgr.setTierConfig(LaunchManager.CreationTier.PREMIUM, config);
-        vm.stopPrank();
-    }
-
-    function test_setTierConfig_revertNonOwner() public {
-        vm.startPrank(nonOwner);
-        LaunchManager.TierConfig memory config = LaunchManager.TierConfig({
-            fee: 0.05 ether, featuredDuration: 0, featuredRankBoost: 0,
-            badge: PromotionBadges.BadgeType.NONE, badgeDuration: 0
-        });
-        vm.expectRevert();
-        launchMgr.setTierConfig(LaunchManager.CreationTier.PREMIUM, config);
-        vm.stopPrank();
-    }
-
-    function test_createInstance_standardTierBackwardCompat() public {
-        vm.deal(creator1, 1 ether);
-        vm.startPrank(creator1);
-        address instance = factory.createInstance{value: INSTANCE_CREATION_FEE}(
-            _identity("StandardToken", "STD", creator1),
-            "ipfs://metadata",
-            address(mockDeployer),
-            address(0),
-            FreeMintParams({allocation: 0, scope: GatingScope.BOTH})
-        );
-        assertTrue(instance != address(0));
-        vm.stopPrank();
-    }
-
-    function test_createInstance_premiumTier() public {
-        vm.startPrank(protocolAdmin);
-        launchMgr.setTierConfig(LaunchManager.CreationTier.PREMIUM, LaunchManager.TierConfig({
-            fee: 0.05 ether, featuredDuration: 0, featuredRankBoost: 0,
-            badge: PromotionBadges.BadgeType.NONE, badgeDuration: 0
-        }));
-        vm.stopPrank();
-
-        vm.deal(creator1, 1 ether);
-        vm.startPrank(creator1);
-        address instance = factory.createInstance{value: 0.05 ether}(
-            IdentityParams({
-                salt: _nextSalt(),
-                owner: creator1,
-                nftCount: DEFAULT_NFT_COUNT,
-                presetId: uint8(DEFAULT_PRESET_ID),
-                creationTier: uint8(LaunchManager.CreationTier.PREMIUM),
-                vault: address(mockVault),
-                name: "PremiumToken",
-                symbol: "PREM",
-                styleUri: ""
-            }),
-            "ipfs://metadata",
-            address(mockDeployer),
-            address(0),
-            FreeMintParams({allocation: 0, scope: GatingScope.BOTH})
-        );
-        assertTrue(instance != address(0));
-        assertEq(address(factory).balance, 0.05 ether);
-        vm.stopPrank();
-    }
-
-    function test_createInstance_gracefulDegradation_noQueueOrBadges() public {
-        vm.startPrank(protocolAdmin);
-        launchMgr.setTierConfig(LaunchManager.CreationTier.LAUNCH, LaunchManager.TierConfig({
-            fee: 0.1 ether, featuredDuration: 14 days, featuredRankBoost: 5,
-            badge: PromotionBadges.BadgeType.HIGHLIGHT, badgeDuration: 14 days
-        }));
-        vm.stopPrank();
-
-        vm.deal(creator1, 1 ether);
-        vm.startPrank(creator1);
-        address instance = factory.createInstance{value: 0.1 ether}(
-            IdentityParams({
-                salt: _nextSalt(),
-                owner: creator1,
-                nftCount: DEFAULT_NFT_COUNT,
-                presetId: uint8(DEFAULT_PRESET_ID),
-                creationTier: uint8(LaunchManager.CreationTier.LAUNCH),
-                vault: address(mockVault),
-                name: "LaunchToken",
-                symbol: "LNCH",
-                styleUri: ""
-            }),
-            "ipfs://metadata",
-            address(mockDeployer),
-            address(0),
-            FreeMintParams({allocation: 0, scope: GatingScope.BOTH})
-        );
-        assertTrue(instance != address(0));
-        vm.stopPrank();
-    }
-
-    function test_createInstance_launchTier_withBadgeAssignment() public {
-        vm.startPrank(protocolAdmin);
-        PromotionBadges badges = new PromotionBadges(address(0xBEEF));
-        badges.setAuthorizedFactory(address(launchMgr), true);
-        launchMgr.setPromotionBadges(address(badges));
-        launchMgr.setTierConfig(LaunchManager.CreationTier.LAUNCH, LaunchManager.TierConfig({
-            fee: 0.1 ether, featuredDuration: 0, featuredRankBoost: 0,
-            badge: PromotionBadges.BadgeType.HIGHLIGHT, badgeDuration: 14 days
-        }));
-        vm.stopPrank();
-
-        vm.deal(creator1, 1 ether);
-        vm.startPrank(creator1);
-        address instance = factory.createInstance{value: 0.1 ether}(
-            IdentityParams({
-                salt: _nextSalt(),
-                owner: creator1,
-                nftCount: DEFAULT_NFT_COUNT,
-                presetId: uint8(DEFAULT_PRESET_ID),
-                creationTier: uint8(LaunchManager.CreationTier.LAUNCH),
-                vault: address(mockVault),
-                name: "BadgeToken",
-                symbol: "BDG",
-                styleUri: ""
-            }),
-            "ipfs://metadata",
-            address(mockDeployer),
-            address(0),
-            FreeMintParams({allocation: 0, scope: GatingScope.BOTH})
-        );
-        vm.stopPrank();
-
-        (PromotionBadges.BadgeType badgeType, uint256 expiresAt) = badges.getActiveBadge(instance);
-        assertEq(uint256(badgeType), uint256(PromotionBadges.BadgeType.HIGHLIGHT));
-        assertEq(expiresAt, block.timestamp + 14 days);
     }
 
     // ========================
@@ -683,16 +503,16 @@ contract ERC404FactoryTest is Test {
         vm.deal(creator1, 1 ether);
         vm.startPrank(creator1);
         address instance = factory.createInstance{value: INSTANCE_CREATION_FEE}(
-            IdentityParams({
+            ERC404Factory.CreateParams({
                 salt: _nextSalt(),
                 owner: creator1,
                 nftCount: 100,
                 presetId: uint8(DEFAULT_PRESET_ID),
-                creationTier: 0,
                 vault: address(mockVault),
                 name: "TestToken",
                 symbol: "TEST",
-                styleUri: ""
+                styleUri: "",
+                stakingModule: address(0)
             }),
             "ipfs://metadata",
             address(mockDeployer),
@@ -711,16 +531,16 @@ contract ERC404FactoryTest is Test {
         vm.startPrank(creator1);
         vm.expectRevert(abi.encodeWithSignature("PresetNotActive()"));
         factory.createInstance{value: INSTANCE_CREATION_FEE}(
-            IdentityParams({
+            ERC404Factory.CreateParams({
                 salt: _nextSalt(),
                 owner: creator1,
                 nftCount: 100,
                 presetId: uint8(5), // inactive preset
-                creationTier: 0,
                 vault: address(mockVault),
                 name: "TestToken",
                 symbol: "TEST",
-                styleUri: ""
+                styleUri: "",
+                stakingModule: address(0)
             }),
             "ipfs://metadata",
             address(mockDeployer),
@@ -735,16 +555,16 @@ contract ERC404FactoryTest is Test {
         vm.startPrank(creator1);
         vm.expectRevert(ERC404Factory.InvalidNftCount.selector);
         factory.createInstance{value: INSTANCE_CREATION_FEE}(
-            IdentityParams({
+            ERC404Factory.CreateParams({
                 salt: _nextSalt(),
                 owner: creator1,
                 nftCount: 0,
                 presetId: uint8(DEFAULT_PRESET_ID),
-                creationTier: 0,
                 vault: address(mockVault),
                 name: "TestToken",
                 symbol: "TEST",
-                styleUri: ""
+                styleUri: "",
+                stakingModule: address(0)
             }),
             "ipfs://metadata",
             address(mockDeployer),
@@ -875,16 +695,16 @@ contract ERC404FactoryTest is Test {
         vm.deal(creator1, 1 ether);
         vm.prank(creator1);
         address instance = factory.createInstance{value: INSTANCE_CREATION_FEE}(
-            IdentityParams({
+            ERC404Factory.CreateParams({
                 salt: _nextSalt(),
                 owner: creator1,
                 nftCount: DEFAULT_NFT_COUNT,
                 presetId: uint8(DEFAULT_PRESET_ID),
-                creationTier: 0,
                 vault: plainVault,
                 name: "PlainVaultToken",
                 symbol: "PVT",
-                styleUri: ""
+                styleUri: "",
+                stakingModule: address(0)
             }),
             "ipfs://metadata",
             address(mockDeployer),

@@ -35,7 +35,6 @@ contract DeployERC404Factory is Script {
             ERC404Factory.ModuleConfig({
                 globalMessageRegistry: globalMessageRegistry,
                 launchManager: address(launchManager),
-                tierGatingModule: address(0),
                 componentRegistry: componentRegistry
             })
         );

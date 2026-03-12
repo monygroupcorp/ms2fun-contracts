@@ -11,18 +11,17 @@ import {IFactory} from "../../interfaces/IFactory.sol";
 import {ICurveComputer} from "../../interfaces/ICurveComputer.sol";
 import {ERC404BondingInstance} from "./ERC404BondingInstance.sol";
 import {LaunchManager} from "./LaunchManager.sol";
-import {PasswordTierGatingModule} from "../../gating/PasswordTierGatingModule.sol";
 import {IComponentRegistry} from "../../registry/interfaces/IComponentRegistry.sol";
-import {IdentityParams, FreeMintParams} from "../../interfaces/IFactoryTypes.sol";
+import {FreeMintParams} from "../../interfaces/IFactoryTypes.sol";
 import {GatingScope} from "../../gating/IGatingModule.sol";
 import {ICreateX, CREATEX} from "../../shared/CreateXConstants.sol";
 
 /**
  * @title ERC404Factory
- * @notice Factory contract for deploying ERC404 token instances.
- * @dev Artists supply their chosen liquidity deployer and optional gating module at call time.
- *      Components are validated against ComponentRegistry. Bonding params are derived from
- *      a LaunchManager preset identified by identity.presetId.
+ * @notice Deploys and registers ERC404 bonding token instances.
+ *         Single responsibility: validate → deploy via CREATE3 → register.
+ *         Protocol fees flow directly to treasury — no custody.
+ *         Bonding curve params are derived from LaunchManager presets.
  */
 contract ERC404Factory is OwnableRoles, ReentrancyGuard, IFactory {
     uint256 public constant PROTOCOL_ROLE = _ROLE_0;  // 1 << 0 = 1
@@ -34,12 +33,24 @@ contract ERC404Factory is OwnableRoles, ReentrancyGuard, IFactory {
         address protocol;
     }
 
-    /// @dev Module addresses — no deployer or curve computer (supplied per call).
+    /// @dev Module addresses.
     struct ModuleConfig {
         address globalMessageRegistry;
         address componentRegistry;
         address launchManager;
-        address tierGatingModule;   // convenience — for createInstanceWithTiers
+    }
+
+    /// @notice Parameters for instance creation.
+    struct CreateParams {
+        bytes32 salt;
+        string name;
+        string symbol;
+        string styleUri;
+        address owner;
+        address vault;
+        uint256 nftCount;
+        uint8 presetId;
+        address stakingModule; // address(0) = staking not available for this instance
     }
 
     // slither-disable-next-line immutable-states
@@ -48,18 +59,13 @@ contract ERC404Factory is OwnableRoles, ReentrancyGuard, IFactory {
     // slither-disable-next-line immutable-states
     address public implementation;
 
-    // Protocol revenue
     address public protocolTreasury;
     uint256 public bondingFeeBps = 100; // 1% default
-    uint256 public accumulatedProtocolFees;
 
-    // Modules
     LaunchManager public immutable launchManager;
-    PasswordTierGatingModule public immutable tierGatingModule;
     IComponentRegistry public immutable componentRegistry;
 
-    // Feature matrix — pluggable choices advertised to the frontend
-    bytes32[] internal _features = [FeatureUtils.GATING, FeatureUtils.LIQUIDITY_DEPLOYER];
+    bytes32[] internal _features = [FeatureUtils.GATING, FeatureUtils.LIQUIDITY_DEPLOYER, FeatureUtils.STAKING];
 
     event InstanceCreated(
         address indexed instance,
@@ -85,14 +91,12 @@ contract ERC404Factory is OwnableRoles, ReentrancyGuard, IFactory {
     error FreeMintAllocationExceedsNftCount();
     error UnapprovedLiquidityDeployer();
     error UnapprovedGatingModule();
+    error UnapprovedStakingModule();
     error UnapprovedCurveComputer();
-    error TreasuryNotSet();
-    error NoProtocolFees();
     error MaxBondingFeeExceeded();
     error NotAuthorizedAgent();
 
     event ProtocolTreasuryUpdated(address indexed oldTreasury, address indexed newTreasury);
-    event ProtocolFeesWithdrawn(address indexed treasury, uint256 amount);
     event BondingFeeUpdated(uint256 newBps);
 
     constructor(CoreConfig memory core, ModuleConfig memory modules) {
@@ -107,35 +111,32 @@ contract ERC404Factory is OwnableRoles, ReentrancyGuard, IFactory {
         masterRegistry = IMasterRegistry(core.masterRegistry);
         globalMessageRegistry = modules.globalMessageRegistry;
         launchManager = LaunchManager(modules.launchManager);
-        tierGatingModule = PasswordTierGatingModule(modules.tierGatingModule);
         componentRegistry = IComponentRegistry(modules.componentRegistry);
     }
 
-    /// @notice Transfer PROTOCOL_ROLE to a new address. Only callable by current PROTOCOL_ROLE holder.
+    /// @notice Transfer PROTOCOL_ROLE to a new address.
     function transferProtocolRole(address newProtocol) external onlyRoles(PROTOCOL_ROLE) {
         if (newProtocol == address(0)) revert InvalidAddress();
         _removeRoles(msg.sender, PROTOCOL_ROLE);
         _grantRoles(newProtocol, PROTOCOL_ROLE);
     }
 
-    /// @dev Prevent owner from granting/revoking PROTOCOL_ROLE via the base OwnableRoles interface.
+    /// @dev Prevent owner from granting/revoking PROTOCOL_ROLE via base OwnableRoles.
     function grantRoles(address user, uint256 roles) public payable override onlyOwner {
         if (roles & PROTOCOL_ROLE != 0) revert ProtocolRoleNotTransferable();
         super.grantRoles(user, roles);
     }
 
-    /// @dev Prevent owner from granting/revoking PROTOCOL_ROLE via the base OwnableRoles interface.
+    /// @dev Prevent owner from granting/revoking PROTOCOL_ROLE via base OwnableRoles.
     function revokeRoles(address user, uint256 roles) public payable override onlyOwner {
         if (roles & PROTOCOL_ROLE != 0) revert ProtocolRoleNotTransferable();
         super.revokeRoles(user, roles);
     }
 
     /// @notice Create an instance with a caller-supplied liquidity deployer and optional gating module.
-    /// @param liquidityDeployer Must be approved in ComponentRegistry.
-    /// @param gatingModule address(0) = open gating; otherwise must be approved in ComponentRegistry.
-    /// @param freeMint Free mint configuration (allocation=0 disables free mints).
+    ///         Any ETH forwarded goes directly to treasury — factory holds no ETH.
     function createInstance(
-        IdentityParams calldata identity,
+        CreateParams calldata params,
         string calldata metadataURI,
         address liquidityDeployer,
         address gatingModule,
@@ -144,110 +145,92 @@ contract ERC404Factory is OwnableRoles, ReentrancyGuard, IFactory {
         if (gatingModule != address(0)) {
             if (!componentRegistry.isApprovedComponent(gatingModule)) revert UnapprovedGatingModule();
         }
-        return _createInstanceCore(identity, metadataURI, liquidityDeployer, gatingModule, freeMint);
-    }
-
-    /// @notice Convenience wrapper: creates an instance with password-tier gating.
-    function createInstanceWithTiers(
-        IdentityParams calldata identity,
-        string calldata metadataURI,
-        address liquidityDeployer,
-        PasswordTierGatingModule.TierConfig calldata tiers,
-        FreeMintParams calldata freeMint
-    ) external payable nonReentrant returns (address instance) {
-        // slither-disable-next-line uninitialized-local
-        address gatingModuleAddr;
-        if (tiers.passwordHashes.length > 0) {
-            bytes32 senderBoundSalt = keccak256(abi.encodePacked(msg.sender, identity.salt));
-            bytes32 guardedSalt = keccak256(abi.encodePacked(uint256(uint160(address(this))), senderBoundSalt));
-            address predictedInstance = ICreateX(CREATEX).computeCreate3Address(guardedSalt, CREATEX);
-            tierGatingModule.configureFor(predictedInstance, tiers);
-            gatingModuleAddr = address(tierGatingModule);
+        if (params.stakingModule != address(0)) {
+            if (!componentRegistry.isApprovedComponent(params.stakingModule)) revert UnapprovedStakingModule();
         }
-        return _createInstanceCore(identity, metadataURI, liquidityDeployer, gatingModuleAddr, freeMint);
-    }
 
-    function _createInstanceCore(
-        IdentityParams calldata identity,
-        string calldata metadataURI,
-        address liquidityDeployer,
-        address gatingModule,
-        FreeMintParams calldata freeMint
-    ) internal returns (address instance) {
-        accumulatedProtocolFees += msg.value;
+        // Forward fee directly to treasury — factory holds no ETH
+        if (msg.value > 0 && protocolTreasury != address(0)) {
+            SafeTransferLib.safeTransferETH(protocolTreasury, msg.value);
+        }
 
-        // Validate identity
-        if (identity.nftCount == 0) revert InvalidNftCount();
-        if (bytes(identity.name).length == 0) revert InvalidName();
-        if (bytes(identity.symbol).length == 0) revert InvalidSymbol();
-        if (identity.owner == address(0)) revert InvalidOwner();
-        if (identity.vault == address(0)) revert VaultRequired();
-        if (identity.vault.code.length == 0) revert VaultMustBeContract();
+        // Validate params
+        if (params.nftCount == 0) revert InvalidNftCount();
+        if (bytes(params.name).length == 0) revert InvalidName();
+        if (bytes(params.symbol).length == 0) revert InvalidSymbol();
+        if (params.owner == address(0)) revert InvalidOwner();
+        if (params.vault == address(0)) revert VaultRequired();
+        if (params.vault.code.length == 0) revert VaultMustBeContract();
 
         // Agent-on-behalf-of check
         bool agentCreated = false;
-        if (msg.sender != identity.owner) {
+        if (msg.sender != params.owner) {
             if (!masterRegistry.isAgent(msg.sender)) revert NotAuthorizedAgent();
             agentCreated = true;
         }
 
-        if (masterRegistry.isNameTaken(identity.name)) revert NameAlreadyTaken();
-        if (freeMint.allocation >= identity.nftCount) revert FreeMintAllocationExceedsNftCount();
+        if (masterRegistry.isNameTaken(params.name)) revert NameAlreadyTaken();
+        if (freeMint.allocation >= params.nftCount) revert FreeMintAllocationExceedsNftCount();
 
         // Validate liquidity deployer
         if (!componentRegistry.isApprovedComponent(liquidityDeployer)) revert UnapprovedLiquidityDeployer();
 
-        // Soft vault capability check
-        try IAlignmentVault(payable(identity.vault)).supportsCapability(keccak256("YIELD_GENERATION"))
+        // Soft vault capability check — YIELD_GENERATION is expected for ERC404 staking rewards
+        try IAlignmentVault(payable(params.vault)).supportsCapability(keccak256("YIELD_GENERATION"))
             returns (bool supported) {
-            if (!supported) emit VaultCapabilityWarning(identity.vault, keccak256("YIELD_GENERATION"));
+            if (!supported) emit VaultCapabilityWarning(params.vault, keccak256("YIELD_GENERATION"));
         } catch {
-            emit VaultCapabilityWarning(identity.vault, keccak256("YIELD_GENERATION"));
+            emit VaultCapabilityWarning(params.vault, keccak256("YIELD_GENERATION"));
         }
 
-        // Deploy EIP-1167 minimal proxy via CREATE3 for deterministic vanity address.
-        // Bind salt to msg.sender to prevent front-running: an attacker cannot occupy
-        // a CREATE3 address derived from another caller's (sender, salt) pair.
-        bytes memory proxyCreationCode = abi.encodePacked(
-            hex"3d602d80600a3d3981f3363d3d373d3d3d363d73",
-            implementation,
-            hex"5af43d82803e903d91602b57fd5bf3"
+        instance = _deployAndInitialize(params, liquidityDeployer, gatingModule, freeMint, agentCreated);
+        masterRegistry.registerInstance(
+            instance, address(this), params.owner, params.name, metadataURI, params.vault
         );
-        bytes32 senderBoundSalt = keccak256(abi.encodePacked(msg.sender, identity.salt));
-        instance = ICreateX(CREATEX).deployCreate3(senderBoundSalt, proxyCreationCode);
-        _initializeInstance(instance, identity, liquidityDeployer, gatingModule, freeMint, agentCreated);
-        _finalizeInstance(instance, identity, metadataURI);
+        // Staking wired after registration — module's enableStaking checks isRegisteredInstance
+        if (params.stakingModule != address(0)) {
+            ERC404BondingInstance(payable(instance)).initializeStaking(params.stakingModule);
+        }
+        emit InstanceCreated(instance, params.owner, params.name, params.symbol, params.vault);
     }
 
-    function _initializeInstance(
-        address instance,
-        IdentityParams calldata identity,
+    function _deployAndInitialize(
+        CreateParams calldata params,
         address liquidityDeployer,
         address gatingModule,
         FreeMintParams calldata freeMint,
         bool agentCreated
-    ) private {
+    ) private returns (address instance) {
         // Fetch preset and validate its curve computer
-        LaunchManager.Preset memory preset = launchManager.getPreset(identity.presetId);
+        LaunchManager.Preset memory preset = launchManager.getPreset(params.presetId);
         if (!componentRegistry.isApprovedComponent(preset.curveComputer)) revert UnapprovedCurveComputer();
 
         uint256 unit = preset.unitPerNFT * 1e18;
-        // Curve is computed over the paid-bonding portion only (excludes free mint tranche)
-        uint256 curveNftCount = identity.nftCount - freeMint.allocation;
+        uint256 curveNftCount = params.nftCount - freeMint.allocation;
         ERC404BondingInstance.BondingParams memory bonding = ERC404BondingInstance.BondingParams({
-            maxSupply: identity.nftCount * unit,          // full supply (includes free mint tranche)
+            maxSupply: params.nftCount * unit,
             unit: unit,
             liquidityReserveBps: preset.liquidityReserveBps,
             curve: ICurveComputer(preset.curveComputer).computeCurveParams(
-                curveNftCount,                             // paid bonding portion
+                curveNftCount,
                 preset.targetETH,
                 preset.unitPerNFT,
                 preset.liquidityReserveBps
             )
         });
 
+        // Deploy EIP-1167 minimal proxy via CREATE3.
+        // Bind salt to msg.sender to prevent front-running.
+        bytes memory proxyCreationCode = abi.encodePacked(
+            hex"3d602d80600a3d3981f3363d3d373d3d3d363d73",
+            implementation,
+            hex"5af43d82803e903d91602b57fd5bf3"
+        );
+        bytes32 senderBoundSalt = keccak256(abi.encodePacked(msg.sender, params.salt));
+        instance = ICreateX(CREATEX).deployCreate3(senderBoundSalt, proxyCreationCode);
+
         ERC404BondingInstance(payable(instance)).initialize(
-            identity.owner, identity.vault, bonding, liquidityDeployer, gatingModule
+            params.owner, params.vault, bonding, liquidityDeployer, gatingModule
         );
         ERC404BondingInstance(payable(instance)).initializeProtocol(
             ERC404BondingInstance.ProtocolParams({
@@ -258,9 +241,8 @@ contract ERC404Factory is OwnableRoles, ReentrancyGuard, IFactory {
             })
         );
         ERC404BondingInstance(payable(instance)).initializeMetadata(
-            identity.name, identity.symbol, identity.styleUri
+            params.name, params.symbol, params.styleUri
         );
-        // Wire free mint tranche (no-op when allocation == 0)
         ERC404BondingInstance(payable(instance)).initializeFreeMint(
             freeMint.allocation, freeMint.scope
         );
@@ -269,27 +251,25 @@ contract ERC404Factory is OwnableRoles, ReentrancyGuard, IFactory {
         }
     }
 
-    function _finalizeInstance(
-        address instance,
-        IdentityParams calldata identity,
-        string calldata metadataURI
-    ) private {
-        masterRegistry.registerInstance(
-            instance, address(this), identity.owner, identity.name, metadataURI, identity.vault
-        );
-        launchManager.applyTierPerks(
-            instance,
-            LaunchManager.CreationTier(uint8(identity.creationTier)),
-            identity.owner
-        );
-        emit InstanceCreated(instance, identity.owner, identity.name, identity.symbol, identity.vault);
+    // ── Admin ─────────────────────────────────────────────────────────────────
+
+    function setProtocolTreasury(address _treasury) external onlyRoles(PROTOCOL_ROLE) {
+        if (_treasury == address(0)) revert InvalidAddress();
+        address old = protocolTreasury;
+        protocolTreasury = _treasury;
+        emit ProtocolTreasuryUpdated(old, _treasury);
     }
 
-    /**
-     * @notice Get factory features
-     */
-    function getFeatures() external view returns (bytes32[] memory) {
-        return _features;
+    function setBondingFeeBps(uint256 _bps) external onlyRoles(PROTOCOL_ROLE) {
+        if (_bps > 300) revert MaxBondingFeeExceeded();
+        bondingFeeBps = _bps;
+        emit BondingFeeUpdated(_bps);
+    }
+
+    // ── IFactory ─────────────────────────────────────────────────────────────
+
+    function protocol() external view returns (address) {
+        return owner();
     }
 
     function features() external view returns (bytes32[] memory) {
@@ -302,34 +282,9 @@ contract ERC404Factory is OwnableRoles, ReentrancyGuard, IFactory {
         return req;
     }
 
-    function protocol() external view returns (address) {
-        return owner();
-    }
-
-    function setProtocolTreasury(address _treasury) external onlyRoles(PROTOCOL_ROLE) {
-        if (_treasury == address(0)) revert InvalidAddress();
-        address old = protocolTreasury;
-        protocolTreasury = _treasury;
-        emit ProtocolTreasuryUpdated(old, _treasury);
-    }
-
-    function withdrawProtocolFees() external onlyRoles(PROTOCOL_ROLE) {
-        if (protocolTreasury == address(0)) revert TreasuryNotSet();
-        uint256 amount = accumulatedProtocolFees;
-        if (amount == 0) revert NoProtocolFees();
-        accumulatedProtocolFees = 0;
-        SafeTransferLib.safeTransferETH(protocolTreasury, amount);
-        emit ProtocolFeesWithdrawn(protocolTreasury, amount);
-    }
-
-    function setBondingFeeBps(uint256 _bps) external onlyRoles(PROTOCOL_ROLE) {
-        if (_bps > 300) revert MaxBondingFeeExceeded();
-        bondingFeeBps = _bps;
-        emit BondingFeeUpdated(_bps);
-    }
+    // ── Utilities ────────────────────────────────────────────────────────────
 
     /// @notice Preview the deterministic address for a given (creator, salt) pair.
-    /// @param creator The address that will call createInstance / createInstanceWithTiers.
     function computeInstanceAddress(address creator, bytes32 salt) external view returns (address) {
         bytes32 senderBoundSalt = keccak256(abi.encodePacked(creator, salt));
         bytes32 guardedSalt = keccak256(abi.encodePacked(uint256(uint160(address(this))), senderBoundSalt));

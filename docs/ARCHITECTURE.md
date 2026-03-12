@@ -191,68 +191,189 @@ Multiple vault instances per alignment target are supported. A single target (e.
 
 ## 5. Factory System
 
-Factories create project instances. Each factory type serves a different use case.
+Factories create project instances. Three factory types serve different use cases. All three follow the same structural doctrine.
 
-### Direct Wiring Pattern
+### Factory Doctrine
 
-All factories receive infrastructure addresses at construction (immutable):
-- `masterRegistry` — for instance registration and name collision checks
-- `globalMessageRegistry` — passed through to instances for activity feed posting
+Every factory follows the same pattern:
 
-Instances receive `globalMessageRegistry` directly from their factory at construction. There is no runtime lookup through MasterRegistry — this eliminates the service locator anti-pattern and makes dependencies explicit.
+**Single entry point.** One `createInstance(...)` function. No overloads, no tier variants.
 
-### ERC404 Bonding Factory
+**Factory-local `CreateParams` struct.** Each factory defines its own `CreateParams` — not in a shared interface — because the fields are project-specific.
 
-Creates hybrid ERC20/ERC721 tokens with bonding curves. A single `ERC404Factory` works with any DAO-approved liquidity deployer and any DEX — artists choose their deployer at instance creation time.
+**Component-validated inputs.** User-supplied module addresses (gating module, liquidity deployer, staking module) are validated against `ComponentRegistry.isApprovedComponent()` at call time. Only DAO-approved components are accepted. The check is tag-agnostic — any approved address passes, regardless of which component tag it was approved under.
+
+**Fees forwarded directly to treasury.** Any `msg.value` sent to a factory is forwarded immediately to `protocolTreasury` before any other work. Factories hold no ETH.
+
+**Agents call instances directly.** Factory relay functions do not exist. When a caller is not the declared owner, the factory checks `masterRegistry.isAgent(msg.sender)`. If the check passes, agent delegation is enabled on the deployed instance via `setAgentDelegationFromFactory()`.
+
+**Promotion is external.** FeaturedQueueManager and PromotionBadges are not wired to factories in any way.
+
+**Factory registers the instance.** After deploying via CreateX CREATE3, the factory calls `masterRegistry.registerInstance()`. That is the factory's final act.
+
+**Direct wiring.** All factories receive `masterRegistry` and `globalMessageRegistry` at construction. These are passed through to instances — no runtime lookup through MasterRegistry. This eliminates the service locator anti-pattern.
+
+### Component System
+
+`ComponentRegistry` (UUPS upgradeable, owned by DAO via Timelock) is the DAO-governed approval list for pluggable factory components.
+
+**Component tags** (defined as constants in `FeatureUtils`):
+
+| Constant | Tag hash |
+|----------|---------|
+| `GATING` | `keccak256("gating")` |
+| `LIQUIDITY_DEPLOYER` | `keccak256("liquidity")` |
+| `STAKING` | `keccak256("staking")` |
+| `DYNAMIC_PRICING` | `keccak256("dynamic_pricing")` |
+| *(also)* | `keccak256("curve")` |
+
+Each factory advertises which component slots it supports via `features()` and which are required via `requiredFeatures()`. Callers can query these to know which slots must be filled and which are optional.
+
+### ERC404 Bonding Factory (`src/factories/erc404/ERC404Factory.sol`)
+
+Creates hybrid ERC20/ERC721 tokens with bonding curves. A single `ERC404Factory` works with any DAO-approved liquidity deployer — artists choose their deployer at instance creation time.
+
+**Signature:**
+```solidity
+function createInstance(
+    CreateParams calldata params,
+    string calldata metadataURI,
+    address liquidityDeployer,
+    address gatingModule,
+    FreeMintParams calldata freeMint
+) external payable returns (address instance)
+```
+
+**`CreateParams`:**
+```solidity
+struct CreateParams {
+    bytes32 salt;
+    string name;
+    string symbol;
+    string styleUri;
+    address owner;
+    address vault;
+    uint256 nftCount;
+    uint8 presetId;
+    address stakingModule; // address(0) = staking not available for this instance
+}
+```
+
+**`features()`:** `[GATING, LIQUIDITY_DEPLOYER, STAKING]`
+**`requiredFeatures()`:** `[LIQUIDITY_DEPLOYER]`
+
+**Component slots:**
+- `liquidityDeployer` — required. Validated against ComponentRegistry. Handles LP deployment at graduation. Implements `ILiquidityDeployerModule`.
+- `gatingModule` — optional. `address(0)` = open access. Controls who can participate (paid minting, free minting, or both), gated by a DAO-approved `IGatingModule`.
+- `stakingModule` — optional. `address(0)` = staking unavailable for this instance.
+
+**`FreeMintParams`** (shared struct in `IFactoryTypes.sol`, used by ERC404 and ERC1155):
+```solidity
+struct FreeMintParams {
+    uint256 allocation; // NFT count reserved for zero-cost claims (0 = disabled)
+    GatingScope scope;  // BOTH | FREE_MINT_ONLY | PAID_ONLY
+}
+```
+`scope` controls which entry points the gating module guards. `allocation` NFTs are reserved for zero-cost claims; these are excluded from the bonding curve supply when computing curve parameters.
+
+**Bonding curve preset:**
+Curve shape is determined by a `LaunchManager` preset identified by `params.presetId`. The preset holds `targetETH`, `unitPerNFT`, `liquidityReserveBps`, and the address of a `ICurveComputer` implementation. The factory calls the computer once at creation to derive `BondingCurveMath.Params`; thereafter the instance uses `BondingCurveMath` directly — no stored curve computer reference on the instance. The preset's curve computer is also validated against ComponentRegistry.
 
 **Instance lifecycle:**
-1. Artist deploys instance via factory, choosing a vault binding, a `LaunchManager` preset, and a liquidity deployer
-2. Users buy tokens on the bonding curve (`buyBonding()`)
-3. Bonding fees (1%) accumulate in the reserve (not extracted)
-4. At graduation, anyone triggers `deployLiquidity()` — the chosen deployer handles LP setup
-5. 1% of raise → protocol treasury, 19% → vault via `receiveContribution`, 80% → LP pool
+1. Artist calls `createInstance()`, selecting a vault, preset, liquidity deployer, and optional gating/staking modules
+2. Factory validates all component addresses, forwards any `msg.value` to treasury, deploys instance via CREATE3, calls `masterRegistry.registerInstance()`
+3. If `stakingModule != address(0)`, factory calls `instance.initializeStaking(stakingModule)` after registration (module's `enableStaking` checks `isRegisteredInstance`, so it must run post-registration)
+4. Instance is live: users buy tokens on the bonding curve (`buyBonding()`); bonding fees (default 1%) accumulate in the reserve
+5. At graduation threshold, anyone triggers `deployLiquidity()` — the chosen deployer handles LP setup: 1% of raise → protocol treasury, 19% → vault via `receiveContribution`, 80% → LP pool
 
-**Pluggable component model:**
+**Staking lifecycle:**
+The staking module (`ERC404StakingModule`) is a singleton accounting backend. It holds no ETH or tokens. All state is keyed by instance address.
 
-The factory advertises two user-selectable component slots via `features()`:
-- `GATING` (`keccak256("gating")`) — optional gating module that controls who can participate (e.g., password tiers). Pass `address(0)` for open access.
-- `LIQUIDITY_DEPLOYER` (`keccak256("liquidity")`) — liquidity deployment module that executes graduation into a DEX pool. Implements `ILiquidityDeployerModule`.
+- **`initializeStaking(module)`** — called by factory post-registration. Wires the module address into the instance.
+- **`activateStaking()`** — called by the instance owner post-deploy. Irreversible. Calls `stakingModule.enableStaking()`, which requires the instance to already be registered.
+- Once active: users stake ERC20 tokens in the instance. The module tracks balances using a Synthetix `rewardPerToken` model (`rewardPerTokenStored` accumulates ETH-per-staked-token scaled 1e18; `rewardPerTokenPaid` is a per-user checkpoint).
+- **Fee flow**: vault LP yield accrues → instance owner calls `claimAllFees()` → ETH lands in instance → instance calls `stakingModule.recordFeesReceived(delta)` → stakers claim via `claimStakingRewards()`.
 
-Both slots are validated against `ComponentRegistry` at instance creation — only DAO-approved components are accepted.
-
-Bonding curve shape is determined by a `LaunchManager` preset identified by `identity.presetId`. The preset holds `targetETH`, `unitPerNFT`, `liquidityReserveBps`, and the address of a `ICurveComputer` implementation. The computer is called once at creation to derive `BondingCurveMath.Params`; thereafter the instance uses `BondingCurveMath` directly for buy/sell math — no stored curve computer reference on the instance.
-
-**Key features:**
-- Tier system: configurable gating via a DAO-approved `IGatingModule` implementation
-- Reroll: NFT reshuffling mechanism
-- Creation tiers: `STANDARD`, `PREMIUM`, `LAUNCH` — grant promotion perks via `LaunchManager`
-
-**Fee parameters (immutable per instance):**
-- `bondingFeeBps` — fee on bonding purchases (default 100 = 1%), accumulates in reserve
+**VaultCapabilityWarning:** The factory emits `VaultCapabilityWarning(vault, keccak256("YIELD_GENERATION"))` if the vault does not report `YIELD_GENERATION` support. This is a soft check — it emits and continues, does not revert.
 
 **Factory family components:**
-- `LaunchManager` — Orchestrates instance creation lifecycle including tier perks (promotion badges, featured queue placement). Wired to PromotionBadges and FeaturedQueueManager. Holds presets.
-- `CurveParamsComputer` — Default `ICurveComputer` implementation. Computes bonding curve parameters (coefficients, normalization) from preset configuration.
-- `ComponentRegistry` — DAO-governed approval list for pluggable components. Factories consult `isApprovedComponent()` at creation time to validate user-supplied deployer and gating module addresses.
+- `LaunchManager` — holds presets only. No tier perks. Preset gives `targetETH`, `unitPerNFT`, `liquidityReserveBps`, `curveComputer`.
+- `CurveParamsComputer` — default `ICurveComputer` implementation. Computes bonding curve parameters (coefficients, normalization) from preset configuration.
+- `ComponentRegistry` — DAO-governed approval list consulted at creation time.
 
-### ERC1155 Edition Factory
+### ERC1155 Edition Factory (`src/factories/erc1155/ERC1155Factory.sol`)
 
 Creates open-edition or limited-edition NFTs for artists.
 
-**Instance lifecycle:**
-1. Artist deploys edition with pricing model and vault binding
-2. Users mint editions at configured price
-3. Artist withdraws proceeds — 1% to protocol treasury, 19% to vault, 80% to artist
-4. Artist can claim proportional vault fees via `claimVaultFees()`
+**Signature:**
+```solidity
+function createInstance(
+    bytes32 salt,
+    CreateParams calldata params
+) external payable returns (address instance)
+```
 
-**Pricing models:**
+**`CreateParams`:**
+```solidity
+struct CreateParams {
+    string name;
+    string metadataURI;
+    address creator;
+    address vault;
+    string styleUri;
+    address gatingModule;    // address(0) = open
+    FreeMintParams freeMint;
+}
+```
+
+**`features()`:** `[GATING]` (also includes `DYNAMIC_PRICING` lazily when a dynamic pricing module is set on the factory)
+**`requiredFeatures()`:** `[]`
+
+**Component slots:**
+- `gatingModule` — optional, validated against ComponentRegistry if non-zero.
+
+**Pricing models** — plugged in post-deploy by the creator on the instance:
 - `UNLIMITED` — fixed price, infinite supply
 - `LIMITED_FIXED` — fixed price, capped supply
-- `LIMITED_DYNAMIC` — exponential price increase: `price = basePrice × (1 + rate)^mintedCount`
+- `LIMITED_DYNAMIC` — dynamic pricing via `DynamicPricingModule` (a DAO-approved component set on the factory, wired to instances at construction)
 
-### ERC721 Auction Factory
+**Instance lifecycle:**
+1. Creator calls `createInstance()`, selecting a vault and optional gating module
+2. Factory validates, deploys via CREATE3, registers
+3. Creator configures pricing model on the instance
+4. Users mint; on withdrawal: 1% → protocol treasury, 19% → vault, 80% → artist
 
-Creates auction-based NFT drops.
+### ERC721 Auction Factory (`src/factories/erc721/ERC721AuctionFactory.sol`)
+
+Creates multi-line auction-based NFT drops.
+
+**Signature:**
+```solidity
+function createInstance(
+    bytes32 salt,
+    CreateParams calldata params
+) external payable returns (address instance)
+```
+
+**`CreateParams`:**
+```solidity
+struct CreateParams {
+    string name;
+    string metadataURI;
+    address creator;
+    address vault;
+    string symbol;
+    uint8 lines;          // number of parallel auction lines
+    uint40 baseDuration;
+    uint40 timeBuffer;
+    uint256 bidIncrement;
+}
+```
+
+**`features()`:** `[]`
+**`requiredFeatures()`:** `[]`
+
+No pluggable component slots. The `lines` parameter determines how many parallel auction lines run simultaneously. On settlement: 1% of winning bid → protocol treasury, 19% → vault, 80% → artist, plus creator deposit refunded.
 
 ### Instance-Vault Binding
 

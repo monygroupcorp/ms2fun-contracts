@@ -63,7 +63,12 @@ contract ERC1155Instance is Ownable, ReentrancyGuard, IInstanceLifecycle {
         LIMITED_DYNAMIC // Limited supply, exponential price increase
     }
 
-    struct ComponentAddresses {
+    /// @notice All addresses wired at construction. Passed as one struct to keep the
+    ///         constructor under the stack-depth limit without via-ir.
+    struct InstanceInit {
+        address globalMessageRegistry;
+        address protocolTreasury;
+        address masterRegistry;
         address gatingModule;
         address dynamicPricingModule;
     }
@@ -179,39 +184,34 @@ contract ERC1155Instance is Ownable, ReentrancyGuard, IInstanceLifecycle {
 
     constructor(
         string memory _name,
-        string memory /* metadataURI */,
         address _creator,
         address _factory,
         address _vault,
         string memory _styleUri,
-        address _globalMessageRegistry,
-        // slither-disable-next-line missing-zero-check
-        address _protocolTreasury,
-        address _masterRegistry,
-        ComponentAddresses memory _components,
+        InstanceInit memory _init,
         bool _agentCreated
     ) {
         if (bytes(_name).length == 0) revert InvalidName();
         if (_creator == address(0)) revert InvalidAddress();
         if (_factory == address(0)) revert InvalidAddress();
         if (_vault == address(0)) revert InvalidAddress();
-        if (_globalMessageRegistry == address(0)) revert InvalidAddress();
+        if (_init.globalMessageRegistry == address(0)) revert InvalidAddress();
 
         _initializeOwner(_creator);
         name = _name;
         creator = _creator;
         factory = _factory;
         vault = IAlignmentVault(payable(_vault));
-        masterRegistry = IMasterRegistry(_masterRegistry);
-        globalMessageRegistry = IGlobalMessageRegistry(_globalMessageRegistry);
-        protocolTreasury = _protocolTreasury;
+        masterRegistry = IMasterRegistry(_init.masterRegistry);
+        globalMessageRegistry = IGlobalMessageRegistry(_init.globalMessageRegistry);
+        protocolTreasury = _init.protocolTreasury;
         styleUri = _styleUri;
         nextEditionId = 1;
-        if (_components.gatingModule != address(0)) {
-            gatingModule = IGatingModule(_components.gatingModule);
+        if (_init.gatingModule != address(0)) {
+            gatingModule = IGatingModule(_init.gatingModule);
         }
-        if (_components.dynamicPricingModule != address(0)) {
-            dynamicPricingModule = IDynamicPricingModule(_components.dynamicPricingModule);
+        if (_init.dynamicPricingModule != address(0)) {
+            dynamicPricingModule = IDynamicPricingModule(_init.dynamicPricingModule);
         }
         emit StateChanged(STATE_MINTING);
         agentDelegationEnabled = _agentCreated;
@@ -295,8 +295,8 @@ contract ERC1155Instance is Ownable, ReentrancyGuard, IInstanceLifecycle {
     ) external {
         if (msg.sender == owner()) {
             // Owner always allowed
-        } else if (msg.sender == factory && agentDelegationEnabled) {
-            // Factory forwarding agent call, delegation is on
+        } else if (agentDelegationEnabled && masterRegistry.isAgent(msg.sender)) {
+            // Direct agent call when delegation is on
         } else {
             revert Unauthorized();
         }

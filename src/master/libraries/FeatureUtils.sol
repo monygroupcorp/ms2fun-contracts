@@ -17,6 +17,7 @@ library FeatureUtils {
     bytes32 public constant GATING             = keccak256("gating");
     bytes32 public constant LIQUIDITY_DEPLOYER = keccak256("liquidity");
     bytes32 public constant DYNAMIC_PRICING    = keccak256("dynamic_pricing");
+    bytes32 public constant STAKING            = keccak256("staking");
 
     /**
      * @notice Check if a feature array contains a specific feature

@@ -19,7 +19,7 @@ src/
 ├── dao/                # GrandCentral (Mol*** DAO) + StipendConductor
 ├── master/             # MasterRegistryV1 (UUPS), FeaturedQueueManager
 ├── factories/          # ERC404, ERC1155, ERC721 factories and instances
-├── vaults/             # UltraAlignmentVault (share-based fee hub)
+├── vaults/             # UniAlignmentVault (V4), ZAMMAlignmentVault, CypherAlignmentVault
 ├── registry/           # VaultRegistry, GlobalMessageRegistry
 ├── treasury/           # ProtocolTreasuryV1
 ├── interfaces/         # IAlignmentVault, IFactory, IFactoryInstance
@@ -88,13 +88,25 @@ LP Yield → 1% protocol cut + 99% benefactors (proportional to contributions)
 
 ### Factory System
 
+Three factory types, one structural doctrine: single `createInstance(...)` entry point, `CreateParams` struct defined per-factory, component inputs validated against `ComponentRegistry`, any `msg.value` forwarded immediately to treasury (factories hold no ETH), factory registers the instance as its final act.
+
 | Factory | Token Standard | Fee Model |
 |---------|---------------|-----------|
-| **ERC404 Bonding** | Hybrid ERC20/ERC721 | 1% bonding fee (in reserve), 1/19/80 at graduation, V4 hook swap tax → vault |
-| **ERC1155 Edition** | ERC1155 multi-token | 1% protocol + 19% vault + 80% artist on withdrawal |
-| **ERC721 Auction** | ERC721 | 1% protocol + 19% vault + 80% artist on settlement |
+| **ERC404 Bonding** (`ERC404Factory`) | Hybrid ERC20/ERC721 | 1% bonding fee (in reserve), 1/19/80 at graduation, V4 hook swap tax → vault |
+| **ERC1155 Edition** (`ERC1155Factory`) | ERC1155 multi-token | 1% protocol + 19% vault + 80% artist on withdrawal |
+| **ERC721 Auction** (`ERC721AuctionFactory`) | ERC721 | 1% protocol + 19% vault + 80% artist on settlement |
 
-All instances have an **immutable** vault reference set at construction.
+**Component Registry.** Pluggable module addresses (gating module, liquidity deployer, staking module, dynamic pricing module) must be approved in `ComponentRegistry` before use. Factories call `componentRegistry.isApprovedComponent(addr)` at creation time. The DAO governs the approval list via Timelock. Component slots per factory:
+
+- **ERC404**: `LIQUIDITY_DEPLOYER` (required), `GATING` (optional), `STAKING` (optional). `features()` returns all three; `requiredFeatures()` returns `[LIQUIDITY_DEPLOYER]`.
+- **ERC1155**: `GATING` (optional). `features()` returns `[GATING]` (plus `DYNAMIC_PRICING` when a module is configured on the factory); `requiredFeatures()` returns `[]`.
+- **ERC721**: no component slots. `features()` and `requiredFeatures()` return `[]`.
+
+**Agent delegation.** Agents are registered in MasterRegistry. A factory caller who is not the declared instance owner must be a registered agent (`masterRegistry.isAgent(msg.sender)`). If the check passes, the factory enables agent delegation on the instance. Agents interact with deployed instances directly — there are no factory relay functions.
+
+**Staking (ERC404 only).** `ERC404StakingModule` is a singleton accounting backend (holds no ETH or tokens, all state keyed by instance address). Wired at instance creation if `stakingModule != address(0)`; activated post-deploy by the owner via `activateStaking()` (irreversible). Uses a Synthetix `rewardPerToken` model for ETH reward distribution to stakers.
+
+All instances have an **immutable** vault reference set at construction. MasterRegistry enforces this at registration.
 
 ### Governance (GrandCentral + Timelock)
 

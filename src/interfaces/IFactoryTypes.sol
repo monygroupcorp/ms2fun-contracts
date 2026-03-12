@@ -9,15 +9,4 @@ struct FreeMintParams {
     GatingScope scope;  // which entry points the gating module guards
 }
 
-/// @notice User-provided identity for any ERC404 factory instance.
-struct IdentityParams {
-    bytes32 salt;          // CREATE3 deployment salt for vanity address
-    string  name;
-    string  symbol;
-    string  styleUri;
-    address owner;
-    address vault;
-    uint256 nftCount;
-    uint8   presetId;      // points into LaunchManager.getPreset()
-    uint8   creationTier;  // 0=STANDARD, 1=PREMIUM, 2=LAUNCH — maps to LaunchManager.CreationTier
-}
+

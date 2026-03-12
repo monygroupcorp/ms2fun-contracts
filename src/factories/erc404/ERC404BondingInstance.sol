@@ -13,6 +13,7 @@ import { IMasterRegistry } from "../../master/interfaces/IMasterRegistry.sol";
 import { IGlobalMessageRegistry } from "../../registry/interfaces/IGlobalMessageRegistry.sol";
 import { IInstanceLifecycle, TYPE_ERC404, STATE_BONDING, STATE_PAUSED, STATE_GRADUATED } from "../../interfaces/IInstanceLifecycle.sol";
 import { IGatingModule, GatingScope } from "../../gating/IGatingModule.sol";
+import { IERC404StakingModule } from "../../interfaces/IERC404StakingModule.sol";
 
 // ── Errors ────────────────────────────────────────────────────────────────────
 error AlreadyInitialized();
@@ -49,6 +50,8 @@ error FreeMintDisabled();
 error FreeMintAlreadyClaimed();
 error FreeMintExhausted();
 error FreeMintNotInitialized();
+error StakingModuleNotSet();
+error StakingAlreadyActive();
 error PurchaseTooSmall();
 error OnlyFactory();
 error NotInitialized();
@@ -128,6 +131,10 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IInstanceLife
     GatingScope public gatingScope;
     bool private _freeMintInitialized;
 
+    // Staking module (address(0) = staking not available for this instance)
+    IERC404StakingModule public stakingModule;
+    bool public stakingActive;
+
     // ── Events ────────────────────────────────────────────────────────────────
     event BondingSale(address indexed user, uint256 amount, uint256 cost, bool isBuy);
     event BondingOpenTimeSet(uint256 openTime);
@@ -139,6 +146,10 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IInstanceLife
     event BondingFeePaid(address indexed buyer, uint256 feeAmount);
     event FreeMintClaimed(address indexed user);
     event AgentDelegationChanged(bool enabled);
+    event StakingActivated(address indexed stakingModule);
+    event Staked(address indexed user, uint256 amount);
+    event Unstaked(address indexed user, uint256 amount, uint256 rewardPaid);
+    event StakingRewardsClaimed(address indexed user, uint256 amount);
 
     // ┌─────────────────────────┐
     // │      Constructor        │
@@ -229,6 +240,13 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IInstanceLife
         gatingScope = scope;
     }
 
+    /// @notice Wire in a staking module. Called by factory after masterRegistry.registerInstance.
+    ///         The module is dormant until the owner calls activateStaking().
+    function initializeStaking(address _stakingModule) external {
+        if (msg.sender != factory) revert OnlyFactory();
+        stakingModule = IERC404StakingModule(_stakingModule);
+    }
+
     /// @notice Toggle agent delegation for this instance
     function setAgentDelegation(bool enabled) external {
         if (msg.sender != owner()) revert InvalidOwner();
@@ -301,12 +319,55 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IInstanceLife
         masterRegistry.migrateVault(address(this), newVault);
     }
 
+    /// @notice Activate staking for this instance. Irreversible. Requires stakingModule to be set.
+    function activateStaking() external onlyOwner {
+        if (address(stakingModule) == address(0)) revert StakingModuleNotSet();
+        if (stakingActive) revert StakingAlreadyActive();
+        stakingActive = true;
+        stakingModule.enableStaking();
+        emit StakingActivated(address(stakingModule));
+    }
+
     // slither-disable-next-line calls-loop,unused-return
     function claimAllFees() external onlyOwner {
+        uint256 before = address(this).balance;
         address[] memory allVaults = masterRegistry.getInstanceVaults(address(this));
         for (uint256 i = 0; i < allVaults.length; i++) {
             IAlignmentVault(payable(allVaults[i])).claimFees();
         }
+        if (stakingActive) {
+            uint256 delta = address(this).balance - before;
+            if (delta > 0) stakingModule.recordFeesReceived(delta);
+        }
+    }
+
+    // ┌─────────────────────────┐
+    // │   Staking Functions     │
+    // └─────────────────────────┘
+
+    /// @notice Stake `amount` tokens. Tokens are held by this contract while staked.
+    function stake(uint256 amount) external nonReentrant {
+        if (!stakingActive) revert StakingModuleNotSet();
+        _transfer(msg.sender, address(this), amount);
+        stakingModule.recordStake(msg.sender, amount);
+        emit Staked(msg.sender, amount);
+    }
+
+    /// @notice Unstake `amount` tokens and auto-claim any pending ETH rewards.
+    function unstake(uint256 amount) external nonReentrant {
+        if (!stakingActive) revert StakingModuleNotSet();
+        uint256 rewardAmount = stakingModule.recordUnstake(msg.sender, amount);
+        _transfer(address(this), msg.sender, amount);
+        if (rewardAmount > 0) SafeTransferLib.safeTransferETH(msg.sender, rewardAmount);
+        emit Unstaked(msg.sender, amount, rewardAmount);
+    }
+
+    /// @notice Claim pending ETH staking rewards without unstaking.
+    function claimStakingRewards() external nonReentrant {
+        if (!stakingActive) revert StakingModuleNotSet();
+        uint256 rewardAmount = stakingModule.computeClaim(msg.sender);
+        SafeTransferLib.safeTransferETH(msg.sender, rewardAmount);
+        emit StakingRewardsClaimed(msg.sender, rewardAmount);
     }
 
     // ┌─────────────────────────┐

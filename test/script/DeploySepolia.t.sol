@@ -68,20 +68,9 @@ contract DeploySepoliaTest is Test {
     }
 
     function test_factoryWiring() public view {
-        // ERC404Factory: tier perks now via LaunchManager
         assertEq(s.erc404Factory().protocolTreasury(), address(s.treasury()));
-        assertEq(address(s.launchManager().promotionBadges()), address(s.promotionBadges()));
-        assertEq(address(s.launchManager().featuredQueueManager()), address(s.queueManager()));
-
-        // ERC1155Factory
         assertEq(s.erc1155Factory().protocolTreasury(), address(s.treasury()));
-        assertEq(address(s.erc1155Factory().promotionBadges()), address(s.promotionBadges()));
-        assertEq(address(s.erc1155Factory().featuredQueueManager()), address(s.queueManager()));
-
-        // ERC721AuctionFactory
         assertEq(s.erc721Factory().protocolTreasury(), address(s.treasury()));
-        assertEq(address(s.erc721Factory().promotionBadges()), address(s.promotionBadges()));
-        assertEq(address(s.erc721Factory().featuredQueueManager()), address(s.queueManager()));
     }
 
     function test_masterRegistryWiring() public view {
@@ -100,9 +89,7 @@ contract DeploySepoliaTest is Test {
     }
 
     function test_promotionBadgesAuthorized() public view {
-        // ERC404: LaunchManager is authorized (not factory directly)
         assertTrue(s.promotionBadges().authorizedFactories(address(s.launchManager())));
-        assertTrue(s.promotionBadges().authorizedFactories(address(s.erc1155Factory())));
         assertTrue(s.promotionBadges().authorizedFactories(address(s.erc721Factory())));
     }
 

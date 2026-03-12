@@ -205,8 +205,8 @@ contract ERC721AuctionInstance is ERC721, Ownable, ReentrancyGuard, IInstanceLif
     function queuePiece(string calldata _tokenURI) external payable nonReentrant {
         if (msg.sender == owner()) {
             // Owner always allowed
-        } else if (msg.sender == factory && agentDelegationEnabled) {
-            // Factory forwarding agent call
+        } else if (agentDelegationEnabled && masterRegistry.isAgent(msg.sender)) {
+            // Approved agent with delegation enabled
         } else {
             revert Unauthorized();
         }

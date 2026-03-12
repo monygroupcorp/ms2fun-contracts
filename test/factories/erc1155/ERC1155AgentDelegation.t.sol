@@ -20,6 +20,8 @@ import {MockAlignmentRegistry} from "../../mocks/MockAlignmentRegistry.sol";
 import {IAlignmentRegistry} from "../../../src/master/interfaces/IAlignmentRegistry.sol";
 import {ICreateX, CREATEX} from "../../../src/shared/CreateXConstants.sol";
 import {CREATEX_BYTECODE} from "createx-forge/script/CreateX.d.sol";
+import {FreeMintParams} from "../../../src/interfaces/IFactoryTypes.sol";
+import {GatingScope} from "../../../src/gating/IGatingModule.sol";
 
 contract ERC1155AgentDelegationTest is GlobalMessagingTestBase {
     ERC1155Factory public factory;
@@ -42,6 +44,18 @@ contract ERC1155AgentDelegationTest is GlobalMessagingTestBase {
         return bytes32(abi.encodePacked(address(factory), uint8(0x00), bytes11(uint88(_saltCounter))));
     }
 
+    function _params(string memory _name, address _creator) internal view returns (ERC1155Factory.CreateParams memory) {
+        return ERC1155Factory.CreateParams({
+            name: _name,
+            metadataURI: "ipfs://test",
+            creator: _creator,
+            vault: address(vault),
+            styleUri: "",
+            gatingModule: address(0),
+            freeMint: FreeMintParams({allocation: 0, scope: GatingScope.BOTH})
+        });
+    }
+
     function setUp() public {
         vm.startPrank(owner);
         vm.etch(CREATEX, CREATEX_BYTECODE);
@@ -55,7 +69,7 @@ contract ERC1155AgentDelegationTest is GlobalMessagingTestBase {
             UniAlignmentVault _impl = new UniAlignmentVault();
             vault = UniAlignmentVault(payable(LibClone.clone(address(_impl))));
             vault.initialize(
-                address(this),
+                owner,
                 address(0x2222222222222222222222222222222222222222),
                 address(0x4444444444444444444444444444444444444444),
                 address(token),
@@ -82,7 +96,7 @@ contract ERC1155AgentDelegationTest is GlobalMessagingTestBase {
         componentRegistry = ComponentRegistry(compRegProxy);
         componentRegistry.initialize(owner);
 
-        factory = new ERC1155Factory(address(mockRegistry), address(0x200), address(globalRegistry), address(componentRegistry));
+        factory = new ERC1155Factory(address(mockRegistry), address(globalRegistry), address(componentRegistry));
 
         // Register agent globally (on mock registry)
         mockRegistry.setAgent(agent, true);
@@ -95,12 +109,8 @@ contract ERC1155AgentDelegationTest is GlobalMessagingTestBase {
     function test_agent_creates_instance_on_behalf() public {
         vm.deal(agent, 1 ether);
         vm.prank(agent);
-        address instance = factory.createInstance{value: 0.01 ether}(
-            _nextSalt(), "Agent Created",
-            "ipfs://test",
-            artist,        // creator is artist, not agent
-            address(vault),
-            ""
+        address instance = factory.createInstance{value: 0}(
+            _nextSalt(), _params("Agent Created", artist)  // creator is artist, not agent
         );
 
         ERC1155Instance inst = ERC1155Instance(instance);
@@ -111,12 +121,8 @@ contract ERC1155AgentDelegationTest is GlobalMessagingTestBase {
     function test_self_created_instance_delegation_disabled() public {
         vm.deal(artist, 1 ether);
         vm.prank(artist);
-        address instance = factory.createInstance{value: 0.01 ether}(
-            _nextSalt(), "Self Created",
-            "ipfs://test",
-            artist,
-            address(vault),
-            ""
+        address instance = factory.createInstance{value: 0}(
+            _nextSalt(), _params("Self Created", artist)
         );
 
         ERC1155Instance inst = ERC1155Instance(instance);
@@ -127,31 +133,23 @@ contract ERC1155AgentDelegationTest is GlobalMessagingTestBase {
         vm.deal(nobody, 1 ether);
         vm.prank(nobody);
         vm.expectRevert();
-        factory.createInstance{value: 0.01 ether}(
-            _nextSalt(), "Should Fail",
-            "ipfs://test",
-            artist,
-            address(vault),
-            ""
+        factory.createInstance{value: 0}(
+            _nextSalt(), _params("Should Fail", artist)
         );
     }
 
     // ── Agent adds edition via factory ──
 
-    function test_agent_adds_edition_via_factory() public {
+    function test_agent_adds_edition_via_instance() public {
         vm.deal(agent, 1 ether);
         vm.prank(agent);
-        address instance = factory.createInstance{value: 0.01 ether}(
-            _nextSalt(), "Agent Collection",
-            "ipfs://test",
-            artist,
-            address(vault),
-            ""
+        address instance = factory.createInstance{value: 0}(
+            _nextSalt(), _params("Agent Collection", artist)
         );
 
+        // agentDelegationEnabled is true because agent created on behalf of artist
         vm.prank(agent);
-        uint256 editionId = factory.addEdition(
-            instance,
+        ERC1155Instance(instance).addEdition(
             "Piece 1",
             0.1 ether,
             0,
@@ -161,29 +159,25 @@ contract ERC1155AgentDelegationTest is GlobalMessagingTestBase {
             0
         );
 
-        assertEq(editionId, 1);
+        assertEq(ERC1155Instance(instance).nextEditionId(), 2); // edition 1 added
     }
 
     function test_agent_blocked_when_delegation_disabled() public {
         vm.deal(agent, 1 ether);
         vm.prank(agent);
-        address instance = factory.createInstance{value: 0.01 ether}(
-            _nextSalt(), "Toggle Test",
-            "ipfs://test",
-            artist,
-            address(vault),
-            ""
+        address instance = factory.createInstance{value: 0}(
+            _nextSalt(), _params("Toggle Test", artist)
         );
 
         // Artist disables delegation
         vm.prank(artist);
         ERC1155Instance(instance).setAgentDelegation(false);
 
-        // Agent tries to add edition via factory — should fail at instance level
+        // Agent tries to add edition directly — should fail at instance level
         vm.prank(agent);
         vm.expectRevert();
-        factory.addEdition(
-            instance, "Piece 2", 0.1 ether, 0,
+        ERC1155Instance(instance).addEdition(
+            "Piece 2", 0.1 ether, 0,
             "ipfs://piece2", ERC1155Instance.PricingModel.UNLIMITED, 0, 0
         );
     }
@@ -191,22 +185,18 @@ contract ERC1155AgentDelegationTest is GlobalMessagingTestBase {
     function test_agent_blocked_after_global_revocation() public {
         vm.deal(agent, 1 ether);
         vm.prank(agent);
-        address instance = factory.createInstance{value: 0.01 ether}(
-            _nextSalt(), "Revoke Test",
-            "ipfs://test",
-            artist,
-            address(vault),
-            ""
+        address instance = factory.createInstance{value: 0}(
+            _nextSalt(), _params("Revoke Test", artist)
         );
 
         // Revoke agent globally
         mockRegistry.setAgent(agent, false);
 
-        // Agent tries to add edition — should fail at factory level
+        // Agent tries to add edition directly — instance checks masterRegistry.isAgent
         vm.prank(agent);
         vm.expectRevert();
-        factory.addEdition(
-            instance, "Piece 2", 0.1 ether, 0,
+        ERC1155Instance(instance).addEdition(
+            "Piece 2", 0.1 ether, 0,
             "ipfs://piece2", ERC1155Instance.PricingModel.UNLIMITED, 0, 0
         );
     }
@@ -216,12 +206,8 @@ contract ERC1155AgentDelegationTest is GlobalMessagingTestBase {
     function test_artist_adds_edition_directly() public {
         vm.deal(artist, 1 ether);
         vm.prank(artist);
-        address instance = factory.createInstance{value: 0.01 ether}(
-            _nextSalt(), "Direct Test",
-            "ipfs://test",
-            artist,
-            address(vault),
-            ""
+        address instance = factory.createInstance{value: 0}(
+            _nextSalt(), _params("Direct Test", artist)
         );
 
         vm.prank(artist);
@@ -238,12 +224,8 @@ contract ERC1155AgentDelegationTest is GlobalMessagingTestBase {
     function test_only_owner_can_set_delegation() public {
         vm.deal(artist, 1 ether);
         vm.prank(artist);
-        address instance = factory.createInstance{value: 0.01 ether}(
-            _nextSalt(), "Owner Only",
-            "ipfs://test",
-            artist,
-            address(vault),
-            ""
+        address instance = factory.createInstance{value: 0}(
+            _nextSalt(), _params("Owner Only", artist)
         );
 
         vm.prank(nobody);

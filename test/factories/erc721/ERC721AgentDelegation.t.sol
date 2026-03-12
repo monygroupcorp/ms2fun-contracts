@@ -40,6 +40,20 @@ contract ERC721AgentDelegationTest is GlobalMessagingTestBase {
         return bytes32(abi.encodePacked(address(factory), uint8(0x00), bytes11(uint88(_saltCounter))));
     }
 
+    function _params(string memory _name, address _creator) internal view returns (ERC721AuctionFactory.CreateParams memory) {
+        return ERC721AuctionFactory.CreateParams({
+            name: _name,
+            metadataURI: "ipfs://test",
+            creator: _creator,
+            vault: address(vault),
+            symbol: "ART",
+            lines: 1,
+            baseDuration: 1 days,
+            timeBuffer: 15 minutes,
+            bidIncrement: 0.01 ether
+        });
+    }
+
     function setUp() public {
         vm.etch(CREATEX, CREATEX_BYTECODE);
 
@@ -54,7 +68,7 @@ contract ERC721AgentDelegationTest is GlobalMessagingTestBase {
             UniAlignmentVault _impl = new UniAlignmentVault();
             vault = UniAlignmentVault(payable(LibClone.clone(address(_impl))));
             vault.initialize(
-                address(this),
+                owner,
                 address(0x2222222222222222222222222222222222222222),
                 address(0x4444444444444444444444444444444444444444),
                 address(token),
@@ -89,17 +103,8 @@ contract ERC721AgentDelegationTest is GlobalMessagingTestBase {
     function test_agent_creates_instance_on_behalf() public {
         vm.deal(agent, 1 ether);
         vm.prank(agent);
-        address instance = factory.createInstance{value: 0.01 ether}(
-            _nextSalt(),
-            "Agent Auction",
-            "ipfs://test",
-            artist,
-            address(vault),
-            "AART",
-            1,           // lines
-            1 days,      // baseDuration
-            15 minutes,  // timeBuffer
-            0.01 ether   // bidIncrement
+        address instance = factory.createInstance{value: 0}(
+            _nextSalt(), _params("Agent Auction", artist)
         );
 
         ERC721AuctionInstance inst = ERC721AuctionInstance(payable(instance));
@@ -110,14 +115,8 @@ contract ERC721AgentDelegationTest is GlobalMessagingTestBase {
     function test_self_created_delegation_disabled() public {
         vm.deal(artist, 1 ether);
         vm.prank(artist);
-        address instance = factory.createInstance{value: 0.01 ether}(
-            _nextSalt(),
-            "Self Auction",
-            "ipfs://test",
-            artist,
-            address(vault),
-            "SELF",
-            1, 1 days, 15 minutes, 0.01 ether
+        address instance = factory.createInstance{value: 0}(
+            _nextSalt(), _params("Self Auction", artist)
         );
 
         assertFalse(ERC721AuctionInstance(payable(instance)).agentDelegationEnabled());
@@ -127,34 +126,23 @@ contract ERC721AgentDelegationTest is GlobalMessagingTestBase {
         vm.deal(nobody, 1 ether);
         vm.prank(nobody);
         vm.expectRevert();
-        factory.createInstance{value: 0.01 ether}(
-            _nextSalt(),
-            "Should Fail",
-            "ipfs://test",
-            artist,
-            address(vault),
-            "FAIL",
-            1, 1 days, 15 minutes, 0.01 ether
+        factory.createInstance{value: 0}(
+            _nextSalt(), _params("Should Fail", artist)
         );
     }
 
-    // ── Agent queues piece via factory ──
+    // ── Agent queues piece directly on instance ──
 
-    function test_agent_queues_piece_via_factory() public {
+    function test_agent_queues_piece_directly() public {
         vm.deal(agent, 2 ether);
         vm.prank(agent);
-        address instance = factory.createInstance{value: 0.01 ether}(
-            _nextSalt(),
-            "Queue Test",
-            "ipfs://test",
-            artist,
-            address(vault),
-            "QT",
-            1, 1 days, 15 minutes, 0.01 ether
+        address instance = factory.createInstance{value: 0}(
+            _nextSalt(), _params("Queue Test", artist)
         );
 
+        // agentDelegationEnabled is true — agent calls instance directly
         vm.prank(agent);
-        factory.queuePiece{value: 0.1 ether}(instance, "ipfs://piece1");
+        ERC721AuctionInstance(payable(instance)).queuePiece{value: 0.1 ether}("ipfs://piece1");
 
         assertEq(ERC721AuctionInstance(payable(instance)).nextTokenId(), 2);
     }
@@ -162,14 +150,8 @@ contract ERC721AgentDelegationTest is GlobalMessagingTestBase {
     function test_agent_blocked_when_delegation_disabled() public {
         vm.deal(agent, 2 ether);
         vm.prank(agent);
-        address instance = factory.createInstance{value: 0.01 ether}(
-            _nextSalt(),
-            "Toggle Test",
-            "ipfs://test",
-            artist,
-            address(vault),
-            "TOG",
-            1, 1 days, 15 minutes, 0.01 ether
+        address instance = factory.createInstance{value: 0}(
+            _nextSalt(), _params("Toggle Test", artist)
         );
 
         vm.prank(artist);
@@ -177,27 +159,21 @@ contract ERC721AgentDelegationTest is GlobalMessagingTestBase {
 
         vm.prank(agent);
         vm.expectRevert();
-        factory.queuePiece{value: 0.1 ether}(instance, "ipfs://piece2");
+        ERC721AuctionInstance(payable(instance)).queuePiece{value: 0.1 ether}("ipfs://piece2");
     }
 
     function test_agent_blocked_after_global_revocation() public {
         vm.deal(agent, 2 ether);
         vm.prank(agent);
-        address instance = factory.createInstance{value: 0.01 ether}(
-            _nextSalt(),
-            "Revoke Test",
-            "ipfs://test",
-            artist,
-            address(vault),
-            "REV",
-            1, 1 days, 15 minutes, 0.01 ether
+        address instance = factory.createInstance{value: 0}(
+            _nextSalt(), _params("Revoke Test", artist)
         );
 
         mockRegistry.setAgent(agent, false);
 
         vm.prank(agent);
         vm.expectRevert();
-        factory.queuePiece{value: 0.1 ether}(instance, "ipfs://piece2");
+        ERC721AuctionInstance(payable(instance)).queuePiece{value: 0.1 ether}("ipfs://piece2");
     }
 
     // ── Artist direct access always works ──
@@ -205,14 +181,8 @@ contract ERC721AgentDelegationTest is GlobalMessagingTestBase {
     function test_artist_queues_piece_directly() public {
         vm.deal(artist, 1 ether);
         vm.prank(artist);
-        address instance = factory.createInstance{value: 0.01 ether}(
-            _nextSalt(),
-            "Direct Test",
-            "ipfs://test",
-            artist,
-            address(vault),
-            "DIR",
-            1, 1 days, 15 minutes, 0.01 ether
+        address instance = factory.createInstance{value: 0}(
+            _nextSalt(), _params("Direct Test", artist)
         );
 
         vm.prank(artist);
@@ -223,14 +193,8 @@ contract ERC721AgentDelegationTest is GlobalMessagingTestBase {
     function test_only_owner_can_set_delegation() public {
         vm.deal(artist, 1 ether);
         vm.prank(artist);
-        address instance = factory.createInstance{value: 0.01 ether}(
-            _nextSalt(),
-            "Auth Test",
-            "ipfs://test",
-            artist,
-            address(vault),
-            "AUTH",
-            1, 1 days, 15 minutes, 0.01 ether
+        address instance = factory.createInstance{value: 0}(
+            _nextSalt(), _params("Auth Test", artist)
         );
 
         vm.prank(nobody);

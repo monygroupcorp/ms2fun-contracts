@@ -7,12 +7,12 @@ import {ERC404BondingInstance, FreeMintDisabled, FreeMintAlreadyClaimed, FreeMin
 import {LaunchManager} from "../../../src/factories/erc404/LaunchManager.sol";
 import {CurveParamsComputer} from "../../../src/factories/erc404/CurveParamsComputer.sol";
 import {MockMasterRegistry} from "../../mocks/MockMasterRegistry.sol";
-import {IdentityParams, FreeMintParams} from "../../../src/interfaces/IFactoryTypes.sol";
+import {FreeMintParams} from "../../../src/interfaces/IFactoryTypes.sol";
+import {PasswordTierGatingModule} from "../../../src/gating/PasswordTierGatingModule.sol";
 import {GatingScope} from "../../../src/gating/IGatingModule.sol";
 import {IGatingModule} from "../../../src/gating/IGatingModule.sol";
 import {ComponentRegistry} from "../../../src/registry/ComponentRegistry.sol";
 import {ILiquidityDeployerModule} from "../../../src/interfaces/ILiquidityDeployerModule.sol";
-import {PasswordTierGatingModule} from "../../../src/gating/PasswordTierGatingModule.sol";
 import {LibClone} from "solady/utils/LibClone.sol";
 import {ICreateX, CREATEX} from "../../../src/shared/CreateXConstants.sol";
 import {CREATEX_BYTECODE} from "createx-forge/script/CreateX.d.sol";
@@ -91,7 +91,6 @@ contract ERC404FreeMintTest is Test {
             ERC404Factory.ModuleConfig({
                 globalMessageRegistry: mockGMR,
                 launchManager: address(launchMgr),
-                tierGatingModule: address(tierGatingModule),
                 componentRegistry: address(componentRegistry)
             })
         );
@@ -101,12 +100,13 @@ contract ERC404FreeMintTest is Test {
 
     // ── helpers ──────────────────────────────────────────────────────────────
 
-    function _identity() internal returns (IdentityParams memory) {
-        return IdentityParams({
+    function _identity() internal returns (ERC404Factory.CreateParams memory) {
+        return ERC404Factory.CreateParams({
             salt: _nextSalt(),
             owner: creator, nftCount: NFT_COUNT, presetId: PRESET_ID,
-            creationTier: 0, vault: address(mockVault),
-            name: "FreeMintToken", symbol: "FMT", styleUri: ""
+            vault: address(mockVault),
+            name: "FreeMintToken", symbol: "FMT", styleUri: "",
+            stakingModule: address(0)
         });
     }
 

@@ -14,7 +14,7 @@ import {ERC404BondingInstance} from "../../src/factories/erc404/ERC404BondingIns
 import {ComponentRegistry} from "../../src/registry/ComponentRegistry.sol";
 import {ILiquidityDeployerModule} from "../../src/interfaces/ILiquidityDeployerModule.sol";
 import {LibClone} from "solady/utils/LibClone.sol";
-import {IdentityParams, FreeMintParams} from "../../src/interfaces/IFactoryTypes.sol";
+import {FreeMintParams} from "../../src/interfaces/IFactoryTypes.sol";
 import {GatingScope} from "../../src/gating/IGatingModule.sol";
 import {CREATEX} from "../../src/shared/CreateXConstants.sol";
 import {CREATEX_BYTECODE} from "createx-forge/script/CreateX.d.sol";
@@ -63,6 +63,18 @@ contract NamespaceCollisionTest is Test {
         return bytes32(abi.encodePacked(address(erc404Factory), uint8(0x00), bytes11(uint88(_saltCounter))));
     }
 
+    function _erc1155Params(string memory _name, address _creator) internal view returns (ERC1155Factory.CreateParams memory) {
+        return ERC1155Factory.CreateParams({
+            name: _name,
+            metadataURI: "ipfs://metadata",
+            creator: _creator,
+            vault: address(mockVault),
+            styleUri: "",
+            gatingModule: address(0),
+            freeMint: FreeMintParams({allocation: 0, scope: GatingScope.BOTH})
+        });
+    }
+
     // Test constants
     uint256 constant INSTANCE_FEE = 0.01 ether;
     uint256 constant DEFAULT_PRESET_ID = 1;
@@ -87,8 +99,6 @@ contract NamespaceCollisionTest is Test {
         // Deploy LaunchManager and CurveParamsComputer
         LaunchManager launchManager = new LaunchManager(owner);
         CurveParamsComputer curveComputer = new CurveParamsComputer(owner);
-        PasswordTierGatingModule tierGatingModule = new PasswordTierGatingModule(address(registry));
-
         // Deploy ComponentRegistry
         ComponentRegistry compRegImpl = new ComponentRegistry();
         address compRegProxy = LibClone.deployERC1967(address(compRegImpl));
@@ -117,7 +127,6 @@ contract NamespaceCollisionTest is Test {
             ERC404Factory.ModuleConfig({
                 globalMessageRegistry: address(globalMsgRegistry),
                 launchManager: address(launchManager),
-                tierGatingModule: address(tierGatingModule),
                 componentRegistry: address(componentRegistry)
             })
         );
@@ -125,9 +134,8 @@ contract NamespaceCollisionTest is Test {
         // Deploy ERC1155Factory
         erc1155Factory = new ERC1155Factory(
             address(registry),
-            address(0), // no instance template needed
             address(globalMsgRegistry),
-            address(0)
+            address(componentRegistry)
         );
 
         // Set protocol treasury on both factories
@@ -157,9 +165,9 @@ contract NamespaceCollisionTest is Test {
 
     function _erc404Identity(string memory name_, string memory symbol_, address vault_, address owner_)
         internal
-        returns (IdentityParams memory)
+        returns (ERC404Factory.CreateParams memory)
     {
-        return IdentityParams({
+        return ERC404Factory.CreateParams({
             salt: _nextErc404Salt(),
             name: name_,
             symbol: symbol_,
@@ -168,7 +176,7 @@ contract NamespaceCollisionTest is Test {
             vault: vault_,
             nftCount: 10,
             presetId: uint8(DEFAULT_PRESET_ID),
-            creationTier: 0
+            stakingModule: address(0)
         });
     }
 
@@ -209,12 +217,7 @@ contract NamespaceCollisionTest is Test {
         vm.startPrank(creator1);
 
         erc1155Factory.createInstance{value: INSTANCE_FEE}(
-            _nextErc1155Salt(),
-            "poggers",
-            "ipfs://metadata",
-            creator1,
-            address(mockVault),
-            ""
+            _nextErc1155Salt(), _erc1155Params("poggers", creator1)
         );
 
         vm.stopPrank();
@@ -231,12 +234,7 @@ contract NamespaceCollisionTest is Test {
 
         vm.startPrank(creator1);
         erc1155Factory.createInstance{value: INSTANCE_FEE}(
-            _nextErc1155Salt(),
-            "poggers",
-            "ipfs://metadata",
-            creator1,
-            address(mockVault),
-            ""
+            _nextErc1155Salt(), _erc1155Params("poggers", creator1)
         );
         vm.stopPrank();
 
@@ -272,12 +270,7 @@ contract NamespaceCollisionTest is Test {
         vm.startPrank(creator2);
         vm.expectRevert(ERC1155Factory.NameAlreadyTaken.selector);
         erc1155Factory.createInstance{value: INSTANCE_FEE}(
-            _nextErc1155Salt(),
-            "poggers",
-            "ipfs://metadata",
-            creator2,
-            address(mockVault),
-            ""
+            _nextErc1155Salt(), _erc1155Params("poggers", creator2)
         );
         vm.stopPrank();
     }
@@ -291,12 +284,7 @@ contract NamespaceCollisionTest is Test {
 
         vm.startPrank(creator1);
         erc1155Factory.createInstance{value: INSTANCE_FEE}(
-            _nextErc1155Salt(),
-            "POGGERS",
-            "ipfs://metadata",
-            creator1,
-            address(mockVault),
-            ""
+            _nextErc1155Salt(), _erc1155Params("POGGERS", creator1)
         );
         vm.stopPrank();
 
@@ -350,12 +338,7 @@ contract NamespaceCollisionTest is Test {
 
         vm.startPrank(creator1);
         address instance1 = erc1155Factory.createInstance{value: INSTANCE_FEE}(
-            _nextErc1155Salt(),
-            "poggers",
-            "ipfs://metadata",
-            creator1,
-            address(mockVault),
-            ""
+            _nextErc1155Salt(), _erc1155Params("poggers", creator1)
         );
         vm.stopPrank();
 
