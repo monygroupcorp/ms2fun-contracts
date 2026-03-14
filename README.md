@@ -26,7 +26,7 @@ src/
 ├── libraries/          # Message packing, V4 helpers
 └── shared/             # Common interfaces and utilities
 
-test/                   # ~840 tests
+test/                   # ~1190 tests
 script/                 # Deployment scripts
 docs/                   # Architecture and implementation plans
 ```
@@ -75,9 +75,9 @@ registry.registerVault(address(vault), "Remilia Vault", "ipfs://...", targetId);
 
 ### Vault System
 
-**UltraAlignmentVault** — share-based fee distribution with O(1) claims:
+**Alignment Vaults** (`UniAlignmentVault`, `ZAMMAlignmentVault`, `CypherAlignmentVault`) — share-based fee distribution with O(1) claims:
 - Collects ETH from project instances (hook taxes, tithes, direct contributions)
-- Batch-converts to alignment token via V3/V2, deposits full-range V4 LP
+- Converts to alignment token and deposits full-range LP (V4, ZAMM, or Algebra V2 depending on vault type)
 - Issues shares proportional to contributions
 - LP fees distributed to benefactors via delta-based claims
 
@@ -140,7 +140,7 @@ Mol***-pattern DAO governing the protocol through a Gnosis Safe with a 48-hour t
 ## Development
 
 ```bash
-# Run all tests (~1130)
+# Run all tests (~1190)
 forge test
 
 # Run specific test suite

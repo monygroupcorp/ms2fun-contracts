@@ -7,9 +7,12 @@ out/
 cache/
 broadcast/
 
-# Prompt artifacts
-docs/plans/*
-reference/*
+# Internal docs (promote to docs/spec/ or docs/examples/ when ready)
+docs/*
+!docs/spec/
+!docs/examples/
+archive/
+reference/
 
 # Environment variables
 .env
@@ -31,5 +34,8 @@ forge-cache/
 foundry.lock
 
 # Claude Code
-.claude/*
+.claude/
 
+# Reports
+reports/
+CLAUDE.md
