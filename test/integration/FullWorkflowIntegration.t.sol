@@ -54,6 +54,7 @@ contract FullWorkflowIntegrationTest is Test {
         // Deploy and setup FeaturedQueueManager
         queueManager = new FeaturedQueueManager();
         queueManager.initialize(proxy, owner);
+        queueManager.setProtocolTreasury(makeAddr("treasury"));
 
         // Deploy a contract to serve as the mock vault (just needs code at address)
         mockVault = address(new MockInstance(address(0)));

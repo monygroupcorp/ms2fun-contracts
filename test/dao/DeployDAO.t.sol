@@ -55,6 +55,10 @@ contract DeployDAOTest is Test {
 
         // 5. Build proposal calldata for conductor registration
         _buildConductorProposal();
+
+        // Advance 1 second so snapshot voting finds the share checkpoint
+        // (shares minted at T0, proposals at T1, vote checks T1-1=T0)
+        vm.warp(block.timestamp + 1);
     }
 
     function _buildConductorProposal() internal {
