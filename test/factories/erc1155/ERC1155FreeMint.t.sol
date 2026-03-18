@@ -51,7 +51,7 @@ contract ERC1155FreeMintTest is Test {
         componentRegistry.initialize(protocol);
 
         factory = new ERC1155Factory(
-            address(mockRegistry), mockGMR, address(componentRegistry)
+            address(mockRegistry), mockGMR, address(componentRegistry), address(0xBEEF)
         );
         vm.stopPrank();
     }

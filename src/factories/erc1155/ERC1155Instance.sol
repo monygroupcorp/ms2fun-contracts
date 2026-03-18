@@ -4,6 +4,7 @@ pragma solidity ^0.8.24;
 import { Ownable } from "solady/auth/Ownable.sol";
 import { ReentrancyGuard } from "solady/utils/ReentrancyGuard.sol";
 import { SafeTransferLib } from "solady/utils/SafeTransferLib.sol";
+import { SmartTransferLib } from "../../libraries/SmartTransferLib.sol";
 import {IDynamicPricingModule} from "./interfaces/IDynamicPricingModule.sol";
 import { IAlignmentVault } from "../../interfaces/IAlignmentVault.sol";
 import {IMasterRegistry} from "../../master/interfaces/IMasterRegistry.sol";
@@ -71,6 +72,7 @@ contract ERC1155Instance is Ownable, ReentrancyGuard, IInstanceLifecycle {
         address masterRegistry;
         address gatingModule;
         address dynamicPricingModule;
+        address weth;
     }
 
     struct Edition {
@@ -99,6 +101,7 @@ contract ERC1155Instance is Ownable, ReentrancyGuard, IInstanceLifecycle {
     IMasterRegistry public masterRegistry;
     IGlobalMessageRegistry public immutable globalMessageRegistry;
     address public immutable protocolTreasury;
+    address public immutable weth;
 
     // Customization
     string public styleUri;
@@ -205,6 +208,7 @@ contract ERC1155Instance is Ownable, ReentrancyGuard, IInstanceLifecycle {
         masterRegistry = IMasterRegistry(_init.masterRegistry);
         globalMessageRegistry = IGlobalMessageRegistry(_init.globalMessageRegistry);
         protocolTreasury = _init.protocolTreasury;
+        weth = _init.weth;
         styleUri = _styleUri;
         nextEditionId = 1;
         if (_init.gatingModule != address(0)) {
@@ -460,7 +464,7 @@ contract ERC1155Instance is Ownable, ReentrancyGuard, IInstanceLifecycle {
 
         // Refund excess
         if (msg.value > totalCost) {
-            SafeTransferLib.safeTransferETH(msg.sender, msg.value - totalCost);
+            SmartTransferLib.smartTransferETH(msg.sender, msg.value - totalCost, weth);
         }
 
         emit TransferSingle(msg.sender, address(0), msg.sender, editionId, amount);
@@ -504,7 +508,7 @@ contract ERC1155Instance is Ownable, ReentrancyGuard, IInstanceLifecycle {
         }
 
         // Transfer remainder to artist
-        SafeTransferLib.safeTransferETH(owner(), s.remainder);
+        SmartTransferLib.smartTransferETH(owner(), s.remainder, weth);
 
         emit Withdrawn(owner(), s.remainder, vaultCutSent, s.protocolCut);
     }
@@ -539,7 +543,7 @@ contract ERC1155Instance is Ownable, ReentrancyGuard, IInstanceLifecycle {
 
         // Route all claimed fees to the owner
         if (totalClaimed == 0) revert NoFeesToClaim();
-        SafeTransferLib.safeTransferETH(owner(), totalClaimed);
+        SmartTransferLib.smartTransferETH(owner(), totalClaimed, weth);
     }
 
     /// @notice Migrate to a new vault. New vault must share this instance's alignment target.

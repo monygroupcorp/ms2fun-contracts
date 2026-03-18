@@ -53,7 +53,8 @@ contract ERC404RerollTest is Test {
             globalMessageRegistry: address(0x700),
             protocolTreasury: address(0xFEE),
             masterRegistry: mockMasterRegistry,
-            bondingFeeBps: 100
+            bondingFeeBps: 100,
+            weth: address(0xBEEF)
         }));
 
         token.initializeMetadata("TestToken", "TEST", "");

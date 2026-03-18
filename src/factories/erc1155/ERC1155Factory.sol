@@ -32,6 +32,7 @@ contract ERC1155Factory is Ownable, ReentrancyGuard, IFactory {
     address public immutable globalMessageRegistry;
     IComponentRegistry public immutable componentRegistry;
     address public protocolTreasury;
+    address public weth;
     address public dynamicPricingModule;
 
     bytes32[] internal _features;
@@ -59,13 +60,15 @@ contract ERC1155Factory is Ownable, ReentrancyGuard, IFactory {
     constructor(
         address _masterRegistry,
         address _globalMessageRegistry,
-        address _componentRegistry
+        address _componentRegistry,
+        address _weth
     ) {
         _initializeOwner(msg.sender);
         if (_globalMessageRegistry == address(0)) revert InvalidAddress();
         masterRegistry = IMasterRegistry(_masterRegistry);
         globalMessageRegistry = _globalMessageRegistry;
         componentRegistry = IComponentRegistry(_componentRegistry);
+        weth = _weth;
         _features.push(FeatureUtils.GATING);
     }
 
@@ -125,7 +128,8 @@ contract ERC1155Factory is Ownable, ReentrancyGuard, IFactory {
             protocolTreasury: protocolTreasury,
             masterRegistry: address(masterRegistry),
             gatingModule: params.gatingModule,
-            dynamicPricingModule: dynamicPricingModule
+            dynamicPricingModule: dynamicPricingModule,
+            weth: weth
         });
         return abi.encodePacked(
             type(ERC1155Instance).creationCode,
@@ -142,6 +146,11 @@ contract ERC1155Factory is Ownable, ReentrancyGuard, IFactory {
             if (!componentRegistry.isApprovedComponent(module)) revert UnapprovedComponent();
         }
         dynamicPricingModule = module;
+    }
+
+    function setWeth(address _weth) external onlyOwner {
+        if (_weth == address(0)) revert InvalidAddress();
+        weth = _weth;
     }
 
     function setProtocolTreasury(address _treasury) external onlyOwner {

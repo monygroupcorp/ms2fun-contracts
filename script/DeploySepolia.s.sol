@@ -287,7 +287,8 @@ contract DeploySepolia is Script {
             ERC404Factory.CoreConfig({
                 implementation: address(erc404Impl),
                 masterRegistry: masterRegistry,
-                protocol: deployer
+                protocol: deployer,
+                weth: weth
             }),
             ERC404Factory.ModuleConfig({
                 globalMessageRegistry: address(globalMessageRegistry),
@@ -301,13 +302,13 @@ contract DeploySepolia is Script {
 
         // Phase 5: ERC1155Factory
         erc1155Factory = new ERC1155Factory(
-            masterRegistry, address(globalMessageRegistry), address(componentRegistry)
+            masterRegistry, address(globalMessageRegistry), address(componentRegistry), weth
         );
         erc1155Factory.setProtocolTreasury(address(treasury));
 
         // Phase 5: ERC721AuctionFactory
         erc721Factory = new ERC721AuctionFactory(
-            masterRegistry, address(globalMessageRegistry)
+            masterRegistry, address(globalMessageRegistry), weth
         );
         erc721Factory.setProtocolTreasury(address(treasury));
 

@@ -46,7 +46,8 @@ contract ERC1155EditionInvariantTest is StdInvariant, Test {
                 protocolTreasury: protocolTreasury,
                 masterRegistry: mockMasterRegistry,
                 gatingModule: address(0),
-                dynamicPricingModule: address(0)
+                dynamicPricingModule: address(0),
+                weth: address(0xBEEF)
             }),
             false
         );

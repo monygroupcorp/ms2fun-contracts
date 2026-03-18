@@ -106,7 +106,8 @@ contract ERC404FactoryTest is Test {
             ERC404Factory.CoreConfig({
                 implementation: address(impl),
                 masterRegistry: address(mockRegistry),
-                protocol: protocolAdmin
+                protocol: protocolAdmin,
+                weth: address(0xBEEF)
             }),
             ERC404Factory.ModuleConfig({
                 globalMessageRegistry: mockGMR,

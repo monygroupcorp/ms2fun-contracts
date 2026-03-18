@@ -5,6 +5,7 @@ import {ERC721} from "solady/tokens/ERC721.sol";
 import {Ownable} from "solady/auth/Ownable.sol";
 import {ReentrancyGuard} from "solady/utils/ReentrancyGuard.sol";
 import {SafeTransferLib} from "solady/utils/SafeTransferLib.sol";
+import {SmartTransferLib} from "../../libraries/SmartTransferLib.sol";
 import {IAlignmentVault} from "../../interfaces/IAlignmentVault.sol";
 import {IMasterRegistry} from "../../master/interfaces/IMasterRegistry.sol";
 
@@ -73,6 +74,7 @@ contract ERC721AuctionInstance is ERC721, Ownable, ReentrancyGuard, IInstanceLif
     uint40 public immutable baseDuration;
     uint40 public immutable timeBuffer;
     uint256 public immutable bidIncrement;
+    address public immutable weth;
 
     // ┌─────────────────────────┐
     // │      State Variables     │
@@ -124,6 +126,7 @@ contract ERC721AuctionInstance is ERC721, Ownable, ReentrancyGuard, IInstanceLif
         address globalMessageRegistry;
         address masterRegistry;
         address factory;
+        address weth;
     }
 
     constructor(ConstructorParams memory p) {
@@ -150,6 +153,7 @@ contract ERC721AuctionInstance is ERC721, Ownable, ReentrancyGuard, IInstanceLif
         bidIncrement = p.bidIncrement;
         globalMessageRegistry = IGlobalMessageRegistry(p.globalMessageRegistry);
         factory = p.factory;
+        weth = p.weth;
         nextTokenId = 1;
     }
 
@@ -330,7 +334,7 @@ contract ERC721AuctionInstance is ERC721, Ownable, ReentrancyGuard, IInstanceLif
             s.vaultCut,
             address(this)
         );
-        SafeTransferLib.safeTransferETH(owner(), s.remainder);
+        SmartTransferLib.smartTransferETH(owner(), s.remainder, weth);
 
         emit AuctionSettled(tokenId, auction.highBidder, auction.highBid);
 
@@ -380,7 +384,7 @@ contract ERC721AuctionInstance is ERC721, Ownable, ReentrancyGuard, IInstanceLif
     function claimVaultFees() external onlyOwner nonReentrant returns (uint256 totalClaimed) {
         totalClaimed = vault.claimFees();
         if (totalClaimed == 0) revert NoFeesToClaim();
-        SafeTransferLib.safeTransferETH(owner(), totalClaimed);
+        SmartTransferLib.smartTransferETH(owner(), totalClaimed, weth);
     }
 
     /// @notice Migrate to a new vault. New vault must share this instance's alignment target.

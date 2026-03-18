@@ -96,7 +96,7 @@ contract ERC1155AgentDelegationTest is GlobalMessagingTestBase {
         componentRegistry = ComponentRegistry(compRegProxy);
         componentRegistry.initialize(owner);
 
-        factory = new ERC1155Factory(address(mockRegistry), address(globalRegistry), address(componentRegistry));
+        factory = new ERC1155Factory(address(mockRegistry), address(globalRegistry), address(componentRegistry), address(0xBEEF));
 
         // Register agent globally (on mock registry)
         mockRegistry.setAgent(agent, true);

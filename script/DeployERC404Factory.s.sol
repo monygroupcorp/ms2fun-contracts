@@ -30,7 +30,8 @@ contract DeployERC404Factory is Script {
             ERC404Factory.CoreConfig({
                 implementation: address(impl),
                 masterRegistry: masterRegistry,
-                protocol: protocol
+                protocol: protocol,
+                weth: vm.envAddress("WETH")
             }),
             ERC404Factory.ModuleConfig({
                 globalMessageRegistry: globalMessageRegistry,

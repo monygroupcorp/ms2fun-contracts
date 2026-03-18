@@ -31,6 +31,7 @@ contract ERC404Factory is OwnableRoles, ReentrancyGuard, IFactory {
         address implementation;
         address masterRegistry;
         address protocol;
+        address weth;
     }
 
     /// @dev Module addresses.
@@ -60,6 +61,7 @@ contract ERC404Factory is OwnableRoles, ReentrancyGuard, IFactory {
     address public implementation;
 
     address public protocolTreasury;
+    address public weth;
     uint256 public bondingFeeBps = 100; // 1% default
 
     LaunchManager public immutable launchManager;
@@ -109,6 +111,7 @@ contract ERC404Factory is OwnableRoles, ReentrancyGuard, IFactory {
         _grantRoles(core.protocol, PROTOCOL_ROLE);
         implementation = core.implementation;
         masterRegistry = IMasterRegistry(core.masterRegistry);
+        weth = core.weth;
         globalMessageRegistry = modules.globalMessageRegistry;
         launchManager = LaunchManager(modules.launchManager);
         componentRegistry = IComponentRegistry(modules.componentRegistry);
@@ -237,7 +240,8 @@ contract ERC404Factory is OwnableRoles, ReentrancyGuard, IFactory {
                 globalMessageRegistry: globalMessageRegistry,
                 protocolTreasury: protocolTreasury,
                 masterRegistry: address(masterRegistry),
-                bondingFeeBps: bondingFeeBps
+                bondingFeeBps: bondingFeeBps,
+                weth: weth
             })
         );
         ERC404BondingInstance(payable(instance)).initializeMetadata(
@@ -258,6 +262,11 @@ contract ERC404Factory is OwnableRoles, ReentrancyGuard, IFactory {
         address old = protocolTreasury;
         protocolTreasury = _treasury;
         emit ProtocolTreasuryUpdated(old, _treasury);
+    }
+
+    function setWeth(address _weth) external onlyRoles(PROTOCOL_ROLE) {
+        if (_weth == address(0)) revert InvalidAddress();
+        weth = _weth;
     }
 
     function setBondingFeeBps(uint256 _bps) external onlyRoles(PROTOCOL_ROLE) {

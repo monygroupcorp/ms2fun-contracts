@@ -86,7 +86,8 @@ contract ERC404FreeMintTest is Test {
             ERC404Factory.CoreConfig({
                 implementation: address(instanceImpl),
                 masterRegistry: address(mockRegistry),
-                protocol: protocol
+                protocol: protocol,
+                weth: address(0xBEEF)
             }),
             ERC404Factory.ModuleConfig({
                 globalMessageRegistry: mockGMR,

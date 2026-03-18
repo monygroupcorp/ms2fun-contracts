@@ -100,7 +100,7 @@ contract ERC721AuctionFactoryTest is Test {
 
         GlobalMessageRegistry msgRegistry = new GlobalMessageRegistry();
         msgRegistry.initialize(owner, address(mockRegistry));
-        factory = new ERC721AuctionFactory(address(mockRegistry), address(msgRegistry));
+        factory = new ERC721AuctionFactory(address(mockRegistry), address(msgRegistry), address(0xBEEF));
         factory.setProtocolTreasury(treasury);
 
         vm.stopPrank();

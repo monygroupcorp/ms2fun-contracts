@@ -69,7 +69,8 @@ contract FactoryFeaturesTest is Test {
             ERC404Factory.CoreConfig({
                 implementation: address(impl),
                 masterRegistry: makeAddr("mr"),
-                protocol: protocol
+                protocol: protocol,
+                weth: address(0xBEEF)
             }),
             ERC404Factory.ModuleConfig({
                 globalMessageRegistry: makeAddr("gmr"),
@@ -97,7 +98,8 @@ contract FactoryFeaturesTest is Test {
         ERC1155Factory factory = new ERC1155Factory(
             makeAddr("mr"),
             makeAddr("gmr"),
-            address(compReg)
+            address(compReg),
+            address(0xBEEF)
         );
 
         bytes32[] memory feats = IFactory(address(factory)).features();
@@ -111,7 +113,8 @@ contract FactoryFeaturesTest is Test {
     function test_ERC721AuctionFactory_features_returnsEmptyArrayViaInterface() public {
         ERC721AuctionFactory factory = new ERC721AuctionFactory(
             makeAddr("mr"),
-            makeAddr("gmr")
+            makeAddr("gmr"),
+            address(0xBEEF)
         );
 
         bytes32[] memory feats = IFactory(address(factory)).features();
@@ -134,7 +137,8 @@ contract FactoryFeaturesTest is Test {
             ERC404Factory.CoreConfig({
                 implementation: address(impl),
                 masterRegistry: makeAddr("mr"),
-                protocol: protocol
+                protocol: protocol,
+                weth: address(0xBEEF)
             }),
             ERC404Factory.ModuleConfig({
                 globalMessageRegistry: makeAddr("gmr"),
@@ -160,7 +164,8 @@ contract FactoryFeaturesTest is Test {
         ERC1155Factory factory = new ERC1155Factory(
             makeAddr("mr"),
             makeAddr("gmr"),
-            address(compReg)
+            address(compReg),
+            address(0xBEEF)
         );
 
         bytes32[] memory req = IFactory(address(factory)).requiredFeatures();
@@ -170,7 +175,8 @@ contract FactoryFeaturesTest is Test {
     function test_ERC721AuctionFactory_requiredFeatures_returnsEmpty() public {
         ERC721AuctionFactory factory = new ERC721AuctionFactory(
             makeAddr("mr"),
-            makeAddr("gmr")
+            makeAddr("gmr"),
+            address(0xBEEF)
         );
 
         bytes32[] memory req = IFactory(address(factory)).requiredFeatures();

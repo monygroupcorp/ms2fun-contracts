@@ -27,6 +27,7 @@ contract ERC721AuctionFactory is Ownable, ReentrancyGuard, IFactory {
     IMasterRegistry public masterRegistry;
     address public immutable globalMessageRegistry;
     address public protocolTreasury;
+    address public weth;
 
     struct CreateParams {
         string name;
@@ -51,12 +52,14 @@ contract ERC721AuctionFactory is Ownable, ReentrancyGuard, IFactory {
 
     constructor(
         address _masterRegistry,
-        address _globalMessageRegistry
+        address _globalMessageRegistry,
+        address _weth
     ) {
         _initializeOwner(msg.sender);
         if (_globalMessageRegistry == address(0)) revert InvalidAddress();
         masterRegistry = IMasterRegistry(_masterRegistry);
         globalMessageRegistry = _globalMessageRegistry;
+        weth = _weth;
     }
 
     /// @notice Deploy a new ERC721 auction instance. Any ETH forwarded directly to treasury.
@@ -118,7 +121,8 @@ contract ERC721AuctionFactory is Ownable, ReentrancyGuard, IFactory {
                     bidIncrement: params.bidIncrement,
                     globalMessageRegistry: globalMessageRegistry,
                     masterRegistry: address(masterRegistry),
-                    factory: address(this)
+                    factory: address(this),
+                    weth: weth
                 })
             )
         );
@@ -129,6 +133,11 @@ contract ERC721AuctionFactory is Ownable, ReentrancyGuard, IFactory {
     }
 
     // ── Admin ─────────────────────────────────────────────────────────────────
+
+    function setWeth(address _weth) external onlyOwner {
+        if (_weth == address(0)) revert InvalidAddress();
+        weth = _weth;
+    }
 
     function setProtocolTreasury(address _treasury) external onlyOwner {
         if (_treasury == address(0)) revert InvalidAddress();

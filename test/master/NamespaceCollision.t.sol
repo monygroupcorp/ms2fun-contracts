@@ -122,7 +122,8 @@ contract NamespaceCollisionTest is Test {
             ERC404Factory.CoreConfig({
                 implementation: address(nsImpl),
                 masterRegistry: address(registry),
-                protocol: owner
+                protocol: owner,
+                weth: address(0xBEEF)
             }),
             ERC404Factory.ModuleConfig({
                 globalMessageRegistry: address(globalMsgRegistry),
@@ -135,7 +136,8 @@ contract NamespaceCollisionTest is Test {
         erc1155Factory = new ERC1155Factory(
             address(registry),
             address(globalMsgRegistry),
-            address(componentRegistry)
+            address(componentRegistry),
+            address(0xBEEF)
         );
 
         // Set protocol treasury on both factories

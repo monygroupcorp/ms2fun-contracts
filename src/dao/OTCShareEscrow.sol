@@ -3,6 +3,7 @@ pragma solidity ^0.8.20;
 
 import {ReentrancyGuard} from "solady/utils/ReentrancyGuard.sol";
 import {SafeTransferLib} from "solady/utils/SafeTransferLib.sol";
+import {SmartTransferLib} from "../libraries/SmartTransferLib.sol";
 import {IGrandCentral} from "./interfaces/IGrandCentral.sol";
 
 /// @title OTCShareEscrow
@@ -48,6 +49,7 @@ contract OTCShareEscrow is ReentrancyGuard {
 
     address public immutable dao;
     address public immutable safe;
+    address public immutable weth;
 
     // ============ State ============
 
@@ -68,10 +70,12 @@ contract OTCShareEscrow is ReentrancyGuard {
 
     // ============ Constructor ============
 
-    constructor(address _dao) {
+    constructor(address _dao, address _weth) {
         if (_dao == address(0)) revert InvalidAddress();
+        if (_weth == address(0)) revert InvalidAddress();
         dao = _dao;
         safe = IGrandCentral(_dao).safe();
+        weth = _weth;
     }
 
     // ============ Mutative ============
@@ -114,7 +118,7 @@ contract OTCShareEscrow is ReentrancyGuard {
         delete offers[msg.sender][token];
 
         if (token == address(0)) {
-            SafeTransferLib.safeTransferETH(msg.sender, offer.amount);
+            SmartTransferLib.smartTransferETH(msg.sender, offer.amount, weth);
         } else {
             SafeTransferLib.safeTransfer(token, msg.sender, offer.amount);
         }

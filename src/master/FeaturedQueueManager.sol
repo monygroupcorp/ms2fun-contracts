@@ -5,6 +5,7 @@ import {SafeOwnableUUPS} from "../shared/SafeOwnableUUPS.sol";
 import {ReentrancyGuard} from "solady/utils/ReentrancyGuard.sol";
 import {IMasterRegistry} from "./interfaces/IMasterRegistry.sol";
 import {SafeTransferLib} from "solady/utils/SafeTransferLib.sol";
+import {SmartTransferLib} from "../libraries/SmartTransferLib.sol";
 
 /**
  * @title FeaturedQueueManager
@@ -75,6 +76,7 @@ contract FeaturedQueueManager is SafeOwnableUUPS, ReentrancyGuard {
     uint256 public maxFeaturedSize = 100;
 
     address public protocolTreasury;
+    address public weth;
 
     bool private _initialized;
 
@@ -168,7 +170,7 @@ contract FeaturedQueueManager is SafeOwnableUUPS, ReentrancyGuard {
 
         // Refund excess
         if (msg.value > totalDue) {
-            SafeTransferLib.safeTransferETH(msg.sender, msg.value - totalDue);
+            SmartTransferLib.smartTransferETH(msg.sender, msg.value - totalDue, weth);
         }
 
         emit FeaturedRented(instance, msg.sender, duration, durationCost, rankBoost, slots[instance].expiresAt);
@@ -220,7 +222,7 @@ contract FeaturedQueueManager is SafeOwnableUUPS, ReentrancyGuard {
         SafeTransferLib.safeTransferETH(protocolTreasury, cost);
 
         if (msg.value > cost) {
-            SafeTransferLib.safeTransferETH(msg.sender, msg.value - cost);
+            SmartTransferLib.smartTransferETH(msg.sender, msg.value - cost, weth);
         }
 
         emit DurationRenewed(instance, msg.sender, additionalDuration, cost, slots[instance].expiresAt);
@@ -411,6 +413,11 @@ contract FeaturedQueueManager is SafeOwnableUUPS, ReentrancyGuard {
         if (_masterRegistry == address(0)) revert InvalidAddress();
         masterRegistry = IMasterRegistry(_masterRegistry);
         emit MasterRegistrySet(_masterRegistry);
+    }
+
+    function setWeth(address _weth) external onlyOwner {
+        if (_weth == address(0)) revert InvalidAddress();
+        weth = _weth;
     }
 
     function setProtocolTreasury(address _treasury) external onlyOwner {

@@ -3,6 +3,7 @@ pragma solidity ^0.8.20;
 
 import {Ownable} from "solady/auth/Ownable.sol";
 import {SafeTransferLib} from "solady/utils/SafeTransferLib.sol";
+import {SmartTransferLib} from "../libraries/SmartTransferLib.sol";
 
 /**
  * @title VaultRegistry
@@ -57,6 +58,7 @@ contract VaultRegistry is Ownable {
     // State variables
     uint256 public vaultRegistrationFee;
     uint256 public hookRegistrationFee;
+    address public weth;
 
     // Mappings
     mapping(address => VaultInfo) public vaults;
@@ -112,7 +114,7 @@ contract VaultRegistry is Ownable {
 
         // Refund excess
         if (msg.value > vaultRegistrationFee) {
-            SafeTransferLib.safeTransferETH(msg.sender, msg.value - vaultRegistrationFee);
+            SmartTransferLib.smartTransferETH(msg.sender, msg.value - vaultRegistrationFee, weth);
         }
 
         emit VaultRegistered(vault, msg.sender, name, vaultRegistrationFee);
@@ -155,7 +157,7 @@ contract VaultRegistry is Ownable {
 
         // Refund excess
         if (msg.value > hookRegistrationFee) {
-            SafeTransferLib.safeTransferETH(msg.sender, msg.value - hookRegistrationFee);
+            SmartTransferLib.smartTransferETH(msg.sender, msg.value - hookRegistrationFee, weth);
         }
 
         emit HookRegistered(hook, msg.sender, vault, name, hookRegistrationFee);
@@ -223,6 +225,11 @@ contract VaultRegistry is Ownable {
     /**
      * @notice Set hook registration fee (owner only)
      */
+    function setWeth(address _weth) external onlyOwner {
+        if (_weth == address(0)) revert InvalidAddress();
+        weth = _weth;
+    }
+
     function setHookRegistrationFee(uint256 newFee) external onlyOwner {
         if (newFee == 0) revert FeeMustBePositive();
         hookRegistrationFee = newFee;

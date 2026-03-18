@@ -64,7 +64,8 @@ contract BondingCurveInvariantTest is StdInvariant, Test {
             globalMessageRegistry: mockGlobalMsgRegistry,
             protocolTreasury: protocolTreasury,
             masterRegistry: mockMasterRegistry,
-            bondingFeeBps: BONDING_FEE_BPS
+            bondingFeeBps: BONDING_FEE_BPS,
+            weth: address(0xBEEF)
         });
         instance.initializeProtocol(pp);
         instance.initializeMetadata("Test Token", "TEST", "");

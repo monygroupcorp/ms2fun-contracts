@@ -90,7 +90,7 @@ contract ERC721AgentDelegationTest is GlobalMessagingTestBase {
         mockRegistry = new MockMasterRegistry();
         _setUpGlobalMessaging(address(mockRegistry));
 
-        factory = new ERC721AuctionFactory(address(mockRegistry), address(globalRegistry));
+        factory = new ERC721AuctionFactory(address(mockRegistry), address(globalRegistry), address(0xBEEF));
         factory.setProtocolTreasury(owner);
 
         mockRegistry.setAgent(agent, true);

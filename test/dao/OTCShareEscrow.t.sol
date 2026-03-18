@@ -22,7 +22,7 @@ contract OTCShareEscrowTest is Test {
     function setUp() public {
         mockSafe = new MockSafe();
         dao = new GrandCentral(address(mockSafe), founder, INITIAL_SHARES, 5 days, 2 days, 0, 1, 66);
-        escrow = new OTCShareEscrow(address(dao));
+        escrow = new OTCShareEscrow(address(dao), address(0xBEEF));
         usdc = new MockERC20("USD Coin", "USDC");
 
         // Register escrow as manager conductor
@@ -43,7 +43,7 @@ contract OTCShareEscrowTest is Test {
 
     function test_Constructor_RevertsOnZeroAddress() public {
         vm.expectRevert(OTCShareEscrow.InvalidAddress.selector);
-        new OTCShareEscrow(address(0));
+        new OTCShareEscrow(address(0), address(0xBEEF));
     }
 
     // ============ createOffer (ETH) ============

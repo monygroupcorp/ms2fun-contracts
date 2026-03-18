@@ -4,6 +4,7 @@ pragma solidity ^0.8.20;
 import {Ownable} from "solady/auth/Ownable.sol";
 import {ReentrancyGuard} from "solady/utils/ReentrancyGuard.sol";
 import {SafeTransferLib} from "solady/utils/SafeTransferLib.sol";
+import {SmartTransferLib} from "../libraries/SmartTransferLib.sol";
 
 /**
  * @title PromotionBadges
@@ -44,6 +45,7 @@ contract PromotionBadges is Ownable, ReentrancyGuard {
 
     // Authorized factories for privileged badge assignment
     mapping(address => bool) public authorizedFactories;
+    address public weth;
 
     event BadgePurchased(address indexed instance, address indexed buyer, BadgeType badgeType, uint256 duration, uint256 cost);
     event BadgePriceUpdated(BadgeType badgeType, uint256 newPricePerDay);
@@ -103,7 +105,7 @@ contract PromotionBadges is Ownable, ReentrancyGuard {
 
         // Refund excess
         if (msg.value > cost) {
-            SafeTransferLib.safeTransferETH(msg.sender, msg.value - cost);
+            SmartTransferLib.smartTransferETH(msg.sender, msg.value - cost, weth);
         }
 
         emit BadgePurchased(instance, msg.sender, badgeType, duration, cost);
@@ -194,6 +196,11 @@ contract PromotionBadges is Ownable, ReentrancyGuard {
     /**
      * @notice Update protocol treasury address
      */
+    function setWeth(address _weth) external onlyOwner {
+        if (_weth == address(0)) revert InvalidAddress();
+        weth = _weth;
+    }
+
     function setProtocolTreasury(address _treasury) external onlyOwner {
         if (_treasury == address(0)) revert InvalidAddress();
         address old = protocolTreasury;

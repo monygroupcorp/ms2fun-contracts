@@ -118,7 +118,8 @@ contract ERC404BondingInstanceTest is Test {
             globalMessageRegistry: mockGlobalMsgRegistry,
             protocolTreasury: treasury_,
             masterRegistry: mockMasterRegistry,
-            bondingFeeBps: bondingFeeBps_
+            bondingFeeBps: bondingFeeBps_,
+            weth: address(0xBEEF)
         });
         inst.initializeProtocol(proto);
     }
@@ -504,7 +505,8 @@ contract ERC404BondingInstanceTest is Test {
             globalMessageRegistry: mockGlobalMsgRegistry,
             protocolTreasury: address(0xFEE),
             masterRegistry: mockMasterRegistry,
-            bondingFeeBps: 100
+            bondingFeeBps: 100,
+            weth: address(0xBEEF)
         }));
         inst2.initializeMetadata("T", "T", "");
         uint256 futureTime = block.timestamp + 1 days;
@@ -535,7 +537,8 @@ contract ERC404BondingInstanceTest is Test {
             globalMessageRegistry: mockGlobalMsgRegistry,
             protocolTreasury: address(0),
             masterRegistry: mockMasterRegistry,
-            bondingFeeBps: 0
+            bondingFeeBps: 0,
+            weth: address(0xBEEF)
         }));
         inst2.initializeMetadata("T", "T", "");
         uint256 futureTime = block.timestamp + 1 days;

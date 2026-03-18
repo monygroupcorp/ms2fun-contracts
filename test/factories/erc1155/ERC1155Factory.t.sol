@@ -141,7 +141,7 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
         componentRegistry.initialize(registryOwner);
 
         // Deploy factory (no instanceTemplate param in new constructor)
-        factory = new ERC1155Factory(address(mockRegistry), address(globalRegistry), address(componentRegistry));
+        factory = new ERC1155Factory(address(mockRegistry), address(globalRegistry), address(componentRegistry), address(0xBEEF));
 
         // Deploy and wire up the dynamic pricing module
         vm.startPrank(registryOwner);
@@ -1047,7 +1047,8 @@ contract ERC1155FactoryTest is GlobalMessagingTestBase {
         ERC1155Factory bareFactory = new ERC1155Factory(
             address(mockRegistry),
             address(globalRegistry),
-            address(componentRegistry)
+            address(componentRegistry),
+            address(0xBEEF)
         );
         vm.deal(creator, 1 ether);
         vm.startPrank(creator);

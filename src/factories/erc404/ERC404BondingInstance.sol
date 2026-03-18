@@ -6,6 +6,7 @@ import { DN404Mirror } from "dn404/src/DN404Mirror.sol";
 import { Ownable } from "solady/auth/Ownable.sol";
 import { ReentrancyGuard } from "solady/utils/ReentrancyGuard.sol";
 import { SafeTransferLib } from "solady/utils/SafeTransferLib.sol";
+import { SmartTransferLib } from "../../libraries/SmartTransferLib.sol";
 import { BondingCurveMath } from "./libraries/BondingCurveMath.sol";
 import { ILiquidityDeployerModule } from "../../interfaces/ILiquidityDeployerModule.sol";
 import { IAlignmentVault } from "../../interfaces/IAlignmentVault.sol";
@@ -81,6 +82,7 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IInstanceLife
         address protocolTreasury;
         address masterRegistry;
         uint256 bondingFeeBps;
+        address weth;
     }
 
     // ┌─────────────────────────┐
@@ -103,6 +105,7 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IInstanceLife
     IGlobalMessageRegistry public globalMessageRegistry;
 
     address public protocolTreasury;
+    address public weth;
     uint256 public bondingFeeBps;
 
     string public styleUri;
@@ -211,6 +214,7 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IInstanceLife
         masterRegistry = IMasterRegistry(protocol.masterRegistry);
         globalMessageRegistry = IGlobalMessageRegistry(protocol.globalMessageRegistry);
         protocolTreasury = protocol.protocolTreasury;
+        weth = protocol.weth;
         bondingFeeBps = protocol.bondingFeeBps;
     }
 
@@ -358,7 +362,7 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IInstanceLife
         if (!stakingActive) revert StakingModuleNotSet();
         uint256 rewardAmount = stakingModule.recordUnstake(msg.sender, amount);
         _transfer(address(this), msg.sender, amount);
-        if (rewardAmount > 0) SafeTransferLib.safeTransferETH(msg.sender, rewardAmount);
+        if (rewardAmount > 0) SmartTransferLib.smartTransferETH(msg.sender, rewardAmount, weth);
         emit Unstaked(msg.sender, amount, rewardAmount);
     }
 
@@ -366,7 +370,7 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IInstanceLife
     function claimStakingRewards() external nonReentrant {
         if (!stakingActive) revert StakingModuleNotSet();
         uint256 rewardAmount = stakingModule.computeClaim(msg.sender);
-        SafeTransferLib.safeTransferETH(msg.sender, rewardAmount);
+        SmartTransferLib.smartTransferETH(msg.sender, rewardAmount, weth);
         emit StakingRewardsClaimed(msg.sender, rewardAmount);
     }
 
@@ -428,7 +432,7 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IInstanceLife
         }
 
         if (msg.value > totalWithFee) {
-            SafeTransferLib.safeTransferETH(msg.sender, msg.value - totalWithFee);
+            SmartTransferLib.smartTransferETH(msg.sender, msg.value - totalWithFee, weth);
         }
 
         emit BondingSale(msg.sender, amount, totalWithFee, true);
@@ -463,7 +467,7 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IInstanceLife
             globalMessageRegistry.postForAction(msg.sender, address(this), messageData);
         }
 
-        SafeTransferLib.safeTransferETH(msg.sender, refund);
+        SmartTransferLib.smartTransferETH(msg.sender, refund, weth);
         emit BondingSale(msg.sender, amount, refund, false);
     }
 
