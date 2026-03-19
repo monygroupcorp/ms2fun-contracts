@@ -16,10 +16,11 @@ library MetadataUtils {
         if (uriBytes.length == 0) return false;
 
         // Check for common URI schemes
-        if (startsWith(uri, "http://") || 
-            startsWith(uri, "https://") || 
+        if (startsWith(uri, "http://") ||
+            startsWith(uri, "https://") ||
             startsWith(uri, "ipfs://") ||
-            startsWith(uri, "ar://")) {
+            startsWith(uri, "ar://") ||
+            startsWith(uri, "data:")) {
             return true;
         }
 
