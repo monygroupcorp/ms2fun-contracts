@@ -23,9 +23,6 @@ contract DeploySepoliaTest is Test {
         assertTrue(address(s.treasury()) != address(0), "treasury");
         assertTrue(address(s.queueManager()) != address(0), "queueManager");
         assertTrue(address(s.globalMessageRegistry()) != address(0), "globalMessageRegistry");
-        assertTrue(address(s.dao()) != address(0), "dao");
-        assertTrue(address(s.shareOffering()) != address(0), "shareOffering");
-        assertTrue(address(s.stipendConductor()) != address(0), "stipendConductor");
         assertTrue(s.safe() != address(0), "safe");
         assertTrue(address(s.testToken()) != address(0), "testToken");
         assertTrue(address(s.vault()) != address(0), "vault");
@@ -40,6 +37,11 @@ contract DeploySepoliaTest is Test {
     function test_masterRegistryProxyInitialized() public view {
         MasterRegistryV1 registry = MasterRegistryV1(s.masterRegistry());
         assertEq(registry.owner(), address(s));
+    }
+
+    function test_emergencyRevokerSet() public view {
+        MasterRegistryV1 registry = MasterRegistryV1(s.masterRegistry());
+        assertEq(registry.emergencyRevoker(), address(s));
     }
 
     function test_factoriesRegistered() public view {
@@ -71,16 +73,6 @@ contract DeploySepoliaTest is Test {
         assertEq(s.erc404Factory().protocolTreasury(), address(s.treasury()));
         assertEq(s.erc1155Factory().protocolTreasury(), address(s.treasury()));
         assertEq(s.erc721Factory().protocolTreasury(), address(s.treasury()));
-    }
-
-    function test_masterRegistryWiring() public view {
-        MasterRegistryV1 registry = MasterRegistryV1(s.masterRegistry());
-        // featuredQueueManager moved out of MasterRegistryV1
-    }
-
-    function test_daoConfig() public view {
-        assertEq(s.dao().votingPeriod(), 1 days);
-        assertEq(s.dao().gracePeriod(), 1 days);
     }
 
     function test_treasuryConfig() public view {

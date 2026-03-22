@@ -10,9 +10,6 @@ import {IAlignmentRegistry} from "../src/master/interfaces/IAlignmentRegistry.so
 import {FeaturedQueueManager} from "../src/master/FeaturedQueueManager.sol";
 import {GlobalMessageRegistry} from "../src/registry/GlobalMessageRegistry.sol";
 import {ProtocolTreasuryV1} from "../src/treasury/ProtocolTreasuryV1.sol";
-import {GrandCentral} from "../src/dao/GrandCentral.sol";
-import {ShareOffering} from "../src/dao/conductors/ShareOffering.sol";
-import {StipendConductor} from "../src/dao/conductors/StipendConductor.sol";
 import {UniAlignmentVault} from "../src/vaults/uni/UniAlignmentVault.sol";
 import {UniswapVaultPriceValidator} from "../src/peripherals/UniswapVaultPriceValidator.sol";
 import {IVaultPriceValidator} from "../src/interfaces/IVaultPriceValidator.sol";
@@ -57,9 +54,6 @@ contract DeploySepolia is Script {
     GlobalMessageRegistry public globalMessageRegistry; // proxy
 
     address public safe;
-    GrandCentral public dao;
-    ShareOffering public shareOffering;
-    StipendConductor public stipendConductor;
 
     AlignmentRegistryV1 public alignmentRegistryImpl;
     AlignmentRegistryV1 public alignmentRegistry; // proxy
@@ -152,36 +146,12 @@ contract DeploySepolia is Script {
         );
         MasterRegistryV1(masterRegistry).setAlignmentRegistry(address(alignmentRegistry));
 
-        // ============ Phase 2: DAO Layer ============
+        // ============ Phase 2: Safe (multisig) ============
 
-        // 6. Safe: use env var or deploy MockSafe
         safe = vm.envOr("SAFE_ADDRESS", address(0));
         if (safe == address(0)) {
             safe = address(new MockSafe());
         }
-
-        // 7. GrandCentral DAO
-        dao = new GrandCentral(
-            safe,
-            deployer,
-            1000,       // initial shares
-            1 days,     // voting period
-            1 days,     // grace period
-            0,          // quorum (no minimum for bootstrap)
-            1,          // sponsor threshold
-            66          // min retention
-        );
-
-        // 8. ShareOffering
-        shareOffering = new ShareOffering(address(dao));
-
-        // 9. StipendConductor
-        stipendConductor = new StipendConductor(
-            address(dao),
-            deployer,
-            3.15 ether,
-            30 days
-        );
 
         // ============ Phase 3: Mock Alignment Target ============
 
@@ -252,7 +222,10 @@ contract DeploySepolia is Script {
 
         // ============ Phase 7: Wiring ============
 
-        // 18. QueueManager treasury
+        // Emergency revoker (deployer for now, transfer to Safe post-deploy)
+        MasterRegistryV1(masterRegistry).setEmergencyRevoker(deployer);
+
+        // QueueManager treasury
         queueManager.setProtocolTreasury(address(treasury));
 
         // 21. Register factories in MasterRegistry
@@ -353,10 +326,7 @@ contract DeploySepolia is Script {
         console.log("GlobalMessageRegistry (impl):", address(globalMessageRegistryImpl));
         console.log("AlignmentRegistry (proxy):", address(alignmentRegistry));
         console.log("AlignmentRegistry (impl):", address(alignmentRegistryImpl));
-        console.log("GrandCentral (DAO):", address(dao));
-        console.log("ShareOffering:", address(shareOffering));
-        console.log("StipendConductor:", address(stipendConductor));
-        console.log("MockSafe/Safe:", safe);
+        console.log("Safe:", safe);
         console.log("TestToken (ERC20):", address(testToken));
         console.log("UniAlignmentVault:", address(vault));
         console.log("ComponentRegistry:", address(componentRegistry));
@@ -366,9 +336,9 @@ contract DeploySepolia is Script {
         console.log("PromotionBadges:", address(promotionBadges));
         console.log("");
         console.log("=== POST-DEPLOY CHECKLIST ===");
-        console.log("1. In Safe UI: Settings > Modules > Add Module >", address(dao));
-        console.log("2. Register conductors via DAO proposal (ShareOffering + StipendConductor)");
-        console.log("3. Fund Safe with ETH for stipend payouts");
+        console.log("1. Deploy Timelock (24h delay) with Safe as proposer/canceller");
+        console.log("2. Run MigrateOwnership to transfer all contracts to Timelock");
+        console.log("3. Set emergencyRevoker to Safe address via Timelock");
         console.log("4. Alignment target ID:", alignmentTargetId);
     }
 }

@@ -5,7 +5,7 @@ import {Script, console} from "forge-std/Script.sol";
 import {Timelock} from "solady/accounts/Timelock.sol";
 
 contract DeployTimelock is Script {
-    uint256 public constant MIN_DELAY = 48 hours; // 172800 seconds
+    uint256 public constant MIN_DELAY = 24 hours; // 86400 seconds
 
     function run() external {
         uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
@@ -27,7 +27,7 @@ contract DeployTimelock is Script {
         address[] memory cancellers = new address[](1);
         cancellers[0] = safe;
 
-        // Initialize: 48h delay, Safe as admin/proposer/canceller, open executor
+        // Initialize: 24h delay, Safe as admin/proposer/canceller, open executor
         timelock.initialize(MIN_DELAY, safe, proposers, executors, cancellers);
         console.log("Timelock initialized with min delay:", MIN_DELAY);
         console.log("Safe (admin/proposer/canceller):", safe);

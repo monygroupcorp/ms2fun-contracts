@@ -4,7 +4,6 @@ pragma solidity ^0.8.20;
 import {SafeOwnableUUPS} from "../shared/SafeOwnableUUPS.sol";
 import {IMasterRegistry} from "./interfaces/IMasterRegistry.sol";
 import {IAlignmentRegistry} from "./interfaces/IAlignmentRegistry.sol";
-import {IGrandCentral} from "../dao/interfaces/IGrandCentral.sol";
 import {IComponentRegistry} from "../registry/interfaces/IComponentRegistry.sol";
 import {MetadataUtils} from "../shared/libraries/MetadataUtils.sol";
 import {IFactoryInstance} from "../interfaces/IFactoryInstance.sol";
@@ -14,7 +13,7 @@ import {IInstanceLifecycle} from "../interfaces/IInstanceLifecycle.sol";
 /**
  * @title MasterRegistryV1
  * @notice Central registry for factories, instances, and vaults
- * @dev UUPS upgradeable. Owner is the DAO (GrandCentral + Safe).
+ * @dev UUPS upgradeable. Owner is the Safe multisig via Timelock.
  *      Alignment target curation is handled by AlignmentRegistryV1.
  */
 contract MasterRegistryV1 is SafeOwnableUUPS, IMasterRegistry {
@@ -40,8 +39,7 @@ contract MasterRegistryV1 is SafeOwnableUUPS, IMasterRegistry {
     error VaultAlreadyInArray();
     error NoVaults();
     error NoAlignmentToken();
-    error NotAgentConductor();
-    error GrandCentralNotSet();
+    error NotEmergencyRevoker();
 
     // ── Core State ──
     uint256 public nextFactoryId;
@@ -66,13 +64,13 @@ contract MasterRegistryV1 is SafeOwnableUUPS, IMasterRegistry {
 
     // ── Agent Management ──
     mapping(address => bool) public isAgent;
-    IGrandCentral public grandCentral;
+    address public emergencyRevoker;
 
     // Events
     event AlignmentRegistrySet(address indexed oldRegistry, address indexed newRegistry);
     event CreatorInstanceAdded(address indexed creator, address indexed instance);
     event AgentUpdated(address indexed agent, bool authorized);
-    event GrandCentralSet(address indexed grandCentral);
+    event EmergencyRevokerSet(address indexed oldRevoker, address indexed newRevoker);
 
     constructor() {
         _initializeOwner(msg.sender);
@@ -108,12 +106,12 @@ contract MasterRegistryV1 is SafeOwnableUUPS, IMasterRegistry {
         emit ComponentRegistrySet(_componentRegistry);
     }
 
-    // ============ GrandCentral Wiring ============
+    // ============ Emergency Revoker Wiring ============
 
-    function setGrandCentral(address _grandCentral) external onlyOwner {
-        if (_grandCentral == address(0)) revert InvalidAddress();
-        grandCentral = IGrandCentral(_grandCentral);
-        emit GrandCentralSet(_grandCentral);
+    function setEmergencyRevoker(address _revoker) external onlyOwner {
+        address old = emergencyRevoker;
+        emergencyRevoker = _revoker;
+        emit EmergencyRevokerSet(old, _revoker);
     }
 
     // ============ Agent Management ============
@@ -124,10 +122,9 @@ contract MasterRegistryV1 is SafeOwnableUUPS, IMasterRegistry {
         emit AgentUpdated(agent, authorized);
     }
 
-    /// @notice Emergency agent revocation (agent conductor, no Timelock)
+    /// @notice Emergency agent revocation (bypasses Timelock)
     function revokeAgent(address agent) external {
-        if (address(grandCentral) == address(0)) revert GrandCentralNotSet();
-        if (!grandCentral.isAgentConductor(msg.sender)) revert NotAgentConductor();
+        if (msg.sender != emergencyRevoker) revert NotEmergencyRevoker();
         isAgent[agent] = false;
         emit AgentUpdated(agent, false);
     }

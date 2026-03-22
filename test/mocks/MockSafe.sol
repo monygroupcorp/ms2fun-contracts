@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import {IAvatar, Operation} from "../../src/dao/interfaces/IAvatar.sol";
+import {IAvatar, Operation} from "../../src/interfaces/IAvatar.sol";
 
 contract MockSafe is IAvatar {
     struct Execution {
