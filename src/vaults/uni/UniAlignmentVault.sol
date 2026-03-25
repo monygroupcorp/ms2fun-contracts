@@ -80,6 +80,12 @@ contract UniAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback, IAlignm
     error ExceedsMaxBps();
     error TreasuryNotSet();
     error AmountMismatch();
+    error ContributionBelowMinimum();
+    error TooManyConversionParticipants();
+
+    // ── Anti-DoS constants ────────────────────────────────────────────────
+    uint256 public constant MIN_CONTRIBUTION = 0.001 ether;
+    uint256 public constant MAX_CONVERSION_PARTICIPANTS = 500;
 
     // ========== Data Structures ==========
 
@@ -287,7 +293,9 @@ contract UniAlignmentVault is ReentrancyGuard, Ownable, IUnlockCallback, IAlignm
     }
 
     function _trackBenefactorContribution(address benefactor, uint256 amount) internal {
+        if (amount < MIN_CONTRIBUTION) revert ContributionBelowMinimum();
         if(pendingETH[benefactor] == 0){
+            if (conversionParticipants.length >= MAX_CONVERSION_PARTICIPANTS) revert TooManyConversionParticipants();
             conversionParticipants.push(benefactor);
         }
         if(benefactorTotalETH[benefactor] == 0){

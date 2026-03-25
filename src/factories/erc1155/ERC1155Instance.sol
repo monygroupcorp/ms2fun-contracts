@@ -124,7 +124,8 @@ contract ERC1155Instance is Ownable, ReentrancyGuard, IInstanceLifecycle {
     bool public agentDelegationEnabled;
 
     uint256 public nextEditionId;
-    uint256 public totalProceeds; // Total ETH collected from mints
+    uint256 public totalProceeds;  // Total ETH collected from mints
+    uint256 public totalWithdrawn; // Total ETH passed to withdraw() (prevents double-withdrawal and force-feed attacks)
     /// @dev INVARIANT: pendingVaultCut <= address(this).balance at all times.
     ///      Failed vault contributions stay in the contract, tracked here so they
     ///      cannot be re-withdrawn as artist proceeds.
@@ -483,8 +484,9 @@ contract ERC1155Instance is Ownable, ReentrancyGuard, IInstanceLifecycle {
     function withdraw(uint256 amount) external nonReentrant {
         if (msg.sender != owner()) revert Unauthorized();
         if (amount == 0) revert AmountMustBePositive();
-        // Exclude stranded vault cuts from withdrawable balance
-        if (amount > address(this).balance - pendingVaultCut) revert InsufficientBalance();
+        // Use proceeds accounting to prevent force-fed ETH from bypassing the 1/19/80 split
+        if (amount > totalProceeds - totalWithdrawn) revert InsufficientBalance();
+        totalWithdrawn += amount;
 
         // 1/19/80 split
         RevenueSplitLib.Split memory s = RevenueSplitLib.split(amount);

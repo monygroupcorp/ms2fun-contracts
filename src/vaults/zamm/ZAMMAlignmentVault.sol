@@ -90,6 +90,13 @@ contract ZAMMAlignmentVault is IAlignmentVault, Ownable, ReentrancyGuard {
     error TransferFailed();
     error ExceedsMaxBps();
     error TreasuryNotSet();
+    error ContributionBelowMinimum();
+    error TooManyPendingBenefactors();
+    error HarvestSameBlock();
+
+    // ── Anti-DoS constants ────────────────────────────────────────────────
+    uint256 public constant MIN_CONTRIBUTION = 0.001 ether;
+    uint256 public constant MAX_PENDING_BENEFACTORS = 500;
 
     // ── Events ────────────────────────────────────────────────────────────
     event LiquidityAdded(uint256 ethSwapped, uint256 tokenReceived, uint256 lpMinted, uint256 callerReward);
@@ -136,6 +143,9 @@ contract ZAMMAlignmentVault is IAlignmentVault, Ownable, ReentrancyGuard {
     // ── Caller incentives ─────────────────────────────────────────────────
     uint256 public conversionReward;
     uint256 public harvestReward;
+
+    // ── Flash-loan / same-block harvest guard ────────────────────────────
+    uint256 private _lastHarvestBlock;
 
     // ── Clone guard ───────────────────────────────────────────────────────
     bool private _initialized;
@@ -189,7 +199,9 @@ contract ZAMMAlignmentVault is IAlignmentVault, Ownable, ReentrancyGuard {
 
     function _trackPending(address benefactor, uint256 amount) internal {
         if (benefactor == address(0) || amount == 0) return;
+        if (amount < MIN_CONTRIBUTION) revert ContributionBelowMinimum();
         if (pendingContribution[benefactor] == 0) {
+            if (_pendingBenefactors.length >= MAX_PENDING_BENEFACTORS) revert TooManyPendingBenefactors();
             _pendingBenefactors.push(benefactor);
         }
         pendingContribution[benefactor] += amount;
@@ -274,12 +286,12 @@ contract ZAMMAlignmentVault is IAlignmentVault, Ownable, ReentrancyGuard {
         (, r.tokenBought) = IzRouterV2(zRouter).swapVZ{value: ethToSwap}(
             address(this), false, _poolKey.feeOrHook,
             address(0), alignmentToken, 0, 0,
-            ethToSwap, minTokenOut, type(uint256).max
+            ethToSwap, minTokenOut, block.timestamp + 15 minutes
         );
 
         IERC20(alignmentToken).forceApprove(zamm, r.tokenBought);
         (r.ethUsed, r.tokenUsed, r.lp) = IZAMM(zamm).addLiquidity{value: ethForLP}(
-            _poolKey, ethForLP, r.tokenBought, minEth, minToken, address(this), type(uint256).max
+            _poolKey, ethForLP, r.tokenBought, minEth, minToken, address(this), block.timestamp + 15 minutes
         );
     }
 
@@ -298,6 +310,8 @@ contract ZAMMAlignmentVault is IAlignmentVault, Ownable, ReentrancyGuard {
     /// @notice Harvest fee growth from ZAMM pool. Anyone can call (incentivized).
     /// @param minEthOut Minimum ETH to receive from token→ETH fee swap
     function harvest(uint256 minEthOut) external nonReentrant returns (uint256 feesCollected) {
+        if (block.number == _lastHarvestBlock) revert HarvestSameBlock();
+        _lastHarvestBlock = block.number;
         if (totalContributions == 0) revert ZeroContributions();
 
         uint256 lpHeld = IZAMM(zamm).balanceOf(address(this), poolId);
@@ -343,7 +357,7 @@ contract ZAMMAlignmentVault is IAlignmentVault, Ownable, ReentrancyGuard {
 
     function _removeFeeLP(uint256 feeLP, uint256 minEthOut) private returns (uint256 feesCollected) {
         (uint256 ethRemoved, uint256 tokRemoved) = IZAMM(zamm).removeLiquidity(
-            _poolKey, feeLP, 0, 0, address(this), type(uint256).max
+            _poolKey, feeLP, 0, 0, address(this), block.timestamp + 15 minutes
         );
         uint256 swappedEth;
         if (tokRemoved > 0) {
@@ -351,7 +365,7 @@ contract ZAMMAlignmentVault is IAlignmentVault, Ownable, ReentrancyGuard {
             (, swappedEth) = IzRouterV2(zRouter).swapVZ(
                 address(this), false, _poolKey.feeOrHook,
                 alignmentToken, address(0), 0, 0,
-                tokRemoved, minEthOut, type(uint256).max
+                tokRemoved, minEthOut, block.timestamp + 15 minutes
             );
         }
         feesCollected = ethRemoved + swappedEth;

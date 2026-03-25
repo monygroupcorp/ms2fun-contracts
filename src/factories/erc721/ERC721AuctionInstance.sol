@@ -98,6 +98,9 @@ contract ERC721AuctionInstance is ERC721, Ownable, ReentrancyGuard, IInstanceLif
     address public factory;
     bool public agentDelegationEnabled;
 
+    /// @dev Vault cuts that could not be sent (vault reverted). Retry via flushPendingVaultCut().
+    uint256 public pendingVaultCut;
+
     // ┌─────────────────────────┐
     // │         Events          │
     // └─────────────────────────┘
@@ -108,6 +111,7 @@ contract ERC721AuctionInstance is ERC721, Ownable, ReentrancyGuard, IInstanceLif
     event AuctionSettled(uint24 indexed tokenId, address indexed winner, uint256 amount);
     event UnsoldReclaimed(uint24 indexed tokenId, uint256 forfeitedDeposit);
     event AgentDelegationChanged(bool enabled);
+    event VaultContributionFailed(address indexed vault, uint256 amount);
 
     // ┌─────────────────────────┐
     // │      Constructor        │
@@ -329,11 +333,14 @@ contract ERC721AuctionInstance is ERC721, Ownable, ReentrancyGuard, IInstanceLif
             SafeTransferLib.safeTransferETH(protocolTreasury, s.protocolCut);
         }
 
-        vault.receiveContribution{value: s.vaultCut}(
+        try vault.receiveContribution{value: s.vaultCut}(
             Currency.wrap(address(0)),
             s.vaultCut,
             address(this)
-        );
+        ) {} catch {
+            pendingVaultCut += s.vaultCut;
+            emit VaultContributionFailed(address(vault), s.vaultCut);
+        }
         SmartTransferLib.smartTransferETH(owner(), s.remainder, weth);
 
         emit AuctionSettled(tokenId, auction.highBidder, auction.highBid);
@@ -385,6 +392,15 @@ contract ERC721AuctionInstance is ERC721, Ownable, ReentrancyGuard, IInstanceLif
         totalClaimed = vault.claimFees();
         if (totalClaimed == 0) revert NoFeesToClaim();
         SmartTransferLib.smartTransferETH(owner(), totalClaimed, weth);
+    }
+
+    /// @notice Retry sending any previously failed vault cuts.
+    /// @dev Permissionless — anyone can call once the vault is healthy again.
+    function flushPendingVaultCut() external nonReentrant {
+        uint256 pending = pendingVaultCut;
+        if (pending == 0) revert NoFeesToClaim();
+        pendingVaultCut = 0;
+        vault.receiveContribution{value: pending}(Currency.wrap(address(0)), pending, address(this));
     }
 
     /// @notice Migrate to a new vault. New vault must share this instance's alignment target.

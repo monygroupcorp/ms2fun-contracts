@@ -101,8 +101,10 @@ contract ZAMMLiquidityDeployerModule is ILiquidityDeployerModule, Ownable {
 
         uint256 a0 = r.ethIsToken0 ? r.ethForPool : p.tokenReserve;
         uint256 a1 = r.ethIsToken0 ? p.tokenReserve : r.ethForPool;
+        uint256 a0Min = a0 * 99 / 100; // 1% slippage tolerance
+        uint256 a1Min = a1 * 99 / 100;
         (,, r.liquidity) = IZAMM(zamm).addLiquidity{value: r.ethForPool}(
-            zammKey, a0, a1, 0, 0, p.instance, type(uint256).max
+            zammKey, a0, a1, a0Min, a1Min, p.instance, block.timestamp
         );
     }
 

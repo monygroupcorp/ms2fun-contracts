@@ -1106,12 +1106,21 @@ contract UniAlignmentVaultTest is Test {
     }
 
     function test_EdgeCase_VerySmallContributions() public {
+        // MIN_CONTRIBUTION = 0.001 ether; values below it revert with ContributionBelowMinimum.
+        // Verify that a below-minimum contribution reverts.
         vm.prank(alice);
         (bool s1, ) = address(vault).call{value: 1 wei}("");
-        assertTrue(s1);
+        assertFalse(s1, "contribution below MIN_CONTRIBUTION should revert");
 
-        assertEq(vault.benefactorTotalETH(alice), 1 wei);
-        assertEq(vault.pendingETH(alice), 1 wei);
+        // A contribution at exactly MIN_CONTRIBUTION succeeds.
+        uint256 minContrib = vault.MIN_CONTRIBUTION();
+        vm.deal(alice, alice.balance + minContrib);
+        vm.prank(alice);
+        (bool s2, ) = address(vault).call{value: minContrib}("");
+        assertTrue(s2, "contribution at MIN_CONTRIBUTION should succeed");
+
+        assertEq(vault.benefactorTotalETH(alice), minContrib);
+        assertEq(vault.pendingETH(alice), minContrib);
     }
 
     function test_EdgeCase_VeryLargeContributions() public {

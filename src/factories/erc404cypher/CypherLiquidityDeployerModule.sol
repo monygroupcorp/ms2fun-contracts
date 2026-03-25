@@ -112,10 +112,10 @@ contract CypherLiquidityDeployerModule is ILiquidityDeployerModule, Ownable {
                 tickUpper: TICK_UPPER,
                 amount0Desired: amount0,
                 amount1Desired: amount1,
-                amount0Min: 0,
-                amount1Min: 0,
+                amount0Min: amount0 * 99 / 100, // 1% slippage tolerance
+                amount1Min: amount1 * 99 / 100,
                 recipient: p.vault,
-                deadline: block.timestamp
+                deadline: block.timestamp + 15 minutes
             })
         );
         if (liquidity == 0) revert ZeroLiquidity();

@@ -21,9 +21,12 @@ import {ComponentRegistry} from "../src/registry/ComponentRegistry.sol";
 import {ERC1155Factory} from "../src/factories/erc1155/ERC1155Factory.sol";
 import {ERC721AuctionFactory} from "../src/factories/erc721/ERC721AuctionFactory.sol";
 import {PromotionBadges} from "../src/promotion/PromotionBadges.sol";
+import {zRouter} from "../src/peripherals/zRouter.sol";
 import {MockSafe} from "../test/mocks/MockSafe.sol";
-import {MockERC20} from "../test/mocks/MockERC20.sol";
 import {ICreateX, CREATEX} from "../src/shared/CreateXConstants.sol";
+import {PoolKey} from "v4-core/types/PoolKey.sol";
+import {Currency} from "v4-core/types/Currency.sol";
+import {IHooks} from "v4-core/interfaces/IHooks.sol";
 
 contract DeploySepolia is Script {
     // Algebra V2 (Cypher AMM) addresses on Sepolia — fill before deploying
@@ -33,14 +36,23 @@ contract DeploySepolia is Script {
 
     // Sepolia default addresses (overridable via env vars)
     address public constant SEPOLIA_WETH = 0xfFf9976782d46CC05630D1f6eBAb18b2324d6B14;
+    address public constant SEPOLIA_LINK = 0x779877A7B0D9E8603169DdbD7836e478b4624789;
     address public constant SEPOLIA_V4_POOL_MANAGER = 0xE03A1074c86CFeDd5C142C4F04F1a1536e203543;
     address public constant SEPOLIA_V3_FACTORY = 0x0227628f3F023bb0B980b67D528571c95c6DaC1c;
     address public constant SEPOLIA_V2_FACTORY = 0xF62c03E08ada871A0bEb309762E260a7a6a880E6;
 
-    // zRouter singleton on Sepolia — TODO: replace with actual deployed address
-    address public constant SEPOLIA_ZROUTER = address(0); // placeholder
     uint24  public constant ZROUTER_FEE = 3000;
     int24   public constant ZROUTER_TICK_SPACING = 60;
+
+    // Vanity CREATE3 salts (deployer 0x1821bd18cbdd267ce4e389f893ddfe7beb333ab6 guard, no cross-chain protection)
+    // => addresses all share the 0x00001152________ prefix (chain-agnostic)
+    bytes32 public constant SALT_MASTER_REGISTRY   = 0x1821bd18cbdd267ce4e389f893ddfe7beb333ab600721d1a3d22a2ea02871306; // => 0x000011526343950cfc6d74140f48f8ffdd013d61
+    bytes32 public constant SALT_TREASURY          = 0x1821bd18cbdd267ce4e389f893ddfe7beb333ab600530939d9b7c16301180b07; // => 0x000011525d097fb6f344660c999f88bcd0dff0d7
+    bytes32 public constant SALT_QUEUE_MANAGER     = 0x1821bd18cbdd267ce4e389f893ddfe7beb333ab6007cd1badd91acac0064a2a3; // => 0x0000115285007e94f9e959bc6a2dafdf97423a32
+    bytes32 public constant SALT_GLOBAL_MSG_REG    = 0x1821bd18cbdd267ce4e389f893ddfe7beb333ab60009c6c91fc2b55e00e94a29; // => 0x00001152a764cb67f7e8971d222a54b01b84f578
+    bytes32 public constant SALT_ALIGNMENT_REG     = 0x1821bd18cbdd267ce4e389f893ddfe7beb333ab60033170d37eaf164000226a2; // => 0x000011521939ecfe7f5a05162734cc8bd9a20b8a
+    bytes32 public constant SALT_COMPONENT_REG     = 0x1821bd18cbdd267ce4e389f893ddfe7beb333ab6008821ee824b2be903e32004; // => 0x00001152ec8497a7d8343c38364b9677588e120d
+    bytes32 public constant SALT_VAULT             = 0x1821bd18cbdd267ce4e389f893ddfe7beb333ab600d87ebcf59ab0b201476b7f; // => 0x0000115279605df875dc71b1d4e940b3b898e6cb
 
     // Deployed addresses (public for test access)
     MasterRegistryV1 public masterRegistryImpl;
@@ -57,7 +69,7 @@ contract DeploySepolia is Script {
 
     AlignmentRegistryV1 public alignmentRegistryImpl;
     AlignmentRegistryV1 public alignmentRegistry; // proxy
-    MockERC20 public testToken;
+    address public alignmentToken;
     uint256 public alignmentTargetId;
 
     UniAlignmentVault public vault;
@@ -65,6 +77,8 @@ contract DeploySepolia is Script {
     LaunchManager public launchManager;
     CurveParamsComputer public curveParamsComputer;
     ComponentRegistry public componentRegistry;
+
+    zRouter public zrouter;
 
     ERC404Factory public erc404Factory;
     ERC1155Factory public erc1155Factory;
@@ -98,7 +112,7 @@ contract DeploySepolia is Script {
                 abi.encode(address(masterRegistryImpl), abi.encodeWithSignature("initialize(address)", deployer))
             );
             masterRegistryProxy = MasterRegistry(payable(
-                ICreateX(CREATEX).deployCreate3(vm.envOr("MASTER_REGISTRY_SALT", bytes32(uint256(1))), proxyInitCode)
+                ICreateX(CREATEX).deployCreate3(vm.envOr("MASTER_REGISTRY_SALT", SALT_MASTER_REGISTRY), proxyInitCode)
             ));
         }
         masterRegistry = address(masterRegistryProxy);
@@ -108,7 +122,7 @@ contract DeploySepolia is Script {
         treasury = ProtocolTreasuryV1(payable(
             _deployProxyCreate3(
                 address(treasuryImpl),
-                vm.envOr("TREASURY_SALT", bytes32(uint256(2))),
+                vm.envOr("TREASURY_SALT", SALT_TREASURY),
                 abi.encodeWithSignature("initialize(address)", deployer)
             )
         ));
@@ -120,7 +134,7 @@ contract DeploySepolia is Script {
         queueManager = FeaturedQueueManager(payable(
             _deployProxyCreate3(
                 address(queueManagerImpl),
-                vm.envOr("QUEUE_MANAGER_SALT", bytes32(uint256(3))),
+                vm.envOr("QUEUE_MANAGER_SALT", SALT_QUEUE_MANAGER),
                 abi.encodeWithSignature("initialize(address,address)", masterRegistry, deployer)
             )
         ));
@@ -130,7 +144,7 @@ contract DeploySepolia is Script {
         globalMessageRegistry = GlobalMessageRegistry(
             _deployProxyCreate3(
                 address(globalMessageRegistryImpl),
-                vm.envOr("GLOBAL_MSG_REGISTRY_SALT", bytes32(uint256(4))),
+                vm.envOr("GLOBAL_MSG_REGISTRY_SALT", SALT_GLOBAL_MSG_REG),
                 abi.encodeWithSignature("initialize(address,address)", deployer, masterRegistry)
             )
         );
@@ -140,7 +154,7 @@ contract DeploySepolia is Script {
         alignmentRegistry = AlignmentRegistryV1(
             _deployProxyCreate3(
                 address(alignmentRegistryImpl),
-                vm.envOr("ALIGNMENT_REGISTRY_SALT", bytes32(uint256(5))),
+                vm.envOr("ALIGNMENT_REGISTRY_SALT", SALT_ALIGNMENT_REG),
                 abi.encodeWithSignature("initialize(address)", deployer)
             )
         );
@@ -153,25 +167,33 @@ contract DeploySepolia is Script {
             safe = address(new MockSafe());
         }
 
-        // ============ Phase 3: Mock Alignment Target ============
+        // ============ Phase 3: Alignment Target (WETH) ============
 
-        // 10. Deploy MockERC20
-        testToken = new MockERC20("TestToken", "TEST");
-
-        // 11. Register alignment target via AlignmentRegistry
+        alignmentToken = SEPOLIA_LINK;
         IAlignmentRegistry.AlignmentAsset[] memory assets = new IAlignmentRegistry.AlignmentAsset[](1);
         assets[0] = IAlignmentRegistry.AlignmentAsset({
-            token: address(testToken),
-            symbol: "TEST",
-            info: "Test alignment token for Sepolia",
+            token: SEPOLIA_LINK,
+            symbol: "LINK",
+            info: "Chainlink - Sepolia alignment target",
             metadataURI: ""
         });
         alignmentTargetId = alignmentRegistry.registerAlignmentTarget(
-            "Test Community",
-            "Test alignment target for Sepolia",
+            "Chainlink",
+            "LINK alignment target for Sepolia testing",
             "",
             assets
         );
+
+        // ============ Phase 3.5: zRouter ============
+
+        {
+            address zrouterAddr = vm.envOr("ZROUTER_ADDRESS", address(0));
+            if (zrouterAddr == address(0)) {
+                zrouter = new zRouter();
+            } else {
+                zrouter = zRouter(payable(zrouterAddr));
+            }
+        }
 
         // ============ Phase 4: Vault ============
 
@@ -183,14 +205,14 @@ contract DeploySepolia is Script {
         vault = UniAlignmentVault(payable(
             _deployProxyCreate3(
                 address(vaultImpl),
-                vm.envOr("VAULT_SALT", bytes32(uint256(7))),
+                vm.envOr("VAULT_SALT", SALT_VAULT),
                 abi.encodeWithSignature(
                     "initialize(address,address,address,address,address,uint24,int24,address,address,uint256)",
                     deployer,
                     weth,
                     poolManager,
-                    address(testToken),
-                    SEPOLIA_ZROUTER,
+                    SEPOLIA_LINK,
+                    address(zrouter),
                     ZROUTER_FEE,
                     ZROUTER_TICK_SPACING,
                     address(priceValidator),
@@ -208,6 +230,15 @@ contract DeploySepolia is Script {
             "https://sepolia.ms2.fun/vault",
             alignmentTargetId
         );
+
+        // 14. Set ETH/LINK V4 pool key (currency0 = ETH = address(0), currency1 = LINK)
+        vault.setV4PoolKey(PoolKey({
+            currency0: Currency.wrap(address(0)),
+            currency1: Currency.wrap(SEPOLIA_LINK),
+            fee: ZROUTER_FEE,
+            tickSpacing: ZROUTER_TICK_SPACING,
+            hooks: IHooks(address(0))
+        }));
 
         // ============ Phase 5+5b: Factories ============
         _deployFactories(deployer, weth, poolManager);
@@ -251,7 +282,7 @@ contract DeploySepolia is Script {
         componentRegistry = ComponentRegistry(
             _deployProxyCreate3(
                 address(compRegImpl),
-                vm.envOr("COMPONENT_REGISTRY_SALT", bytes32(uint256(6))),
+                vm.envOr("COMPONENT_REGISTRY_SALT", SALT_COMPONENT_REG),
                 abi.encodeWithSignature("initialize(address)", deployer)
             )
         );
@@ -327,18 +358,15 @@ contract DeploySepolia is Script {
         console.log("AlignmentRegistry (proxy):", address(alignmentRegistry));
         console.log("AlignmentRegistry (impl):", address(alignmentRegistryImpl));
         console.log("Safe:", safe);
-        console.log("TestToken (ERC20):", address(testToken));
+        console.log("Alignment token (LINK):", alignmentToken);
+        console.log("zRouter:", address(zrouter));
         console.log("UniAlignmentVault:", address(vault));
         console.log("ComponentRegistry:", address(componentRegistry));
         console.log("ERC404Factory:", address(erc404Factory));
         console.log("ERC1155Factory:", address(erc1155Factory));
         console.log("ERC721AuctionFactory:", address(erc721Factory));
         console.log("PromotionBadges:", address(promotionBadges));
-        console.log("");
-        console.log("=== POST-DEPLOY CHECKLIST ===");
-        console.log("1. Deploy Timelock (24h delay) with Safe as proposer/canceller");
-        console.log("2. Run MigrateOwnership to transfer all contracts to Timelock");
-        console.log("3. Set emergencyRevoker to Safe address via Timelock");
-        console.log("4. Alignment target ID:", alignmentTargetId);
+        console.log("V4 pool key: ETH/LINK fee=3000 tickSpacing=60");
+        console.log("Alignment target ID:", alignmentTargetId);
     }
 }

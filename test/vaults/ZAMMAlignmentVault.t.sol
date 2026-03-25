@@ -449,6 +449,7 @@ contract ZAMMAlignmentVaultTest is Test {
             mockZamm.setTokenPerLp(feeGrowth);
             vm.deal(address(mockZamm), 1000 ether);
 
+            vm.roll(block.number + 1); // avoid HarvestSameBlock revert
             vault.harvest(0);
 
             uint256 currentAcc = vault.accRewardPerContribution();
@@ -492,6 +493,7 @@ contract ZAMMAlignmentVaultTest is Test {
             mockZamm.setTokenPerLp(0.002 ether);
             vm.deal(address(mockZamm), 1000 ether);
 
+            vm.roll(block.number + 1); // avoid HarvestSameBlock revert
             uint256 fees = vault.harvest(0);
             totalFeesHarvested += fees;
 
