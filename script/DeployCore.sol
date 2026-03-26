@@ -185,6 +185,16 @@ contract DeployCore is Script {
         );
 
         MasterRegistryV1(masterRegistry).setAlignmentRegistry(address(alignmentRegistry));
+
+        // ── Phase 2: Safe ────────────────────────────────────────────────────
+
+        safe = cfg.safe != address(0) ? cfg.safe : address(new MockSafe());
+
+        // ── Phase 3: zRouter ─────────────────────────────────────────────────
+
+        zrouter = cfg.zrouter != address(0)
+            ? zRouter(payable(cfg.zrouter))
+            : new zRouter();
     }
 
     // ─────────────────────────── Internal Helpers ───────────────────────────
