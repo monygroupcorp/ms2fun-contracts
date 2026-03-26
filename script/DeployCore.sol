@@ -27,6 +27,8 @@ import {DynamicPricingModule} from "../src/factories/erc1155/DynamicPricingModul
 import {ERC721AuctionFactory} from "../src/factories/erc721/ERC721AuctionFactory.sol";
 import {QueryAggregator} from "../src/query/QueryAggregator.sol";
 import {zRouter} from "../src/peripherals/zRouter.sol";
+import {PasswordTierGatingModule} from "../src/gating/PasswordTierGatingModule.sol";
+import {FeatureUtils} from "../src/master/libraries/FeatureUtils.sol";
 import {MockSafe} from "../test/mocks/MockSafe.sol";
 import {ICreateX, CREATEX} from "../src/shared/CreateXConstants.sol";
 
@@ -129,6 +131,7 @@ contract DeployCore is Script {
     ERC1155Factory public erc1155Factory;
     DynamicPricingModule public dynamicPricingModule;
     ERC721AuctionFactory public erc721Factory;
+    PasswordTierGatingModule public passwordTierGatingModule;
     QueryAggregator public queryAggregator;
 
     // ───────────────────────────── Entry Point ──────────────────────────────
@@ -298,8 +301,9 @@ contract DeployCore is Script {
         );
         erc404Factory.setProtocolTreasury(address(treasury));
 
+        // LaunchManager is the liquidity deployer — must be approved before any ERC404 creation
         componentRegistry.approveComponent(
-            address(curveParamsComputer), bytes32("CurveComputer"), "CurveParamsComputer"
+            address(launchManager), FeatureUtils.LIQUIDITY_DEPLOYER, "Uniswap V4 Deployer"
         );
 
         // Hardcoded protocol presets — NICHE / STANDARD / HYPE
@@ -325,9 +329,14 @@ contract DeployCore is Script {
 
         dynamicPricingModule = new DynamicPricingModule();
         componentRegistry.approveComponent(
-            address(dynamicPricingModule), bytes32("DynamicPricing"), "DynamicPricingModule"
+            address(dynamicPricingModule), FeatureUtils.DYNAMIC_PRICING, "DynamicPricingModule"
         );
         erc1155Factory.setDynamicPricingModule(address(dynamicPricingModule));
+
+        passwordTierGatingModule = new PasswordTierGatingModule(masterRegistry);
+        componentRegistry.approveComponent(
+            address(passwordTierGatingModule), FeatureUtils.GATING, "Password Tier Gating"
+        );
 
         // ── Phase 8: ERC721AuctionFactory ────────────────────────────────────
 
@@ -381,6 +390,7 @@ contract DeployCore is Script {
         vm.serializeAddress(c, "LaunchManager",              address(launchManager));
         vm.serializeAddress(c, "CurveParamsComputer",        address(curveParamsComputer));
         vm.serializeAddress(c, "DynamicPricingModule",       address(dynamicPricingModule));
+        vm.serializeAddress(c, "PasswordTierGatingModule",   address(passwordTierGatingModule));
         string memory contracts = vm.serializeAddress(c,
             "UniswapVaultPriceValidator", address(priceValidator));
 
