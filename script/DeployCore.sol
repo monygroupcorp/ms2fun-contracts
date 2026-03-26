@@ -195,6 +195,35 @@ contract DeployCore is Script {
         zrouter = cfg.zrouter != address(0)
             ? zRouter(payable(cfg.zrouter))
             : new zRouter();
+
+        // ── Phase 4: Vault infrastructure ───────────────────────────────────
+
+        // Always deploy — self-guards with code.length checks when pools don't exist
+        priceValidator = new UniswapVaultPriceValidator(
+            cfg.weth, cfg.v2Factory, cfg.v3Factory, cfg.v4PoolManager,
+            cfg.priceDeviationBps, cfg.twapSeconds
+        );
+
+        uniVaultFactory = new UniAlignmentVaultFactory(
+            cfg.weth,
+            cfg.v4PoolManager,
+            address(zrouter),
+            cfg.zrouterFee,
+            cfg.zrouterTickSpacing,
+            IVaultPriceValidator(address(priceValidator)),
+            alignmentRegistry
+        );
+
+        if (cfg.cypherPositionManager != address(0)) {
+            CypherAlignmentVault cypherImpl = new CypherAlignmentVault();
+            cypherVaultFactory = new CypherAlignmentVaultFactory(address(cypherImpl));
+        }
+
+        if (cfg.zamm != address(0)) {
+            zammVaultFactory = new ZAMMAlignmentVaultFactory(
+                cfg.zamm, address(zrouter), address(treasury)
+            );
+        }
     }
 
     // ─────────────────────────── Internal Helpers ───────────────────────────
