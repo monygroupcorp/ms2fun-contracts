@@ -11,6 +11,7 @@ gas_reports = ["*"]
 test = "test"
 script = "script"
 broadcast = "broadcast"
+fs_permissions = [{ access = "read-write", path = "./deployments/" }]
 remappings = [
     "@openzeppelin/contracts/=lib/openzeppelin-contracts/contracts/",
     "solady/=lib/solady/src/",
