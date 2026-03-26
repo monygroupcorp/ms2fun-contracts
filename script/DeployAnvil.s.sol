@@ -19,8 +19,9 @@ contract DeployAnvil is DeployCore {
 
     function run() public {
         uint256 pk = vm.envUint("PRIVATE_KEY");
+        address deployer = vm.addr(pk);
         vm.startBroadcast(pk);
-        deploy(msg.sender, _anvilConfig());
+        deploy(deployer, _anvilConfig());
         vm.stopBroadcast();
     }
 
