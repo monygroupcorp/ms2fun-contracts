@@ -31,13 +31,18 @@
 
 ## Peripherals & Factories
 
+> **Note:** Addresses below are from the previous deploy and are now stale. Re-run `script/DeploySepolia.s.sol` to get updated addresses.
+
 | Contract | Address |
 |---|---|
 | zRouter | `0x0e05f4f236B4955233A018dcC9aFf1173090024b` |
+| QueryAggregator | *(pending re-deploy)* |
 | ERC404Factory | `0x9c7a5892A4B69eEdbE8332f394a0D5ecA1d32617` |
+| LaunchManager | *(pending re-deploy)* |
+| CurveParamsComputer | *(pending re-deploy)* |
 | ERC1155Factory | `0x3055d15aAc79802c65A6d8f1a13751cd2652b9d4` |
+| DynamicPricingModule | *(pending re-deploy)* |
 | ERC721AuctionFactory | `0x1237fbf33c0401084b5f8f7666C9AC50008131A1` |
-| PromotionBadges | `0xe7dA0815EF405F3895D7516b3b528d0449101045` |
 | MockSafe | `0x75de49C1aF6bF037E366d2E2D6D7ae9a2573bC6C` |
 
 ## Configuration

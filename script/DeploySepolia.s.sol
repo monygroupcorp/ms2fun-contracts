@@ -20,7 +20,8 @@ import {CurveParamsComputer} from "../src/factories/erc404/CurveParamsComputer.s
 import {ComponentRegistry} from "../src/registry/ComponentRegistry.sol";
 import {ERC1155Factory} from "../src/factories/erc1155/ERC1155Factory.sol";
 import {ERC721AuctionFactory} from "../src/factories/erc721/ERC721AuctionFactory.sol";
-import {PromotionBadges} from "../src/promotion/PromotionBadges.sol";
+import {DynamicPricingModule} from "../src/factories/erc1155/DynamicPricingModule.sol";
+import {QueryAggregator} from "../src/query/QueryAggregator.sol";
 import {zRouter} from "../src/peripherals/zRouter.sol";
 import {MockSafe} from "../test/mocks/MockSafe.sol";
 import {ICreateX, CREATEX} from "../src/shared/CreateXConstants.sol";
@@ -83,7 +84,8 @@ contract DeploySepolia is Script {
     ERC404Factory public erc404Factory;
     ERC1155Factory public erc1155Factory;
     ERC721AuctionFactory public erc721Factory;
-    PromotionBadges public promotionBadges;
+    DynamicPricingModule public dynamicPricingModule;
+    QueryAggregator public queryAggregator;
 
     function run() public {
         vm.startBroadcast();
@@ -240,16 +242,13 @@ contract DeploySepolia is Script {
             hooks: IHooks(address(0))
         }));
 
-        // ============ Phase 5+5b: Factories ============
+        // ============ Phase 5: Factories ============
         _deployFactories(deployer, weth, poolManager);
 
-        // ============ Phase 6: Promotional ============
+        // ============ Phase 6: QueryAggregator ============
 
-        // 17. PromotionBadges
-        promotionBadges = new PromotionBadges(address(treasury));
-        // ERC404 perks now go via LaunchManager (authorized to call PromotionBadges)
-        promotionBadges.setAuthorizedFactory(address(launchManager), true);
-        promotionBadges.setAuthorizedFactory(address(erc721Factory), true);
+        queryAggregator = new QueryAggregator();
+        queryAggregator.initialize(masterRegistry, address(queueManager), address(globalMessageRegistry), deployer);
 
         // ============ Phase 7: Wiring ============
 
@@ -301,14 +300,43 @@ contract DeploySepolia is Script {
             })
         );
         erc404Factory.setProtocolTreasury(address(treasury));
-        // NOTE: Approve components (curveParamsComputer, liquidity deployer) in ComponentRegistry
-        // and call launchManager.setPreset() before the factory is usable.
+
+        // Approve CurveParamsComputer in ComponentRegistry (required for preset validation)
+        componentRegistry.approveComponent(address(curveParamsComputer), bytes32("CurveComputer"), "CurveParamsComputer");
+
+        // Configure LaunchManager presets (required before any ERC404 instance creation)
+        launchManager.setPreset(0, LaunchManager.Preset({
+            targetETH: 5 ether,
+            unitPerNFT: 1_000_000_000,
+            liquidityReserveBps: 1000,
+            curveComputer: address(curveParamsComputer),
+            active: true
+        }));
+        launchManager.setPreset(1, LaunchManager.Preset({
+            targetETH: 25 ether,
+            unitPerNFT: 1_000_000,
+            liquidityReserveBps: 1000,
+            curveComputer: address(curveParamsComputer),
+            active: true
+        }));
+        launchManager.setPreset(2, LaunchManager.Preset({
+            targetETH: 50 ether,
+            unitPerNFT: 1_000,
+            liquidityReserveBps: 1000,
+            curveComputer: address(curveParamsComputer),
+            active: true
+        }));
 
         // Phase 5: ERC1155Factory
         erc1155Factory = new ERC1155Factory(
             masterRegistry, address(globalMessageRegistry), address(componentRegistry), weth
         );
         erc1155Factory.setProtocolTreasury(address(treasury));
+
+        // DynamicPricingModule enables LIMITED_DYNAMIC pricing on ERC1155 instances
+        dynamicPricingModule = new DynamicPricingModule();
+        componentRegistry.approveComponent(address(dynamicPricingModule), bytes32("DynamicPricing"), "DynamicPricingModule");
+        erc1155Factory.setDynamicPricingModule(address(dynamicPricingModule));
 
         // Phase 5: ERC721AuctionFactory
         erc721Factory = new ERC721AuctionFactory(
@@ -363,9 +391,12 @@ contract DeploySepolia is Script {
         console.log("UniAlignmentVault:", address(vault));
         console.log("ComponentRegistry:", address(componentRegistry));
         console.log("ERC404Factory:", address(erc404Factory));
+        console.log("LaunchManager:", address(launchManager));
+        console.log("CurveParamsComputer:", address(curveParamsComputer));
         console.log("ERC1155Factory:", address(erc1155Factory));
+        console.log("DynamicPricingModule:", address(dynamicPricingModule));
         console.log("ERC721AuctionFactory:", address(erc721Factory));
-        console.log("PromotionBadges:", address(promotionBadges));
+        console.log("QueryAggregator:", address(queryAggregator));
         console.log("V4 pool key: ETH/LINK fee=3000 tickSpacing=60");
         console.log("Alignment target ID:", alignmentTargetId);
     }

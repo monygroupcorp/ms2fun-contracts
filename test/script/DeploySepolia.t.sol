@@ -8,6 +8,8 @@ import {CREATEX_BYTECODE} from "createx-forge/script/CreateX.d.sol";
 import {MasterRegistryV1} from "../../src/master/MasterRegistryV1.sol";
 import {IMasterRegistry} from "../../src/master/interfaces/IMasterRegistry.sol";
 import {IAlignmentRegistry} from "../../src/master/interfaces/IAlignmentRegistry.sol";
+import {LaunchManager} from "../../src/factories/erc404/LaunchManager.sol";
+import {QueryAggregator} from "../../src/query/QueryAggregator.sol";
 import {Currency} from "v4-core/types/Currency.sol";
 
 contract DeploySepoliaTest is Test {
@@ -50,7 +52,8 @@ contract DeploySepoliaTest is Test {
         assertTrue(address(s.erc404Factory()) != address(0), "erc404Factory");
         assertTrue(address(s.erc1155Factory()) != address(0), "erc1155Factory");
         assertTrue(address(s.erc721Factory()) != address(0), "erc721Factory");
-        assertTrue(address(s.promotionBadges()) != address(0), "promotionBadges");
+        assertTrue(address(s.dynamicPricingModule()) != address(0), "dynamicPricingModule");
+        assertTrue(address(s.queryAggregator()) != address(0), "queryAggregator");
         assertTrue(address(s.launchManager()) != address(0), "launchManager");
         assertTrue(address(s.curveParamsComputer()) != address(0), "curveParamsComputer");
     }
@@ -101,13 +104,19 @@ contract DeploySepoliaTest is Test {
         assertEq(s.treasury().weth(), s.SEPOLIA_WETH());
     }
 
-    function test_promotionBadgesAuthorized() public view {
-        assertTrue(s.promotionBadges().authorizedFactories(address(s.launchManager())));
-        assertTrue(s.promotionBadges().authorizedFactories(address(s.erc721Factory())));
+    function test_queryAggregatorInitialized() public view {
+        assertEq(address(s.queryAggregator().masterRegistry()), s.masterRegistry(), "queryAggregator.masterRegistry");
     }
 
-    function test_erc404LaunchManager_deployed() public view {
-        assertTrue(address(s.launchManager()) != address(0), "LaunchManager should be deployed");
+    function test_allFactoriesRegistered() public view {
+        MasterRegistryV1 registry = MasterRegistryV1(s.masterRegistry());
+        assertEq(registry.getTotalFactories(), 3, "expected 3 factories registered");
+    }
+
+    function test_launchManagerPreset1Active() public view {
+        LaunchManager.Preset memory preset = s.launchManager().getPreset(1);
+        assertTrue(preset.active, "preset 1 should be active");
+        assertEq(preset.targetETH, 25 ether, "preset 1 targetETH");
     }
 
     function test_v4PoolKeySet() public view {
