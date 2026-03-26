@@ -29,6 +29,7 @@ import {QueryAggregator} from "../src/query/QueryAggregator.sol";
 import {zRouter} from "../src/peripherals/zRouter.sol";
 import {PasswordTierGatingModule} from "../src/gating/PasswordTierGatingModule.sol";
 import {FeatureUtils} from "../src/master/libraries/FeatureUtils.sol";
+import {MockComponentModule} from "../test/mocks/MockComponentModule.sol";
 import {MockSafe} from "../test/mocks/MockSafe.sol";
 import {ICreateX, CREATEX} from "../src/shared/CreateXConstants.sol";
 
@@ -133,6 +134,13 @@ contract DeployCore is Script {
     ERC721AuctionFactory public erc721Factory;
     PasswordTierGatingModule public passwordTierGatingModule;
     QueryAggregator public queryAggregator;
+
+    // Seed component modules — wizard-facing metadata stubs (testnet + local)
+    MockComponentModule public modulePasswordGating;
+    MockComponentModule public moduleMerkleGating;
+    MockComponentModule public moduleUniV4Deployer;
+    MockComponentModule public moduleZAMMDeployer;
+    MockComponentModule public moduleCypherDeployer;
 
     // ───────────────────────────── Entry Point ──────────────────────────────
 
@@ -301,9 +309,9 @@ contract DeployCore is Script {
         );
         erc404Factory.setProtocolTreasury(address(treasury));
 
-        // LaunchManager is the liquidity deployer — must be approved before any ERC404 creation
+        // CurveParamsComputer must be approved — _deployAndInitialize checks isApprovedComponent(preset.curveComputer)
         componentRegistry.approveComponent(
-            address(launchManager), FeatureUtils.LIQUIDITY_DEPLOYER, "Uniswap V4 Deployer"
+            address(curveParamsComputer), bytes32("curve_computer"), "CurveParamsComputer"
         );
 
         // Hardcoded protocol presets — NICHE / STANDARD / HYPE
@@ -337,6 +345,32 @@ contract DeployCore is Script {
         componentRegistry.approveComponent(
             address(passwordTierGatingModule), FeatureUtils.GATING, "Password Tier Gating"
         );
+
+        // ── Phase 7b: ComponentRegistry seeding — wizard-facing metadata stubs ─────
+        // These MockComponentModules give the frontend creation wizard metadata to
+        // display for each selectable component. Users pass these addresses to
+        // createInstance; the real functional modules are wired into factory internals.
+
+        string memory passwordGatingMeta = "data:application/json,{\"name\":\"Password Tier Gating\",\"subtitle\":\"Password \\u00b7 Tiered Access\",\"description\":\"Set one or more passwords, each unlocking a different tier of access or pricing.\",\"configType\":\"password-tier-gating\"}";
+        string memory merkleGatingMeta   = "data:application/json,{\"name\":\"Merkle Allowlist Gating\",\"subtitle\":\"Allowlist \\u00b7 Merkle Tree\",\"description\":\"Upload a list of wallet addresses to restrict minting to an allowlist.\"}";
+        string memory uniV4Meta          = "data:application/json,{\"name\":\"Uniswap V4 Deployer\",\"subtitle\":\"Uniswap V4 \\u00b7 Concentrated Liquidity\",\"description\":\"Deploy liquidity to a Uniswap V4 pool on graduation.\",\"configType\":\"launch-profile\"}";
+        string memory zammMeta           = "data:application/json,{\"name\":\"ZAMM Deployer\",\"subtitle\":\"ZAMM \\u00b7 Constant Product\",\"description\":\"Deploy liquidity to ZAMM on graduation.\",\"configType\":\"launch-profile\"}";
+        string memory cypherMeta         = "data:application/json,{\"name\":\"Cypher Deployer\",\"subtitle\":\"Cypher \\u00b7 Concentrated Liquidity\",\"description\":\"Deploy liquidity to Cypher on graduation.\",\"configType\":\"launch-profile\"}";
+
+        modulePasswordGating  = new MockComponentModule(deployer, passwordGatingMeta);
+        componentRegistry.approveComponent(address(modulePasswordGating),  FeatureUtils.GATING,             "Password Tier Gating");
+
+        moduleMerkleGating    = new MockComponentModule(deployer, merkleGatingMeta);
+        componentRegistry.approveComponent(address(moduleMerkleGating),    FeatureUtils.GATING,             "Merkle Allowlist Gating");
+
+        moduleUniV4Deployer   = new MockComponentModule(deployer, uniV4Meta);
+        componentRegistry.approveComponent(address(moduleUniV4Deployer),   FeatureUtils.LIQUIDITY_DEPLOYER, "Uniswap V4 Deployer");
+
+        moduleZAMMDeployer    = new MockComponentModule(deployer, zammMeta);
+        componentRegistry.approveComponent(address(moduleZAMMDeployer),    FeatureUtils.LIQUIDITY_DEPLOYER, "ZAMM Deployer");
+
+        moduleCypherDeployer  = new MockComponentModule(deployer, cypherMeta);
+        componentRegistry.approveComponent(address(moduleCypherDeployer),  FeatureUtils.LIQUIDITY_DEPLOYER, "Cypher Deployer");
 
         // ── Phase 8: ERC721AuctionFactory ────────────────────────────────────
 
@@ -391,6 +425,11 @@ contract DeployCore is Script {
         vm.serializeAddress(c, "CurveParamsComputer",        address(curveParamsComputer));
         vm.serializeAddress(c, "DynamicPricingModule",       address(dynamicPricingModule));
         vm.serializeAddress(c, "PasswordTierGatingModule",   address(passwordTierGatingModule));
+        vm.serializeAddress(c, "ModulePasswordGating",       address(modulePasswordGating));
+        vm.serializeAddress(c, "ModuleMerkleGating",         address(moduleMerkleGating));
+        vm.serializeAddress(c, "ModuleUniV4Deployer",        address(moduleUniV4Deployer));
+        vm.serializeAddress(c, "ModuleZAMMDeployer",         address(moduleZAMMDeployer));
+        vm.serializeAddress(c, "ModuleCypherDeployer",       address(moduleCypherDeployer));
         string memory contracts = vm.serializeAddress(c,
             "UniswapVaultPriceValidator", address(priceValidator));
 
