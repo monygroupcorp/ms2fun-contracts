@@ -315,6 +315,51 @@ contract DeployCore is Script {
             targetETH: 50 ether, unitPerNFT: 1_000,
             liquidityReserveBps: 1000, curveComputer: address(curveParamsComputer), active: true
         }));
+
+        // ── Phase 7: ERC1155Factory + DynamicPricingModule ───────────────────
+
+        erc1155Factory = new ERC1155Factory(
+            masterRegistry, address(globalMessageRegistry), address(componentRegistry), cfg.weth
+        );
+        erc1155Factory.setProtocolTreasury(address(treasury));
+
+        dynamicPricingModule = new DynamicPricingModule();
+        componentRegistry.approveComponent(
+            address(dynamicPricingModule), bytes32("DynamicPricing"), "DynamicPricingModule"
+        );
+        erc1155Factory.setDynamicPricingModule(address(dynamicPricingModule));
+
+        // ── Phase 8: ERC721AuctionFactory ────────────────────────────────────
+
+        erc721Factory = new ERC721AuctionFactory(
+            masterRegistry, address(globalMessageRegistry), cfg.weth
+        );
+        erc721Factory.setProtocolTreasury(address(treasury));
+
+        // ── Phase 9: QueryAggregator ─────────────────────────────────────────
+
+        queryAggregator = new QueryAggregator();
+        queryAggregator.initialize(
+            masterRegistry, address(queueManager), address(globalMessageRegistry), deployer
+        );
+
+        // ── Phase 10: MasterRegistry wiring ──────────────────────────────────
+
+        MasterRegistryV1(masterRegistry).registerFactory(
+            address(erc404Factory), "ERC404", "ERC404-Bonding-Curve-Factory",
+            "ERC404 Bonding Curve", "https://ms2.fun", new bytes32[](0)
+        );
+        MasterRegistryV1(masterRegistry).registerFactory(
+            address(erc1155Factory), "ERC1155", "ERC1155-Edition-Factory",
+            "ERC1155 Editions", "https://ms2.fun", new bytes32[](0)
+        );
+        MasterRegistryV1(masterRegistry).registerFactory(
+            address(erc721Factory), "ERC721", "ERC721-Auction-Factory",
+            "ERC721 Auction", "https://ms2.fun", new bytes32[](0)
+        );
+
+        MasterRegistryV1(masterRegistry).setEmergencyRevoker(deployer);
+        queueManager.setProtocolTreasury(address(treasury));
     }
 
     // ─────────────────────────── Internal Helpers ───────────────────────────
