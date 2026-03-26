@@ -360,6 +360,86 @@ contract DeployCore is Script {
 
         MasterRegistryV1(masterRegistry).setEmergencyRevoker(deployer);
         queueManager.setProtocolTreasury(address(treasury));
+
+        // ── Phase 11: JSON output ────────────────────────────────────────────
+        if (bytes(cfg.jsonOutputPath).length > 0) {
+            _writeDeploymentJson(deployer, cfg);
+        }
+    }
+
+    function _writeDeploymentJson(address deployer, NetworkConfig memory cfg) internal {
+        // contracts sub-object
+        string memory c = "contracts";
+        vm.serializeAddress(c, "MasterRegistry",             masterRegistry);
+        vm.serializeAddress(c, "ProtocolTreasury",           address(treasury));
+        vm.serializeAddress(c, "FeaturedQueueManager",       address(queueManager));
+        vm.serializeAddress(c, "GlobalMessageRegistry",      address(globalMessageRegistry));
+        vm.serializeAddress(c, "AlignmentRegistry",          address(alignmentRegistry));
+        vm.serializeAddress(c, "ComponentRegistry",          address(componentRegistry));
+        vm.serializeAddress(c, "QueryAggregator",            address(queryAggregator));
+        vm.serializeAddress(c, "zRouter",                    address(zrouter));
+        vm.serializeAddress(c, "LaunchManager",              address(launchManager));
+        vm.serializeAddress(c, "CurveParamsComputer",        address(curveParamsComputer));
+        vm.serializeAddress(c, "DynamicPricingModule",       address(dynamicPricingModule));
+        string memory contracts = vm.serializeAddress(c,
+            "UniswapVaultPriceValidator", address(priceValidator));
+
+        // factories sub-object
+        string memory f = "factories";
+        vm.serializeAddress(f, "ERC404",  address(erc404Factory));
+        vm.serializeAddress(f, "ERC1155", address(erc1155Factory));
+        string memory factories = vm.serializeAddress(f, "ERC721", address(erc721Factory));
+
+        // uniswap sub-object
+        string memory u = "uniswap";
+        vm.serializeAddress(u, "v4PoolManager", cfg.v4PoolManager);
+        vm.serializeAddress(u, "v3Factory",     cfg.v3Factory);
+        string memory uniswap = vm.serializeAddress(u, "v2Factory", cfg.v2Factory);
+
+        // vaults array — build as JSON string manually
+        string memory vaultsJson = "[";
+        bool firstVault = true;
+        for (uint256 i = 0; i < uniVaults.length; i++) {
+            if (!firstVault) vaultsJson = string.concat(vaultsJson, ",");
+            firstVault = false;
+            vaultsJson = string.concat(vaultsJson,
+                '{"address":"', vm.toString(uniVaults[i]),
+                '","type":"UNIv4","alignmentToken":"',
+                vm.toString(cfg.alignmentTargets[i].token),
+                '","targetId":', vm.toString(alignmentTargetIds[i]), '}');
+        }
+        for (uint256 i = 0; i < cypherVaults.length; i++) {
+            if (!firstVault) vaultsJson = string.concat(vaultsJson, ",");
+            firstVault = false;
+            vaultsJson = string.concat(vaultsJson,
+                '{"address":"', vm.toString(cypherVaults[i]),
+                '","type":"CYPHER","alignmentToken":"',
+                vm.toString(cfg.alignmentTargets[i].token),
+                '","targetId":', vm.toString(alignmentTargetIds[i]), '}');
+        }
+        for (uint256 i = 0; i < zammVaults.length; i++) {
+            if (!firstVault) vaultsJson = string.concat(vaultsJson, ",");
+            firstVault = false;
+            vaultsJson = string.concat(vaultsJson,
+                '{"address":"', vm.toString(zammVaults[i]),
+                '","type":"ZAMM","alignmentToken":"',
+                vm.toString(cfg.alignmentTargets[i].token),
+                '","targetId":', vm.toString(alignmentTargetIds[i]), '}');
+        }
+        vaultsJson = string.concat(vaultsJson, "]");
+
+        // root object
+        string memory root = "root";
+        vm.serializeUint(root,    "chainId",   cfg.chainId);
+        vm.serializeAddress(root, "deployer",  deployer);
+        vm.serializeString(root,  "contracts", contracts);
+        vm.serializeString(root,  "factories", factories);
+        vm.serializeString(root,  "uniswap",   uniswap);
+        vm.serializeString(root,  "instances", "[]");
+        string memory json = vm.serializeString(root, "vaults", vaultsJson);
+
+        vm.writeJson(json, cfg.jsonOutputPath);
+        console.log("Deployment JSON written to:", cfg.jsonOutputPath);
     }
 
     // ─────────────────────────── Internal Helpers ───────────────────────────
