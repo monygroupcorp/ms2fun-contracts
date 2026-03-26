@@ -139,7 +139,52 @@ contract DeployCore is Script {
     /// @notice Deploy all protocol contracts for the given network config.
     ///         Callable from forge scripts (with broadcast) or tests (without).
     function deploy(address deployer, NetworkConfig memory cfg) public {
-        // Phases implemented in subsequent tasks
+        // ── Phase 1: Protocol proxies (CREATE3) ─────────────────────────────
+
+        masterRegistryImpl = new MasterRegistryV1();
+        {
+            bytes memory initData = abi.encodeWithSignature("initialize(address)", deployer);
+            bytes memory proxyInitCode = abi.encodePacked(
+                type(MasterRegistry).creationCode,
+                abi.encode(address(masterRegistryImpl), initData)
+            );
+            masterRegistry = ICreateX(CREATEX).deployCreate3(cfg.saltMasterRegistry, proxyInitCode);
+        }
+
+        treasuryImpl = new ProtocolTreasuryV1();
+        treasury = ProtocolTreasuryV1(payable(
+            _deployProxyCreate3(address(treasuryImpl), cfg.saltTreasury,
+                abi.encodeWithSignature("initialize(address)", deployer))
+        ));
+        if (cfg.v4PoolManager != address(0)) treasury.setV4PoolManager(cfg.v4PoolManager);
+        if (cfg.weth != address(0)) treasury.setWETH(cfg.weth);
+
+        queueManagerImpl = new FeaturedQueueManager();
+        queueManager = FeaturedQueueManager(payable(
+            _deployProxyCreate3(address(queueManagerImpl), cfg.saltQueueManager,
+                abi.encodeWithSignature("initialize(address,address)", masterRegistry, deployer))
+        ));
+        queueManager.setWeth(cfg.weth);
+
+        globalMessageRegistryImpl = new GlobalMessageRegistry();
+        globalMessageRegistry = GlobalMessageRegistry(
+            _deployProxyCreate3(address(globalMessageRegistryImpl), cfg.saltGlobalMsgReg,
+                abi.encodeWithSignature("initialize(address,address)", deployer, masterRegistry))
+        );
+
+        alignmentRegistryImpl = new AlignmentRegistryV1();
+        alignmentRegistry = AlignmentRegistryV1(
+            _deployProxyCreate3(address(alignmentRegistryImpl), cfg.saltAlignmentReg,
+                abi.encodeWithSignature("initialize(address)", deployer))
+        );
+
+        componentRegistryImpl = new ComponentRegistry();
+        componentRegistry = ComponentRegistry(
+            _deployProxyCreate3(address(componentRegistryImpl), cfg.saltComponentReg,
+                abi.encodeWithSignature("initialize(address)", deployer))
+        );
+
+        MasterRegistryV1(masterRegistry).setAlignmentRegistry(address(alignmentRegistry));
     }
 
     // ─────────────────────────── Internal Helpers ───────────────────────────
