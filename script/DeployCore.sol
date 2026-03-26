@@ -276,6 +276,45 @@ contract DeployCore is Script {
                 zammVaults.push(vault);
             }
         }
+
+        // ── Phase 6: ERC404Factory ───────────────────────────────────────────
+
+        erc404Impl = new ERC404BondingInstance();
+        launchManager = new LaunchManager(deployer);
+        curveParamsComputer = new CurveParamsComputer(deployer);
+
+        erc404Factory = new ERC404Factory(
+            ERC404Factory.CoreConfig({
+                implementation: address(erc404Impl),
+                masterRegistry: masterRegistry,
+                protocol:       deployer,
+                weth:           cfg.weth
+            }),
+            ERC404Factory.ModuleConfig({
+                globalMessageRegistry: address(globalMessageRegistry),
+                launchManager:         address(launchManager),
+                componentRegistry:     address(componentRegistry)
+            })
+        );
+        erc404Factory.setProtocolTreasury(address(treasury));
+
+        componentRegistry.approveComponent(
+            address(curveParamsComputer), bytes32("CurveComputer"), "CurveParamsComputer"
+        );
+
+        // Hardcoded protocol presets — NICHE / STANDARD / HYPE
+        launchManager.setPreset(0, LaunchManager.Preset({
+            targetETH: 5 ether, unitPerNFT: 1_000_000_000,
+            liquidityReserveBps: 1000, curveComputer: address(curveParamsComputer), active: true
+        }));
+        launchManager.setPreset(1, LaunchManager.Preset({
+            targetETH: 25 ether, unitPerNFT: 1_000_000,
+            liquidityReserveBps: 1000, curveComputer: address(curveParamsComputer), active: true
+        }));
+        launchManager.setPreset(2, LaunchManager.Preset({
+            targetETH: 50 ether, unitPerNFT: 1_000,
+            liquidityReserveBps: 1000, curveComputer: address(curveParamsComputer), active: true
+        }));
     }
 
     // ─────────────────────────── Internal Helpers ───────────────────────────
