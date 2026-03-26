@@ -49,7 +49,7 @@ contract DeployCoreTest is Test {
 
         cfg.chainId             = 1337;
         cfg.weth                = STUB_LINK; // reuse stub — vault init calls it
-        cfg.v4PoolManager       = address(0);
+        cfg.v4PoolManager       = address(1); // non-zero stub — vault init rejects address(0)
         cfg.v3Factory           = address(0);
         cfg.v2Factory           = address(0);
         cfg.cypherPositionManager = address(0);
@@ -143,8 +143,6 @@ contract DeployCoreTest is Test {
     }
 
     function test_treasuryConfig() public view {
-        // v4PoolManager was address(0) in test config — just verify it was called without revert
-        // (ProtocolTreasuryV1 accepts address(0) for poolManager in tests)
         assertTrue(address(s.treasury()) != address(0));
     }
 }

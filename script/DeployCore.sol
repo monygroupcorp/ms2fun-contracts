@@ -29,9 +29,6 @@ import {QueryAggregator} from "../src/query/QueryAggregator.sol";
 import {zRouter} from "../src/peripherals/zRouter.sol";
 import {MockSafe} from "../test/mocks/MockSafe.sol";
 import {ICreateX, CREATEX} from "../src/shared/CreateXConstants.sol";
-import {PoolKey} from "v4-core/types/PoolKey.sol";
-import {Currency} from "v4-core/types/Currency.sol";
-import {IHooks} from "v4-core/interfaces/IHooks.sol";
 
 /// @title DeployCore
 /// @notice Single source of truth for protocol deployment across all networks.
@@ -223,6 +220,61 @@ contract DeployCore is Script {
             zammVaultFactory = new ZAMMAlignmentVaultFactory(
                 cfg.zamm, address(zrouter), address(treasury)
             );
+        }
+
+        // ── Phase 5: Alignment targets + vault instances ─────────────────────
+
+        for (uint256 i = 0; i < cfg.alignmentTargets.length; i++) {
+            AlignmentTargetConfig memory t = cfg.alignmentTargets[i];
+
+            IAlignmentRegistry.AlignmentAsset[] memory assets =
+                new IAlignmentRegistry.AlignmentAsset[](1);
+            assets[0] = IAlignmentRegistry.AlignmentAsset({
+                token: t.token, symbol: t.symbol, info: t.description, metadataURI: ""
+            });
+
+            uint256 targetId = alignmentRegistry.registerAlignmentTarget(
+                t.name, t.description, "", assets
+            );
+            alignmentTargetIds.push(targetId);
+
+            if (t.deployUniVault) {
+                bytes32 salt = keccak256(abi.encode(cfg.chainId, i, "UNIv4"));
+                address vault = uniVaultFactory.deployVault(
+                    salt, t.token, targetId, IVaultPriceValidator(address(0))
+                );
+                // Note: setV4PoolKey must be called by the vault owner (the factory).
+                // Pool key is operational config set post-deploy via a separate governance call.
+                MasterRegistryV1(masterRegistry).registerVault(
+                    vault, deployer, string.concat(t.symbol, " UNIv4 Vault"),
+                    "https://ms2.fun", targetId
+                );
+                uniVaults.push(vault);
+            }
+
+            if (t.deployCypherVault && address(cypherVaultFactory) != address(0)) {
+                bytes32 salt = keccak256(abi.encode(cfg.chainId, i, "CYPHER"));
+                address vault = address(cypherVaultFactory.createVault(
+                    salt, cfg.cypherPositionManager, cfg.cypherRouter,
+                    cfg.weth, t.token, address(treasury), address(0)
+                ));
+                MasterRegistryV1(masterRegistry).registerVault(
+                    vault, deployer, string.concat(t.symbol, " Cypher Vault"),
+                    "https://ms2.fun", targetId
+                );
+                cypherVaults.push(vault);
+            }
+
+            if (t.deployZAMMVault && address(zammVaultFactory) != address(0)) {
+                bytes32 salt = keccak256(abi.encode(cfg.chainId, i, "ZAMM"));
+                IZAMM.PoolKey memory poolKey; // zero poolKey — configure post-deploy when live
+                address vault = zammVaultFactory.deployVault(salt, t.token, poolKey);
+                MasterRegistryV1(masterRegistry).registerVault(
+                    vault, deployer, string.concat(t.symbol, " ZAMM Vault"),
+                    "https://ms2.fun", targetId
+                );
+                zammVaults.push(vault);
+            }
         }
     }
 
