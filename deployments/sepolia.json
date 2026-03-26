@@ -1,0 +1,30 @@
+{
+  "chainId": 11155111,
+  "contracts": {
+    "AlignmentRegistry": "0x00001152db13C4AFb4d9F4bbA93F364692F372eB",
+    "ComponentRegistry": "0x00001152Ed1bD8e76693cB775c79708275bBb2F3",
+    "CurveParamsComputer": "0xfc0189E52Df95E1078f7DeC74d8e6849AFf84eaa",
+    "DynamicPricingModule": "0x88B71cbCC6A62d5b76cc16Df35A0c063B6a84EB2",
+    "FeaturedQueueManager": "0x00001152c0715721Ae4D2b0B693862953DCFB99C",
+    "GlobalMessageRegistry": "0x0000115268C7cB1a508ec18DA1cB2D71c0B2C637",
+    "LaunchManager": "0x354768153a0d3edC314D9f6baa2fd56a6961B449",
+    "MasterRegistry": "0x00001152CBa5fDB16A0FAE780fFebD5b9dF8e7cF",
+    "ProtocolTreasury": "0x00001152e56eb45082De505e9E9be5DC158E4cfC",
+    "QueryAggregator": "0x087179Ff25bD47E72fd45d21a92Efad2B0B103e6",
+    "UniswapVaultPriceValidator": "0x2d3C9f10671314639FCBD4d85F3DcfbFF2D5610E",
+    "zRouter": "0x4ABdEaB1A6Dca8CEFB3280cb2843DDbEf0FA1CFB"
+  },
+  "deployer": "0x1821BD18CBdD267CE4e389f893dDFe7BEB333aB6",
+  "factories": {
+    "ERC1155": "0x8b4282aBCE5DeF5ab9f5D4501182503492CD1C4B",
+    "ERC404": "0xd84f755AdFac9408ADbde65832F8A1BFf5179bF8",
+    "ERC721": "0x073BBb8DF32b2228B6f08fAFc7d144ef911e2082"
+  },
+  "instances": "[]",
+  "uniswap": {
+    "v2Factory": "0xF62c03E08ada871A0bEb309762E260a7a6a880E6",
+    "v3Factory": "0x0227628f3F023bb0B980b67D528571c95c6DaC1c",
+    "v4PoolManager": "0xE03A1074c86CFeDd5C142C4F04F1a1536e203543"
+  },
+  "vaults": "[{\"address\":\"0xf456B56E210924c249db834504a97c4A15D57cd8\",\"type\":\"UNIv4\",\"alignmentToken\":\"0x779877A7B0D9E8603169DdbD7836e478b4624789\",\"targetId\":1}]"
+}

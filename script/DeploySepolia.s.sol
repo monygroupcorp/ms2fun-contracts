@@ -37,12 +37,12 @@ contract DeploySepolia is DeployCore {
         cfg.zrouter          = address(0);
         cfg.safe             = address(0); // deploys MockSafe
         // Vanity salts — deployer guard: 0x1821bd18cbdd267ce4e389f893ddfe7beb333ab6
-        cfg.saltMasterRegistry = 0x1821bd18cbdd267ce4e389f893ddfe7beb333ab600721d1a3d22a2ea02871306;
-        cfg.saltTreasury       = 0x1821bd18cbdd267ce4e389f893ddfe7beb333ab600530939d9b7c16301180b07;
-        cfg.saltQueueManager   = 0x1821bd18cbdd267ce4e389f893ddfe7beb333ab6007cd1badd91acac0064a2a3;
-        cfg.saltGlobalMsgReg   = 0x1821bd18cbdd267ce4e389f893ddfe7beb333ab60009c6c91fc2b55e00e94a29;
-        cfg.saltAlignmentReg   = 0x1821bd18cbdd267ce4e389f893ddfe7beb333ab60033170d37eaf164000226a2;
-        cfg.saltComponentReg   = 0x1821bd18cbdd267ce4e389f893ddfe7beb333ab6008821ee824b2be903e32004;
+        cfg.saltMasterRegistry = 0x1821bd18cbdd267ce4e389f893ddfe7beb333ab6006fc783a2ee2a5801bcc77a; // => 0x00001152cba5fdb16a0fae780ffebd5b9df8e7cf
+        cfg.saltTreasury       = 0x1821bd18cbdd267ce4e389f893ddfe7beb333ab60082245dad1d7c3e0071f20f; // => 0x00001152e56eb45082de505e9e9be5dc158e4cfc
+        cfg.saltQueueManager   = 0x1821bd18cbdd267ce4e389f893ddfe7beb333ab600cf49066351827200ad2a5e; // => 0x00001152c0715721ae4d2b0b693862953dcfb99c
+        cfg.saltGlobalMsgReg   = 0x1821bd18cbdd267ce4e389f893ddfe7beb333ab6006b9e54d6a39a0801f14fa8; // => 0x0000115268c7cb1a508ec18da1cb2d71c0b2c637
+        cfg.saltAlignmentReg   = 0x1821bd18cbdd267ce4e389f893ddfe7beb333ab60057d45cf31029d003f61c1d; // => 0x00001152db13c4afb4d9f4bba93f364692f372eb
+        cfg.saltComponentReg   = 0x1821bd18cbdd267ce4e389f893ddfe7beb333ab600586503138e974c00a226d9; // => 0x00001152ed1bd8e76693cb775c79708275bbb2f3
         cfg.priceDeviationBps  = 1000;
         cfg.twapSeconds        = 1800;
         cfg.zrouterFee         = 3000;

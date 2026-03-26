@@ -1,9 +1,11 @@
 # Sepolia Deployment
 
-**Date:** 2026-03-25
-**Deployer:** `0x1821bd18cbdd267ce4e389f893ddfe7beb333ab6`
+**Date:** 2026-03-26
+**Deployer:** `0x1821BD18CBdD267CE4e389f893dDFe7BEB333aB6`
 **Chain ID:** 11155111
 **Script:** `script/DeploySepolia.s.sol`
+**Transactions:** 46
+**All 26 contracts verified on Etherscan**
 
 ---
 
@@ -11,46 +13,55 @@
 
 | Contract | Address |
 |---|---|
-| MasterRegistry | `0x000011526343950CfC6D74140F48F8fFdD013d61` |
-| ProtocolTreasury | `0x000011525D097FB6f344660c999F88bCD0dff0d7` |
-| FeaturedQueueManager | `0x0000115285007e94F9E959bC6a2DaFdf97423A32` |
-| GlobalMessageRegistry | `0x00001152a764cb67F7E8971d222a54b01B84F578` |
-| AlignmentRegistry | `0x000011521939eCfe7F5A05162734CC8Bd9a20B8A` |
-| ComponentRegistry | `0x00001152EC8497A7D8343C38364B9677588e120D` |
-| UniAlignmentVault | `0x0000115279605DF875Dc71b1D4e940B3b898E6Cb` |
+| MasterRegistry | `0x00001152CBa5fDB16A0FAE780fFebD5b9dF8e7cF` |
+| ProtocolTreasury | `0x00001152e56eb45082De505e9E9be5DC158E4cfC` |
+| FeaturedQueueManager | `0x00001152c0715721Ae4D2b0B693862953DCFB99C` |
+| GlobalMessageRegistry | `0x0000115268C7cB1a508ec18DA1cB2D71c0B2C637` |
+| AlignmentRegistry | `0x00001152db13C4AFb4d9F4bbA93F364692F372eB` |
+| ComponentRegistry | `0x00001152Ed1bD8e76693cB775c79708275bBb2F3` |
 
-## Implementations
-
-| Contract | Address |
-|---|---|
-| MasterRegistryV1 impl | `0x889178D094b24365B292Bd84E9f305022D966d39` |
-| ProtocolTreasuryV1 impl | `0xEEAC469e0A73BC9a2c40cFeAf51054A0e10cC06F` |
-| FeaturedQueueManager impl | `0xcB1744E527dFD391E032707DB7131991E83AD9e9` |
-| GlobalMessageRegistry impl | `0x40A63A9E722E0B46B4548E880e3179Db56bBaa6a` |
-| AlignmentRegistry impl | `0xfd5c593e6fB51C48fAdbe9b915C028F7F7A9f282` |
-
-## Peripherals & Factories
-
-> **Note:** Addresses below are from the previous deploy and are now stale. Re-run `script/DeploySepolia.s.sol` to get updated addresses.
+## Factories
 
 | Contract | Address |
 |---|---|
-| zRouter | `0x0e05f4f236B4955233A018dcC9aFf1173090024b` |
-| QueryAggregator | *(pending re-deploy)* |
-| ERC404Factory | `0x9c7a5892A4B69eEdbE8332f394a0D5ecA1d32617` |
-| LaunchManager | *(pending re-deploy)* |
-| CurveParamsComputer | *(pending re-deploy)* |
-| ERC1155Factory | `0x3055d15aAc79802c65A6d8f1a13751cd2652b9d4` |
-| DynamicPricingModule | *(pending re-deploy)* |
-| ERC721AuctionFactory | `0x1237fbf33c0401084b5f8f7666C9AC50008131A1` |
-| MockSafe | `0x75de49C1aF6bF037E366d2E2D6D7ae9a2573bC6C` |
+| ERC404Factory | `0xd84f755AdFac9408ADbde65832F8A1BFf5179bF8` |
+| ERC1155Factory | `0x8b4282aBCE5DeF5ab9f5D4501182503492CD1C4B` |
+| ERC721AuctionFactory | `0x073BBb8DF32b2228B6f08fAFc7d144ef911e2082` |
+
+## Peripherals
+
+| Contract | Address |
+|---|---|
+| QueryAggregator | `0x087179Ff25bD47E72fd45d21a92Efad2B0B103e6` |
+| LaunchManager | `0x354768153a0d3edC314D9f6baa2fd56a6961B449` |
+| CurveParamsComputer | `0xfc0189E52Df95E1078f7DeC74d8e6849AFf84eaa` |
+| DynamicPricingModule | `0x88B71cbCC6A62d5b76cc16Df35A0c063B6a84EB2` |
+| UniswapVaultPriceValidator | `0x2d3C9f10671314639FCBD4d85F3DcfbFF2D5610E` |
+| zRouter | `0x4ABdEaB1A6Dca8CEFB3280cb2843DDbEf0FA1CFB` |
+
+## Alignment Vaults
+
+| Target | Type | Token | Target ID | Address |
+|---|---|---|---|---|
+| Chainlink (LINK) | UNIv4 | `0x779877A7B0D9E8603169DdbD7836e478b4624789` | 1 | `0xf456B56E210924c249db834504a97c4A15D57cd8` |
 
 ## Configuration
 
 | Key | Value |
 |---|---|
-| Alignment token | Chainlink LINK `0x779877A7B0D9E8603169DdbD7836e478b4624789` |
-| Alignment target ID | 1 |
-| V4 pool key | ETH/LINK, fee=3000, tickSpacing=60, hooks=address(0) |
 | V4 PoolManager | `0xE03A1074c86CFeDd5C142C4F04F1a1536e203543` |
+| V3 Factory | `0x0227628f3F023bb0B980b67D528571c95c6DaC1c` |
+| V2 Factory | `0xF62c03E08ada871A0bEb309762E260a7a6a880E6` |
 | WETH | `0xfFf9976782d46CC05630D1f6eBAb18b2324d6B14` |
+| Alignment token | Chainlink LINK `0x779877A7B0D9E8603169DdbD7836e478b4624789` |
+
+## CREATE3 Salts
+
+| Contract | Salt |
+|---|---|
+| MasterRegistry | `0x1821bd18cbdd267ce4e389f893ddfe7beb333ab6006fc783a2ee2a5801bcc77a` |
+| ProtocolTreasury | `0x1821bd18cbdd267ce4e389f893ddfe7beb333ab60082245dad1d7c3e0071f20f` |
+| FeaturedQueueManager | `0x1821bd18cbdd267ce4e389f893ddfe7beb333ab600cf49066351827200ad2a5e` |
+| GlobalMessageRegistry | `0x1821bd18cbdd267ce4e389f893ddfe7beb333ab6006b9e54d6a39a0801f14fa8` |
+| AlignmentRegistry | `0x1821bd18cbdd267ce4e389f893ddfe7beb333ab60057d45cf31029d003f61c1d` |
+| ComponentRegistry | `0x1821bd18cbdd267ce4e389f893ddfe7beb333ab600586503138e974c00a226d9` |
