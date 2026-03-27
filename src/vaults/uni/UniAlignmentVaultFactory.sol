@@ -4,11 +4,15 @@ pragma solidity ^0.8.20;
 import {UniAlignmentVault} from "./UniAlignmentVault.sol";
 import {IVaultPriceValidator} from "../../interfaces/IVaultPriceValidator.sol";
 import {IAlignmentRegistry} from "../../master/interfaces/IAlignmentRegistry.sol";
+import {PoolKey} from "v4-core/types/PoolKey.sol";
 import {ICreateX, CREATEX} from "../../shared/CreateXConstants.sol";
+import {Ownable} from "solady/auth/Ownable.sol";
 
 /// @title UniAlignmentVaultFactory
 /// @notice Deploys UniAlignmentVault clones; zRouter config is shared across all vaults.
-contract UniAlignmentVaultFactory {
+///         The factory is the owner of every vault it deploys, so pool key configuration
+///         must go through setVaultPoolKey (onlyOwner) rather than calling the vault directly.
+contract UniAlignmentVaultFactory is Ownable {
     address public immutable vaultImplementation;
     IVaultPriceValidator public immutable defaultPriceValidator;
     IAlignmentRegistry public immutable alignmentRegistry;
@@ -33,6 +37,7 @@ contract UniAlignmentVaultFactory {
         IVaultPriceValidator _defaultPriceValidator,
         IAlignmentRegistry _alignmentRegistry
     ) {
+        _initializeOwner(msg.sender);
         weth = _weth;
         poolManager = _poolManager;
         zRouter = _zRouter;
@@ -41,6 +46,14 @@ contract UniAlignmentVaultFactory {
         defaultPriceValidator = _defaultPriceValidator;
         alignmentRegistry = _alignmentRegistry;
         vaultImplementation = address(new UniAlignmentVault());
+    }
+
+    /// @notice Set the V4 pool key on a vault deployed by this factory.
+    ///         Only the factory owner can call this — the vault's owner is the factory.
+    /// @param vault Address of the vault (must have been deployed by this factory)
+    /// @param poolKey The V4 pool key to configure on the vault
+    function setVaultPoolKey(address vault, PoolKey calldata poolKey) external onlyOwner {
+        UniAlignmentVault(payable(vault)).setV4PoolKey(poolKey);
     }
 
     /// @notice Deploy a new vault clone via CREATE3
