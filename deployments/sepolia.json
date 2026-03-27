@@ -20,11 +20,19 @@
     "ERC404": "0xd84f755AdFac9408ADbde65832F8A1BFf5179bF8",
     "ERC721": "0x073BBb8DF32b2228B6f08fAFc7d144ef911e2082"
   },
+  "components": {
+    "LiquidityDeployerModule": "0xa6A8c51B36F61cFAA684dc7d83d862bDB0Ccc2CF",
+    "PasswordTierGatingModule": "0xb41b9be2deDe8741af3adcCa6C45F89fB054085d"
+  },
   "instances": "[]",
   "uniswap": {
     "v2Factory": "0xF62c03E08ada871A0bEb309762E260a7a6a880E6",
     "v3Factory": "0x0227628f3F023bb0B980b67D528571c95c6DaC1c",
     "v4PoolManager": "0xE03A1074c86CFeDd5C142C4F04F1a1536e203543"
   },
-  "vaults": "[{\"address\":\"0xf456B56E210924c249db834504a97c4A15D57cd8\",\"type\":\"UNIv4\",\"alignmentToken\":\"0x779877A7B0D9E8603169DdbD7836e478b4624789\",\"targetId\":1}]"
+  "vaults": [
+    {"address": "0xf456B56E210924c249db834504a97c4A15D57cd8", "type": "UNIv4", "alignmentToken": "0x779877A7B0D9E8603169DdbD7836e478b4624789", "targetId": 1, "symbol": "LINK"},
+    {"address": "0xb86749C460ee69BE7E22437505577Fe1321Dbb53", "type": "UNIv4", "alignmentToken": "0x5d9eA0e15977bd572C88866145089214AeA38149", "targetId": 2, "symbol": "MS2"},
+    {"address": "0x757aac7be1BaaD68C2dF9c67FC0c40542c62F64C", "type": "UNIv4", "alignmentToken": "0x2250dae6056dd76aa126582152A1b99A7cb556CD", "targetId": 3, "symbol": "CULT"}
+  ]
 }

@@ -44,6 +44,16 @@
 | Target | Type | Token | Target ID | Address |
 |---|---|---|---|---|
 | Chainlink (LINK) | UNIv4 | `0x779877A7B0D9E8603169DdbD7836e478b4624789` | 1 | `0xf456B56E210924c249db834504a97c4A15D57cd8` |
+| Milady Station 2 (MS2) | UNIv4 | `0x5d9eA0e15977bd572C88866145089214AeA38149` | 2 | `0xb86749C460ee69BE7E22437505577Fe1321Dbb53` |
+| CULT DAO (CULT) | UNIv4 | `0x2250dae6056dd76aa126582152A1b99A7cb556CD` | 3 | `0x757aac7be1BaaD68C2dF9c67FC0c40542c62F64C` |
+
+## Seed (SeedSepolia.s.sol — 2026-03-27)
+
+| Contract | Address |
+|---|---|
+| UniAlignmentVaultFactory (MS2/CULT) | `0x691f35B11B5Ec171f13bEE229d451D555f44Af6B` |
+| PasswordTierGatingModule | `0xb41b9be2deDe8741af3adcCa6C45F89fB054085d` |
+| LiquidityDeployerModule | `0xa6A8c51B36F61cFAA684dc7d83d862bDB0Ccc2CF` |
 
 ## Configuration
 

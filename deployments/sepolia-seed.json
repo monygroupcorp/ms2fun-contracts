@@ -1,0 +1,11 @@
+{
+  "cultTargetId": 3,
+  "cultToken": "0x2250dae6056dd76aa126582152A1b99A7cb556CD",
+  "cultVault": "0x757aac7be1BaaD68C2dF9c67FC0c40542c62F64C",
+  "liquidityDeployerModule": "0xa6A8c51B36F61cFAA684dc7d83d862bDB0Ccc2CF",
+  "ms2TargetId": 2,
+  "ms2Token": "0x5d9eA0e15977bd572C88866145089214AeA38149",
+  "ms2Vault": "0xb86749C460ee69BE7E22437505577Fe1321Dbb53",
+  "passwordTierGatingModule": "0xb41b9be2deDe8741af3adcCa6C45F89fB054085d",
+  "vaultFactory": "0x691f35B11B5Ec171f13bEE229d451D555f44Af6B"
+}

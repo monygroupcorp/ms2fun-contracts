@@ -10,7 +10,7 @@ import {UniAlignmentVaultFactory} from "../src/vaults/uni/UniAlignmentVaultFacto
 import {IVaultPriceValidator} from "../src/interfaces/IVaultPriceValidator.sol";
 import {FeatureUtils} from "../src/master/libraries/FeatureUtils.sol";
 import {PasswordTierGatingModule} from "../src/gating/PasswordTierGatingModule.sol";
-import {MockComponentModule} from "../test/mocks/MockComponentModule.sol";
+import {LiquidityDeployerModule} from "../src/factories/erc404/LiquidityDeployerModule.sol";
 import {MockERC20} from "../test/mocks/MockERC20.sol";
 import {PoolKey} from "v4-core/types/PoolKey.sol";
 import {Currency} from "v4-core/types/Currency.sol";
@@ -19,12 +19,11 @@ import {IHooks} from "v4-core/interfaces/IHooks.sol";
 
 /// @notice Post-deployment seed script for the existing Sepolia deployment.
 ///         Adds missing state that was previously handled by the Node.js seed-common.mjs:
-///         - MS2 + CULT test tokens
+///         - MS2 + CULT test tokens (MockERC20)
 ///         - Alignment targets + UniAlignmentVaults for each (via a NEW factory with setVaultPoolKey)
 ///         - V4 pool initialization + pool key assignment for each vault
-///         - 5 MockComponentModules for the creation wizard
-///         - PasswordTierGatingModule (real gating contract)
-///         - LaunchManager approval (enables ERC404 creation)
+///         - PasswordTierGatingModule (real gating, real on-chain enforcement)
+///         - LiquidityDeployerModule (real V4 LP deployer, used at ERC404 graduation)
 ///
 ///         Run with:
 ///         forge script script/SeedSepolia.s.sol \
@@ -40,7 +39,6 @@ contract SeedSepolia is Script {
     MasterRegistryV1    constant MASTER_REGISTRY    = MasterRegistryV1(0x00001152CBa5fDB16A0FAE780fFebD5b9dF8e7cF);
     ComponentRegistry   constant COMPONENT_REGISTRY = ComponentRegistry(0x00001152Ed1bD8e76693cB775c79708275bBb2F3);
     address             constant MASTER_REGISTRY_ADDR = 0x00001152CBa5fDB16A0FAE780fFebD5b9dF8e7cF;
-    address             constant LAUNCH_MANAGER     = 0x354768153a0d3edC314D9f6baa2fd56a6961B449;
     address             constant PRICE_VALIDATOR    = 0x2d3C9f10671314639FCBD4d85F3DcfbFF2D5610E;
     address             constant ZROUTER            = 0x4ABdEaB1A6Dca8CEFB3280cb2843DDbEf0FA1CFB;
 
@@ -67,11 +65,7 @@ contract SeedSepolia is Script {
     address public ms2Vault;
     address public cultVault;
     PasswordTierGatingModule public passwordTierGatingModule;
-    MockComponentModule public modulePasswordGating;
-    MockComponentModule public moduleMerkleGating;
-    MockComponentModule public moduleUniV4Deployer;
-    MockComponentModule public moduleZAMMDeployer;
-    MockComponentModule public moduleCypherDeployer;
+    LiquidityDeployerModule public liquidityDeployerModule;
 
     function run() public {
         vm.startBroadcast();
@@ -159,41 +153,30 @@ contract SeedSepolia is Script {
         vaultFactory.setVaultPoolKey(ms2Vault,  ms2PoolKey);
         vaultFactory.setVaultPoolKey(cultVault, cultPoolKey);
 
-        // ── Phase 4: ComponentRegistry — real contracts ───────────────────────
+        // ── Phase 4: ComponentRegistry — real functional contracts ───────────
 
-        // Real PasswordTierGatingModule
+        // PasswordTierGatingModule — enforces password-based tier gating on-chain
         passwordTierGatingModule = new PasswordTierGatingModule(MASTER_REGISTRY_ADDR);
+        passwordTierGatingModule.setMetadataURI(
+            "data:application/json,{\"name\":\"Password Tier Gating\",\"subtitle\":\"Password \\u00b7 Tiered Access\",\"description\":\"Set one or more passwords, each unlocking a different tier of access or pricing. Share codes with your community however you like.\",\"configType\":\"password-tier-gating\"}"
+        );
         COMPONENT_REGISTRY.approveComponent(
-            address(passwordTierGatingModule), FeatureUtils.GATING, "Password Tier Gating (real)"
+            address(passwordTierGatingModule), FeatureUtils.GATING, "PasswordTierGatingModule"
         );
 
-        // LaunchManager was deployed in the original Sepolia deploy — approve it for liquidity tag
-        COMPONENT_REGISTRY.approveComponent(
-            LAUNCH_MANAGER, FeatureUtils.LIQUIDITY_DEPLOYER, "LaunchManager"
+        // LiquidityDeployerModule — deploys Uniswap V4 LP at ERC404 graduation
+        liquidityDeployerModule = new LiquidityDeployerModule(
+            V4_POOL_MANAGER,
+            WETH,
+            POOL_FEE,
+            POOL_TICK_SPACING
         );
-
-        // ── Phase 4b: MockComponentModules — creation wizard UI ───────────────
-
-        string memory passwordGatingMeta = "data:application/json,{\"name\":\"Password Tier Gating\",\"subtitle\":\"Password \\u00b7 Tiered Access\",\"description\":\"Set one or more passwords, each unlocking a different tier of access or pricing.\",\"configType\":\"password-tier-gating\"}";
-        string memory merkleGatingMeta   = "data:application/json,{\"name\":\"Merkle Allowlist Gating\",\"subtitle\":\"Allowlist \\u00b7 Merkle Tree\",\"description\":\"Upload a list of wallet addresses to restrict minting to an allowlist.\"}";
-        string memory uniV4Meta          = "data:application/json,{\"name\":\"Uniswap V4 Deployer\",\"subtitle\":\"Uniswap V4 \\u00b7 Concentrated Liquidity\",\"description\":\"Deploy liquidity to a Uniswap V4 pool on graduation.\",\"configType\":\"launch-profile\"}";
-        string memory zammMeta           = "data:application/json,{\"name\":\"ZAMM Deployer\",\"subtitle\":\"ZAMM \\u00b7 Constant Product\",\"description\":\"Deploy liquidity to ZAMM on graduation.\",\"configType\":\"launch-profile\"}";
-        string memory cypherMeta         = "data:application/json,{\"name\":\"Cypher Deployer\",\"subtitle\":\"Cypher \\u00b7 Concentrated Liquidity\",\"description\":\"Deploy liquidity to Cypher on graduation.\",\"configType\":\"launch-profile\"}";
-
-        modulePasswordGating = new MockComponentModule(deployer, passwordGatingMeta);
-        COMPONENT_REGISTRY.approveComponent(address(modulePasswordGating),  FeatureUtils.GATING,             "Password Tier Gating");
-
-        moduleMerkleGating   = new MockComponentModule(deployer, merkleGatingMeta);
-        COMPONENT_REGISTRY.approveComponent(address(moduleMerkleGating),    FeatureUtils.GATING,             "Merkle Allowlist Gating");
-
-        moduleUniV4Deployer  = new MockComponentModule(deployer, uniV4Meta);
-        COMPONENT_REGISTRY.approveComponent(address(moduleUniV4Deployer),   FeatureUtils.LIQUIDITY_DEPLOYER, "Uniswap V4 Deployer");
-
-        moduleZAMMDeployer   = new MockComponentModule(deployer, zammMeta);
-        COMPONENT_REGISTRY.approveComponent(address(moduleZAMMDeployer),    FeatureUtils.LIQUIDITY_DEPLOYER, "ZAMM Deployer");
-
-        moduleCypherDeployer = new MockComponentModule(deployer, cypherMeta);
-        COMPONENT_REGISTRY.approveComponent(address(moduleCypherDeployer),  FeatureUtils.LIQUIDITY_DEPLOYER, "Cypher Deployer");
+        liquidityDeployerModule.setMetadataURI(
+            "data:application/json,{\"name\":\"Uniswap V4 Deployer\",\"subtitle\":\"Uniswap V4 \\u00b7 Concentrated Liquidity\",\"description\":\"Deploy liquidity to a Uniswap V4 pool. Swap fees compound directly into the pool, deepening liquidity over time.\",\"configType\":\"launch-profile\"}"
+        );
+        COMPONENT_REGISTRY.approveComponent(
+            address(liquidityDeployerModule), FeatureUtils.LIQUIDITY_DEPLOYER, "LiquidityDeployerModule"
+        );
 
         // ── Output ───────────────────────────────────────────────────────────
 
@@ -210,11 +193,7 @@ contract SeedSepolia is Script {
         vm.serializeAddress(s, "ms2Vault",               ms2Vault);
         vm.serializeAddress(s, "cultVault",              cultVault);
         vm.serializeAddress(s, "passwordTierGatingModule", address(passwordTierGatingModule));
-        vm.serializeAddress(s, "modulePasswordGating",   address(modulePasswordGating));
-        vm.serializeAddress(s, "moduleMerkleGating",     address(moduleMerkleGating));
-        vm.serializeAddress(s, "moduleUniV4Deployer",    address(moduleUniV4Deployer));
-        vm.serializeAddress(s, "moduleZAMMDeployer",     address(moduleZAMMDeployer));
-        string memory json = vm.serializeAddress(s, "moduleCypherDeployer", address(moduleCypherDeployer));
+        string memory json = vm.serializeAddress(s, "liquidityDeployerModule", address(liquidityDeployerModule));
         vm.writeJson(json, "./deployments/sepolia-seed.json");
         console.log("Seed JSON written to: ./deployments/sepolia-seed.json");
     }
