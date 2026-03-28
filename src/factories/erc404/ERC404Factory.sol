@@ -186,7 +186,7 @@ contract ERC404Factory is OwnableRoles, ReentrancyGuard, IFactory {
             emit VaultCapabilityWarning(params.vault, keccak256("YIELD_GENERATION"));
         }
 
-        instance = _deployAndInitialize(params, liquidityDeployer, gatingModule, freeMint, agentCreated);
+        instance = _deployAndInitialize(params, metadataURI, liquidityDeployer, gatingModule, freeMint, agentCreated);
         masterRegistry.registerInstance(
             instance, address(this), params.owner, params.name, metadataURI, params.vault
         );
@@ -199,6 +199,7 @@ contract ERC404Factory is OwnableRoles, ReentrancyGuard, IFactory {
 
     function _deployAndInitialize(
         CreateParams calldata params,
+        string calldata metadataURI,
         address liquidityDeployer,
         address gatingModule,
         FreeMintParams calldata freeMint,
@@ -245,7 +246,7 @@ contract ERC404Factory is OwnableRoles, ReentrancyGuard, IFactory {
             })
         );
         ERC404BondingInstance(payable(instance)).initializeMetadata(
-            params.name, params.symbol, params.styleUri
+            params.name, params.symbol, params.styleUri, metadataURI
         );
         ERC404BondingInstance(payable(instance)).initializeFreeMint(
             freeMint.allocation, freeMint.scope

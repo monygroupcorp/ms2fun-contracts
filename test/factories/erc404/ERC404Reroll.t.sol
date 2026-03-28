@@ -57,7 +57,7 @@ contract ERC404RerollTest is Test {
             weth: address(0xBEEF)
         }));
 
-        token.initializeMetadata("TestToken", "TEST", "");
+        token.initializeMetadata("TestToken", "TEST", "", "");
 
         // Fund users with ETH
         vm.deal(user1, 10 ether);

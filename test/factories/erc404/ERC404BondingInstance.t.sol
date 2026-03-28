@@ -86,7 +86,7 @@ contract ERC404BondingInstanceTest is Test {
         ERC404BondingInstance impl = new ERC404BondingInstance();
         instance = ERC404BondingInstance(payable(LibClone.clone(address(impl))));
         _initInstance(instance, address(0xBEEF), address(0xFEE), 100);
-        instance.initializeMetadata("Test Token", "TEST", "");
+        instance.initializeMetadata("Test Token", "TEST", "", "");
 
         vm.stopPrank();
     }
@@ -313,7 +313,7 @@ contract ERC404BondingInstanceTest is Test {
         ERC404BondingInstance zeroFeeImpl = new ERC404BondingInstance();
         ERC404BondingInstance zeroFeeInstance = ERC404BondingInstance(payable(LibClone.clone(address(zeroFeeImpl))));
         _initInstance(zeroFeeInstance, address(0xBEEF), address(0xFEE), 0);
-        zeroFeeInstance.initializeMetadata("Zero Fee Token", "ZFT", "");
+        zeroFeeInstance.initializeMetadata("Zero Fee Token", "ZFT", "", "");
         uint256 futureTime = block.timestamp + 1 days;
         zeroFeeInstance.setBondingOpenTime(futureTime);
         zeroFeeInstance.setBondingActive(true);
@@ -338,7 +338,7 @@ contract ERC404BondingInstanceTest is Test {
         ERC404BondingInstance noTreasuryImplInst = new ERC404BondingInstance();
         ERC404BondingInstance noTreasuryInstance = ERC404BondingInstance(payable(LibClone.clone(address(noTreasuryImplInst))));
         _initInstance(noTreasuryInstance, address(0xBEEF), address(0), 100);
-        noTreasuryInstance.initializeMetadata("No Treasury Token", "NTT", "");
+        noTreasuryInstance.initializeMetadata("No Treasury Token", "NTT", "", "");
         uint256 futureTime = block.timestamp + 1 days;
         noTreasuryInstance.setBondingOpenTime(futureTime);
         noTreasuryInstance.setBondingActive(true);
@@ -508,7 +508,7 @@ contract ERC404BondingInstanceTest is Test {
             bondingFeeBps: 100,
             weth: address(0xBEEF)
         }));
-        inst2.initializeMetadata("T", "T", "");
+        inst2.initializeMetadata("T", "T", "", "");
         uint256 futureTime = block.timestamp + 1 days;
         inst2.setBondingOpenTime(futureTime);
         inst2.setBondingActive(true);
@@ -540,7 +540,7 @@ contract ERC404BondingInstanceTest is Test {
             bondingFeeBps: 0,
             weth: address(0xBEEF)
         }));
-        inst2.initializeMetadata("T", "T", "");
+        inst2.initializeMetadata("T", "T", "", "");
         uint256 futureTime = block.timestamp + 1 days;
         inst2.setBondingOpenTime(futureTime);
         inst2.setBondingActive(true);

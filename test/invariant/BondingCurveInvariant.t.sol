@@ -68,7 +68,7 @@ contract BondingCurveInvariantTest is StdInvariant, Test {
             weth: address(0xBEEF)
         });
         instance.initializeProtocol(pp);
-        instance.initializeMetadata("Test Token", "TEST", "");
+        instance.initializeMetadata("Test Token", "TEST", "", "");
 
         instance.setBondingOpenTime(block.timestamp + 1);
         vm.warp(block.timestamp + 2);

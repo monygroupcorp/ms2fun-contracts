@@ -5,6 +5,7 @@ import { DN404 } from "dn404/src/DN404.sol";
 import { DN404Mirror } from "dn404/src/DN404Mirror.sol";
 import { Ownable } from "solady/auth/Ownable.sol";
 import { ReentrancyGuard } from "solady/utils/ReentrancyGuard.sol";
+import { LibString } from "solady/utils/LibString.sol";
 import { SafeTransferLib } from "solady/utils/SafeTransferLib.sol";
 import { SmartTransferLib } from "../../libraries/SmartTransferLib.sol";
 import { BondingCurveMath } from "./libraries/BondingCurveMath.sol";
@@ -109,6 +110,7 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IInstanceLife
     uint256 public bondingFeeBps;
 
     string public styleUri;
+    string public metadataURI;
 
     uint256 public bondingOpenTime;
     uint256 public bondingMaturityTime;
@@ -224,13 +226,19 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IInstanceLife
     function initializeMetadata(
         string calldata name_,
         string calldata symbol_,
-        string calldata styleUri_
+        string calldata styleUri_,
+        string calldata metadataURI_
     ) external {
         if (msg.sender != factory) revert OnlyFactory();
         if (bytes(_name).length != 0) revert MetadataAlreadySet();
         _name = name_;
         _symbol = symbol_;
         styleUri = styleUri_;
+        metadataURI = metadataURI_;
+    }
+
+    function setMetadataURI(string calldata uri) external onlyOwner {
+        metadataURI = uri;
     }
 
     /// @notice Set free mint params. Called by factory once after initialize().
@@ -575,7 +583,9 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IInstanceLife
     function name() public view override returns (string memory) { return _name; }
     function symbol() public view override returns (string memory) { return _symbol; }
     function _unit() internal view override returns (uint256) { return unit; }
-    function _tokenURI(uint256) internal pure override returns (string memory) { return ""; }
+    function _tokenURI(uint256 tokenId) internal view override returns (string memory) {
+        return string.concat(metadataURI, LibString.toString(tokenId));
+    }
     function _skipNFTDefault(address) internal pure override returns (bool) { return false; }
 
     receive() external payable override {}
