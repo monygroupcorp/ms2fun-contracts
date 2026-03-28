@@ -278,6 +278,123 @@ contract MasterRegistryReworkTest is Test {
 
     // ── ComponentRegistry wiring ──────────────────────────────────────────────
 
+    // ============ UpdateInstanceMetadata Tests ============
+
+    function test_UpdateInstanceMetadata_CreatorCanUpdate() public {
+        (, address vault) = _setupTargetAndVault(dummyToken);
+        address factory = _registerFactory();
+        address instance = _registerInstance(factory, vault);
+
+        vm.prank(alice); // alice is the creator in _registerInstance
+        registry.updateInstanceMetadata(instance, "ipfs://updated");
+
+        IMasterRegistry.InstanceInfo memory info = registry.getInstanceInfo(instance);
+        assertEq(info.metadataURI, "ipfs://updated");
+    }
+
+    function test_UpdateInstanceMetadata_OwnerCanUpdate() public {
+        (, address vault) = _setupTargetAndVault(dummyToken);
+        address factory = _registerFactory();
+        address instance = _registerInstance(factory, vault);
+
+        vm.prank(daoOwner);
+        registry.updateInstanceMetadata(instance, "ipfs://owner-updated");
+
+        IMasterRegistry.InstanceInfo memory info = registry.getInstanceInfo(instance);
+        assertEq(info.metadataURI, "ipfs://owner-updated");
+    }
+
+    function test_UpdateInstanceMetadata_StrangerReverts() public {
+        (, address vault) = _setupTargetAndVault(dummyToken);
+        address factory = _registerFactory();
+        address instance = _registerInstance(factory, vault);
+
+        address stranger = makeAddr("stranger");
+        vm.prank(stranger);
+        vm.expectRevert(Ownable.Unauthorized.selector);
+        registry.updateInstanceMetadata(instance, "ipfs://hack");
+    }
+
+    function test_UpdateInstanceMetadata_InvalidURIReverts() public {
+        (, address vault) = _setupTargetAndVault(dummyToken);
+        address factory = _registerFactory();
+        address instance = _registerInstance(factory, vault);
+
+        vm.prank(alice);
+        vm.expectRevert(MasterRegistryV1.InvalidMetadataURI.selector);
+        registry.updateInstanceMetadata(instance, "");
+    }
+
+    function test_UpdateInstanceMetadata_EmitsEvent() public {
+        (, address vault) = _setupTargetAndVault(dummyToken);
+        address factory = _registerFactory();
+        address instance = _registerInstance(factory, vault);
+
+        vm.prank(alice);
+        vm.expectEmit(true, false, false, true);
+        emit IMasterRegistry.InstanceMetadataUpdated(instance, "ipfs://event-test");
+        registry.updateInstanceMetadata(instance, "ipfs://event-test");
+    }
+
+    function test_UpdateInstanceMetadata_UnregisteredReverts() public {
+        vm.prank(daoOwner);
+        vm.expectRevert(MasterRegistryV1.NotRegistered.selector);
+        registry.updateInstanceMetadata(address(0x999), "ipfs://test");
+    }
+
+    // ============ RevokeInstance Tests ============
+
+    function test_RevokeInstance_OwnerCanRevoke() public {
+        (, address vault) = _setupTargetAndVault(dummyToken);
+        address factory = _registerFactory();
+        address instance = _registerInstance(factory, vault);
+
+        vm.prank(daoOwner);
+        registry.revokeInstance(instance);
+
+        assertTrue(registry.revokedInstances(instance));
+    }
+
+    function test_RevokeInstance_GetInstanceInfoReverts() public {
+        (, address vault) = _setupTargetAndVault(dummyToken);
+        address factory = _registerFactory();
+        address instance = _registerInstance(factory, vault);
+
+        vm.prank(daoOwner);
+        registry.revokeInstance(instance);
+
+        vm.expectRevert(MasterRegistryV1.NotRegistered.selector);
+        registry.getInstanceInfo(instance);
+    }
+
+    function test_RevokeInstance_StrangerReverts() public {
+        (, address vault) = _setupTargetAndVault(dummyToken);
+        address factory = _registerFactory();
+        address instance = _registerInstance(factory, vault);
+
+        address stranger = makeAddr("stranger");
+        vm.prank(stranger);
+        vm.expectRevert(Ownable.Unauthorized.selector);
+        registry.revokeInstance(instance);
+    }
+
+    function test_RevokeInstance_EmitsEvent() public {
+        (, address vault) = _setupTargetAndVault(dummyToken);
+        address factory = _registerFactory();
+        address instance = _registerInstance(factory, vault);
+
+        vm.prank(daoOwner);
+        vm.expectEmit(true, false, false, false);
+        emit IMasterRegistry.InstanceRevoked(instance);
+        registry.revokeInstance(instance);
+    }
+
+    function test_RevokeInstance_UnregisteredReverts() public {
+        vm.prank(daoOwner);
+        vm.expectRevert(MasterRegistryV1.NotRegistered.selector);
+        registry.revokeInstance(address(0x999));
+    }
+
     function test_setComponentRegistry_setsPointer() public {
         // Deploy a mock ComponentRegistry address
         address mockRegistry = address(0xC001);

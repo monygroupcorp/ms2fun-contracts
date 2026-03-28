@@ -66,6 +66,10 @@ contract MasterRegistryV1 is SafeOwnableUUPS, IMasterRegistry {
     mapping(address => bool) public isAgent;
     address public emergencyRevoker;
 
+    /// @notice Tracks revoked instances. Revoked instances are invisible to getInstanceInfo.
+    /// @dev Temporary — intended for removal in the next upgrade cycle.
+    mapping(address => bool) public revokedInstances;
+
     // Events
     event AlignmentRegistrySet(address indexed oldRegistry, address indexed newRegistry);
     event CreatorInstanceAdded(address indexed creator, address indexed instance);
@@ -181,6 +185,26 @@ contract MasterRegistryV1 is SafeOwnableUUPS, IMasterRegistry {
         emit FactoryDeactivated(factoryAddress, factoryInfo[factoryAddress].factoryId);
     }
 
+    /// @notice Update the metadata URI for a registered instance.
+    ///         Callable by the instance's creator or the registry owner.
+    function updateInstanceMetadata(address instance, string calldata uri) external override {
+        IMasterRegistry.InstanceInfo storage info = instanceInfo[instance];
+        if (info.instance == address(0)) revert NotRegistered();
+        if (msg.sender != info.creator && msg.sender != owner()) revert Unauthorized();
+        if (!MetadataUtils.isValidURI(uri)) revert InvalidMetadataURI();
+        info.metadataURI = uri;
+        emit InstanceMetadataUpdated(instance, uri);
+    }
+
+    /// @notice Revoke a registered instance, hiding it from getInstanceInfo.
+    ///         Owner only. TEMPORARY — intended for removal in the next upgrade cycle.
+    ///         Do not rely on this as a permanent censorship mechanism.
+    function revokeInstance(address instance) external override onlyOwner {
+        if (instanceInfo[instance].instance == address(0)) revert NotRegistered();
+        revokedInstances[instance] = true;
+        emit InstanceRevoked(instance);
+    }
+
     // ============ Instance Registration ============
 
     /**
@@ -250,7 +274,7 @@ contract MasterRegistryV1 is SafeOwnableUUPS, IMasterRegistry {
 
     // slither-disable-next-line timestamp
     function getInstanceInfo(address instance) external view returns (IMasterRegistry.InstanceInfo memory) {
-        if (instanceInfo[instance].instance == address(0)) revert NotRegistered();
+        if (instanceInfo[instance].instance == address(0) || revokedInstances[instance]) revert NotRegistered();
         return instanceInfo[instance];
     }
 

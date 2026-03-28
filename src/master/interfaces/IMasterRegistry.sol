@@ -71,6 +71,9 @@ interface IMasterRegistry {
 
     event ComponentRegistrySet(address indexed componentRegistry);
 
+    event InstanceMetadataUpdated(address indexed instance, string uri);
+    event InstanceRevoked(address indexed instance);
+
     // Functions
     function registerInstance(
         address instance,
@@ -132,4 +135,7 @@ interface IMasterRegistry {
     // ComponentRegistry
     function componentRegistry() external view returns (IComponentRegistry);
     function setComponentRegistry(address _componentRegistry) external;
+
+    function updateInstanceMetadata(address instance, string calldata uri) external;
+    function revokeInstance(address instance) external;
 }
