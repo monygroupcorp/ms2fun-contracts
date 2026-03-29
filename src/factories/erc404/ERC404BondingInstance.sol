@@ -493,10 +493,9 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IInstanceLife
         DN404Storage storage $ = _getDN404Storage();
         AddressData storage addressData = $.addressData[msg.sender];
 
-        // slither-disable-next-line shadowing-local
-        uint256 unit = _unit();
+        uint256 unitSize = _unit();
         uint256 exemptCount = exemptedNFTIds.length;
-        if (tokenAmount < exemptCount * unit) revert TokenAmountMustRepresentNFT();
+        if (tokenAmount < exemptCount * unitSize) revert TokenAmountMustRepresentNFT();
 
         uint256 rerollAmount = tokenAmount - (exemptCount * unit);
         if (rerollAmount / unit == 0) revert TokenAmountMustRepresentNFT(); // round down: standard integer NFT count
