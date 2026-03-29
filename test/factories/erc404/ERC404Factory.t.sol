@@ -137,6 +137,7 @@ contract ERC404FactoryTest is Test {
             name: name_,
             symbol: symbol_,
             styleUri: "",
+            tokenBaseURI: "",
             stakingModule: address(0)
         });
     }
@@ -187,7 +188,8 @@ contract ERC404FactoryTest is Test {
                 name: "TestToken",
                 symbol: "TEST",
                 styleUri: "",
-                stakingModule: address(0)
+                tokenBaseURI: "",
+            stakingModule: address(0)
             }),
             "ipfs://metadata",
             address(mockDeployer),
@@ -239,7 +241,8 @@ contract ERC404FactoryTest is Test {
                 name: "TestToken",
                 symbol: "TEST",
                 styleUri: "",
-                stakingModule: address(0)
+                tokenBaseURI: "",
+            stakingModule: address(0)
             }),
             "ipfs://metadata",
             address(mockDeployer),
@@ -263,7 +266,8 @@ contract ERC404FactoryTest is Test {
                 name: "TestToken",
                 symbol: "TEST",
                 styleUri: "",
-                stakingModule: address(0)
+                tokenBaseURI: "",
+            stakingModule: address(0)
             }),
             "ipfs://metadata",
             address(mockDeployer),
@@ -513,7 +517,8 @@ contract ERC404FactoryTest is Test {
                 name: "TestToken",
                 symbol: "TEST",
                 styleUri: "",
-                stakingModule: address(0)
+                tokenBaseURI: "",
+            stakingModule: address(0)
             }),
             "ipfs://metadata",
             address(mockDeployer),
@@ -541,7 +546,8 @@ contract ERC404FactoryTest is Test {
                 name: "TestToken",
                 symbol: "TEST",
                 styleUri: "",
-                stakingModule: address(0)
+                tokenBaseURI: "",
+            stakingModule: address(0)
             }),
             "ipfs://metadata",
             address(mockDeployer),
@@ -565,7 +571,8 @@ contract ERC404FactoryTest is Test {
                 name: "TestToken",
                 symbol: "TEST",
                 styleUri: "",
-                stakingModule: address(0)
+                tokenBaseURI: "",
+            stakingModule: address(0)
             }),
             "ipfs://metadata",
             address(mockDeployer),
@@ -705,7 +712,8 @@ contract ERC404FactoryTest is Test {
                 name: "PlainVaultToken",
                 symbol: "PVT",
                 styleUri: "",
-                stakingModule: address(0)
+                tokenBaseURI: "",
+            stakingModule: address(0)
             }),
             "ipfs://metadata",
             address(mockDeployer),

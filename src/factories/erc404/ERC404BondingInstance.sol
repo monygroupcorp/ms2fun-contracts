@@ -227,14 +227,14 @@ contract ERC404BondingInstance is DN404, Ownable, ReentrancyGuard, IInstanceLife
         string calldata name_,
         string calldata symbol_,
         string calldata styleUri_,
-        string calldata metadataURI_
+        string calldata tokenBaseURI_
     ) external {
         if (msg.sender != factory) revert OnlyFactory();
         if (bytes(_name).length != 0) revert MetadataAlreadySet();
         _name = name_;
         _symbol = symbol_;
         styleUri = styleUri_;
-        metadataURI = metadataURI_;
+        metadataURI = tokenBaseURI_;
     }
 
     function setMetadataURI(string calldata uri) external onlyOwner {

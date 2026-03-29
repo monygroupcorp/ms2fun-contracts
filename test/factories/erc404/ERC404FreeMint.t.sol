@@ -107,6 +107,7 @@ contract ERC404FreeMintTest is Test {
             owner: creator, nftCount: NFT_COUNT, presetId: PRESET_ID,
             vault: address(mockVault),
             name: "FreeMintToken", symbol: "FMT", styleUri: "",
+            tokenBaseURI: "",
             stakingModule: address(0)
         });
     }

@@ -47,6 +47,7 @@ contract ERC404Factory is OwnableRoles, ReentrancyGuard, IFactory {
         string name;
         string symbol;
         string styleUri;
+        string tokenBaseURI; // NFT base URI for tokenURI(tokenId); independent of the project metadataURI
         address owner;
         address vault;
         uint256 nftCount;
@@ -246,7 +247,7 @@ contract ERC404Factory is OwnableRoles, ReentrancyGuard, IFactory {
             })
         );
         ERC404BondingInstance(payable(instance)).initializeMetadata(
-            params.name, params.symbol, params.styleUri, metadataURI
+            params.name, params.symbol, params.styleUri, params.tokenBaseURI
         );
         ERC404BondingInstance(payable(instance)).initializeFreeMint(
             freeMint.allocation, freeMint.scope
