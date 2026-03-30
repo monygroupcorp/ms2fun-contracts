@@ -20,7 +20,7 @@ contract DeployERC404Factory is Script {
     // ── Existing Sepolia addresses ────────────────────────────────────────────
     address constant MASTER_REGISTRY        = 0x00001152CBa5fDB16A0FAE780fFebD5b9dF8e7cF;
     address constant GLOBAL_MSG_REGISTRY    = 0x74B4Cc5Cd1F4FFB8025c4a20034D25Cc42E1dd6D;
-    address constant COMPONENT_REGISTRY     = 0xAa378FFE032a23debeaD1a1C57EEf302C4A99764;
+    address constant COMPONENT_REGISTRY     = 0x00001152Ed1bD8e76693cB775c79708275bBb2F3;
     address constant LAUNCH_MANAGER         = 0x354768153a0d3edC314D9f6baa2fd56a6961B449;
     address constant PROTOCOL_TREASURY      = 0xeBF79fed2520e29dc0a2E3D9055621Ef69a95a67;
     address constant WETH                   = 0xfFf9976782d46CC05630D1f6eBAb18b2324d6B14;
